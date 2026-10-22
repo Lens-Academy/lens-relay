@@ -1,175 +1,177 @@
-// How a check's request is presented to jev: what jev is shown (an isolated unit, the raw
-// markdown of the whole file, or the file parsed into nested JSON) and which unit it is
-// asked about. Lauren's design, 2026-10-21: objects with globally numbered keys, never arrays
-// (jev is unlikely to count reliably), and keys in ascending order (measured: jev reads key
-// order, AUROC 1.0 ascending vs 0.82 shuffled, docs/course-dev-set/jev-format/key_order.py).
+// A course file as one tree of globally numbered units, and what jev is shown of it.
+// Design: docs/course-dev-set/live-checks/jev-presentation-design.plain.md (Lauren, 2026-10-21/22):
+// three choices, the context level (how much jev sees), the question level (what each question is
+// about) and which levels in between nest the JSON. Objects with numbered keys, never arrays (jev is
+// unlikely to count reliably); keys ascending (measured: jev reads key order, AUROC 1.0 vs 0.82
+// shuffled, docs/course-dev-set/jev-format/key_order.py).
 
-export type Level = 'heading' | 'paragraph' | 'sentence' | 'line';
-export const LEVELS: Level[] = ['heading', 'paragraph', 'sentence', 'line'];
-export type Mode = 'isolated' | 'raw' | 'parsed';
-export type UnitKind = 'paragraph' | 'sentence';
+export type Level = 'document' | 'submodule' | 'lens' | 'section' | 'paragraph' | 'sentence' | 'line';
+export const LEVELS: Level[] = ['document', 'submodule', 'lens', 'section', 'paragraph', 'sentence', 'line'];
+export const rank = (l: Level) => LEVELS.indexOf(l);
 
-interface Frag { n: number; text: string } // n: 0-based line of the file
-interface Sentence { idx: number; text: string; frags: Frag[] }
-interface Paragraph { idx: number; text: string; lines: Frag[]; sentences: Sentence[] }
-interface Heading { idx: number; title?: string; paragraphs: Paragraph[] }
-export interface Doc { headings: Heading[] }
-export interface Unit { kind: UnitKind; key: string; text: string; para?: number } // para: its paragraph's index
+// `idx` counts units of the level across the whole file (for a line, its 0-based file line);
+// `first`/`last` are file lines; `implicit` units wrap text no header opened.
+export interface Node { level: Level; idx: number; title?: string; implicit: boolean; text: string; first: number; last: number; children: Node[]; parent?: Node }
 
-export const FORMAT_DESCRIPTION =
-  'A document parsed into nested headings, paragraphs, sentences and lines. Every numbering is global across the whole document, so `paragraph_7` names one paragraph wherever it sits; line numbers are the lines of the file.';
-
+const SUBMODULE = /^#\s+Submodule:\s*(.*?)\s*$/i;
+const LENS = /^##\s+Lens:\s*(.*?)\s*$/i;
 const HEADING = /^#{1,6}\s+(.*?)\s*#*\s*$/;
 // A sentence ends at . ! or ?, perhaps followed by closing quotes or brackets.
 const ENDS = /[.!?]["'”’)\]]*$/;
 const SPLIT = /(?<=[.!?]["'”’)\]]*)\s+(?=\S)/;
 
-export function parseDoc(markdown: string): Doc {
+export function parseDoc(markdown: string): Node {
   const lines = markdown.split(/\r?\n/);
   let start = 0;
   if (lines[0] === '---') { const end = lines.indexOf('---', 1); if (end > 0) start = end + 1; }
-  const headings: Heading[] = [{ idx: 0, paragraphs: [] }];
-  let para: Frag[] = [];
-  let p = 0, s = 0;
+  const mk = (level: Level, parent: Node | undefined, at: number, title?: string, implicit = false): Node => {
+    const n: Node = { level, idx: 0, title: title || undefined, implicit, text: '', first: at, last: at, children: [], parent };
+    parent?.children.push(n);
+    return n;
+  };
+  const doc = mk('document', undefined, 0);
+  let sub: Node | undefined, lens: Node | undefined, sec: Node | undefined;
+  const ensureSec = (n: number) => (sec ??= mk('section', lens ??= mk('lens', sub ??= mk('submodule', doc, n, undefined, true), n, undefined, true), n, undefined, true));
+  let para: { n: number; text: string }[] = [];
   const close = () => {
     if (!para.length) return;
-    const sentences: Sentence[] = [];
-    let cur: Frag[] = [];
-    const end = () => { if (cur.length) sentences.push({ idx: s++, text: cur.map((f) => f.text).join(' '), frags: cur }); cur = []; };
-    for (const line of para) for (const piece of line.text.split(SPLIT)) { cur.push({ n: line.n, text: piece }); if (ENDS.test(piece)) end(); }
-    end();
-    headings[headings.length - 1].paragraphs.push({ idx: p++, text: sentences.map((x) => x.text).join(' '), lines: para, sentences });
+    const p = mk('paragraph', ensureSec(para[0].n), para[0].n);
+    let s: Node | undefined;
+    for (const line of para) for (const piece of line.text.split(SPLIT)) {
+      s ??= mk('sentence', p, line.n);
+      s.children.push({ level: 'line', idx: line.n, implicit: false, text: piece, first: line.n, last: line.n, children: [], parent: s });
+      if (ENDS.test(piece)) s = undefined;
+    }
     para = [];
   };
   // What a learner never sees: %% comments %% (Obsidian), possibly across lines.
   let inComment = false;
-  const visible = (line: string) => {
-    let out = '';
-    for (const [i, part] of line.split('%%').entries()) { if (i > 0) inComment = !inComment; if (!inComment) out += part; }
-    return out;
-  };
+  const visible = (line: string) => line.split('%%').filter((_, i) => (i > 0 && (inComment = !inComment), !inComment)).join('');
   for (let n = start; n < lines.length; n++) {
     // Lens field names ("content::") are syntax, not words; their values are.
     const text = visible(lines[n]).trim().replace(/^[\w-]+::\s*/, '');
-    const h = text.match(HEADING);
-    if (h) { close(); headings.push({ idx: headings.length, title: h[1], paragraphs: [] }); }
+    let m: RegExpMatchArray | null;
+    if ((m = text.match(SUBMODULE))) { close(); sub = mk('submodule', doc, n, m[1]); lens = sec = undefined; }
+    else if ((m = text.match(LENS))) { close(); lens = mk('lens', sub ??= mk('submodule', doc, n, undefined, true), n, m[1]); sec = undefined; }
+    else if ((m = text.match(HEADING))) { close(); sec = mk('section', lens ??= mk('lens', sub ??= mk('submodule', doc, n, undefined, true), n, undefined, true), n, m[1]); }
     else if (!text) close();
     else para.push({ n, text });
   }
   close();
-  // A document that opens with a heading has no implicit heading before it.
-  if (!headings[0].paragraphs.length && headings.length > 1) { headings.shift(); headings.forEach((h, i) => { h.idx = i; }); }
-  return { headings };
+  finish(doc);
+  return doc;
 }
 
-type Json = string | { [k: string]: Json };
-
-/** The document as nested objects, keeping only `levels`; the deepest level kept holds text. */
-export function docJson(doc: Doc, levels: Level[] = LEVELS, only?: (p: Paragraph) => boolean): Record<string, Json> {
-  if (only) doc = { headings: doc.headings.map((h) => ({ ...h, paragraphs: h.paragraphs.filter(only) })).filter((h) => h.paragraphs.length) };
-  const has = (l: Level) => levels.includes(l);
-  const merge = (parts: Record<string, Json>[]) => Object.assign({}, ...parts) as Record<string, Json>;
-  const sent = (x: Sentence): Json => has('line') ? Object.fromEntries(x.frags.map((f) => [`line_${f.n}`, f.text])) : x.text;
-  const paraInner = (x: Paragraph): Record<string, Json> | null =>
-    has('sentence') ? Object.fromEntries(x.sentences.map((y) => [`sentence_${y.idx}`, sent(y)]))
-      : has('line') ? Object.fromEntries(x.lines.map((f) => [`line_${f.n}`, f.text])) : null;
-  const headInner = (h: Heading): Record<string, Json> =>
-    has('paragraph') ? Object.fromEntries(h.paragraphs.map((x) => [`paragraph_${x.idx}`, paraInner(x) ?? x.text]))
-      : merge(h.paragraphs.map((x) => paraInner(x) ?? {}));
-  if (!has('heading')) return merge(doc.headings.map(headInner));
-  return Object.fromEntries(doc.headings.map((h) => {
-    const inner = headInner(h);
-    const body: Json = Object.keys(inner).length ? inner : h.paragraphs.map((x) => x.text).join('\n\n');
-    return [`heading_${h.idx}`, h.title !== undefined && typeof body === 'object' ? { heading: h.title, ...body } : body];
-  }));
+// Drop units with no text (a `#### End` header), then join texts, spans and numbering.
+function finish(doc: Node) {
+  const prune = (n: Node): boolean => (n.level === 'line' || (n.children = n.children.filter(prune)).length > 0);
+  prune(doc);
+  const count: Partial<Record<Level, number>> = {};
+  const walk = (n: Node) => {
+    if (n.level === 'line') return;
+    if (n.level !== 'document') n.idx = (count[n.level] = (count[n.level] ?? -1) + 1);
+    n.children.forEach(walk);
+    n.text = n.children.map((c) => c.text).join(rank(n.level) >= rank('paragraph') ? ' ' : '\n\n');
+    n.first = Math.min(n.first, ...n.children.map((c) => c.first));
+    n.last = Math.max(...n.children.map((c) => c.last));
+  };
+  walk(doc);
 }
+
+/** The units of `level` inside `n` (or `n` itself), in file order. */
+export const within = (n: Node, level: Level): Node[] =>
+  n.level === level ? [n] : rank(n.level) > rank(level) ? [] : n.children.flatMap((c) => within(c, level));
+/** The unit of `level` that holds `n` (or `n` itself). */
+export const around = (n: Node, level: Level): Node => {
+  for (let x: Node | undefined = n; x; x = x.parent) if (x.level === level) return x;
+  throw new Error(`no ${level} around ${n.level}_${n.idx}`);
+};
+export const keyOf = (n: Node) => `${n.level}_${n.idx}`;
 
 const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /** The paragraph of a corpus row (`line`: 1-based, as the platform's splitter gives it; `text`:
  *  its words). The file may have changed since the corpus was taken, so the words decide, and
- *  the line only picks the nearest of several matches. Without `text`, the line alone. */
-function paragraphOf(doc: Doc, line: number, text?: string): Paragraph | undefined {
-  const all = doc.headings.flatMap((h) => h.paragraphs);
-  if (text === undefined) return all.find((x) => x.lines.some((f) => f.n === line - 1));
-  const near = (xs: Paragraph[]) => xs.sort((a, b) => Math.abs(a.lines[0].n - (line - 1)) - Math.abs(b.lines[0].n - (line - 1)))[0];
-  // Markdown the splitter strips (a link's URL) can split the words, so a shorter start, and
-  // then the line, are tried before giving up.
+ *  the line only picks the nearest of several matches; Markdown the splitter strips (a link's
+ *  URL) can split the words, so a shorter start, then the line, are tried before giving up. */
+export function paragraphOf(doc: Node, line: number, text?: string): Node | undefined {
+  const all = within(doc, 'paragraph');
+  const atLine = () => all.find((x) => within(x, 'line').some((f) => f.idx === line - 1));
+  if (text === undefined) return atLine();
   for (const len of [60, 25]) {
     const head = words(text).slice(0, len);
-    const hit = near(all.filter((x) => words(x.text).includes(head)));
-    if (hit) return hit;
+    const hits = all.filter((x) => words(x.text).includes(head));
+    if (hits.length) return hits.sort((a, b) => Math.abs(a.first - (line - 1)) - Math.abs(b.first - (line - 1)))[0];
   }
-  return all.find((x) => x.lines.some((f) => f.n === line - 1));
-}
-
-export function unitOf(doc: Doc, kind: 'paragraph', line: number, text?: string): Unit | null {
-  const x = paragraphOf(doc, line, text);
-  return x ? { kind, key: `paragraph_${x.idx}`, text: x.text, para: x.idx } : null;
-}
-
-/** The sentences of a corpus row's paragraph. */
-export function sentencesAt(doc: Doc, line: number, text?: string): Unit[] {
-  const p = paragraphOf(doc, line, text);
-  return (p?.sentences ?? []).map((x) => ({ kind: 'sentence', key: `sentence_${x.idx}`, text: x.text, para: p!.idx }));
+  return atLine();
 }
 
 /** The check's question, its `paragraph` pointed at the key jev is shown the unit under. */
-export function templateQuestion(question: string, key: string): string {
-  return question.replace(/`paragraph`/g, '`' + key + '`');
-}
+export const templateQuestion = (question: string, key: string) => question.replace(/`paragraph`/g, '`' + key + '`');
 
-/** The key the unit sits under in the state jev is shown. */
-export function questionKey(mode: Mode, unit: Unit): string {
-  return mode === 'parsed' ? unit.key : unit.kind;
-}
+type Json = string | { [k: string]: Json };
 
-/** The file cut into consecutive paragraph ranges whose parsed JSON is at most `max` characters
- *  each (a single paragraph over `max` is a range of its own), cutting at a heading once a
- *  range is half full. jev refuses a state plus question over 32k tokens. */
-const chunkCache = new WeakMap<Doc, Map<string, [number, number][]>>();
-/** The default chunk budget: jev answers a state plus one question of up to 32k tokens, and its
- *  parsed-document JSON measures about 2.65 characters a token (75,734 characters were 28,153
- *  tokens; 99,243 were refused), so 72,000 characters leave room for the question. */
-export const DEFAULT_MAX_CHARS = 72_000;
-
-export function chunks(doc: Doc, levels: Level[], max: number): [number, number][] {
-  const key = `${levels.join()}|${max}`;
-  const m = chunkCache.get(doc) ?? new Map<string, [number, number][]>();
-  chunkCache.set(doc, m);
-  if (!m.has(key)) m.set(key, chunksOf(doc, levels, max));
-  return m.get(key)!;
-}
-
-function chunksOf(doc: Doc, levels: Level[], max: number): [number, number][] {
-  const paras = doc.headings.flatMap((h) => h.paragraphs.map((p, i) => ({ p, opensHeading: i === 0 })));
-  const size = (from: number, to: number) => JSON.stringify(docJson(doc, levels, (p) => p.idx >= from && p.idx <= to)).length;
-  const out: [number, number][] = [];
-  let start = 0;
-  for (let k = 1; k <= paras.length; k++) {
-    const next = paras[k];
-    const over = next && size(paras[start].p.idx, next.p.idx) > max;
-    const headingCut = next?.opensHeading && size(paras[start].p.idx, paras[k - 1].p.idx) > max / 2;
-    if (!next || over || headingCut) { out.push([paras[start].p.idx, paras[k - 1].p.idx]); start = k; }
-  }
+/** `ctx` as JSON down to `question`, one layer of keys per level in `nest` (between the two).
+ *  An implicit unit that is its parent's only child is the parent's own text, so adds no layer;
+ *  `keep` leaves out units (a chunk). */
+export function render(ctx: Node, question: Level, nest: Level[], keep: (n: Node) => boolean = () => true): Json {
+  if (ctx.level === question) return ctx.text;
+  const shown = (c: Node) => c.level === question || (nest.includes(c.level) && !(c.implicit && c.parent!.children.length === 1));
+  const layer = (n: Node): Node[] => n.children.filter(keep).flatMap((c) => (shown(c) ? [c] : layer(c)));
+  const out: Record<string, Json> = ctx.title ? { title: ctx.title } : {};
+  for (const c of layer(ctx)) out[keyOf(c)] = render(c, question, nest, keep);
   return out;
 }
 
-export function presentState(mode: Mode, doc: Doc, raw: string, unit: Unit, levels: Level[] = LEVELS, maxChars: number | null = null): Record<string, unknown> {
-  if (mode === 'isolated') return { [unit.kind]: unit.text };
-  const all = doc.headings.flatMap((h) => h.paragraphs);
-  const cs = maxChars === null || unit.para === undefined ? [] : chunks(doc, levels, maxChars);
-  const at = cs.findIndex(([a, b]) => unit.para! >= a && unit.para! <= b);
-  if (cs.length <= 1 || at < 0) {
-    if (mode === 'raw') return { document: raw, [unit.kind]: unit.text };
-    return { __format_description: FORMAT_DESCRIPTION, document: docJson(doc, levels) };
+const formatDescription = (ctx: Level, question: Level, nest: Level[]) =>
+  `A ${ctx} of a course file, parsed into nested ${LEVELS.filter((l) => rank(l) > rank(ctx) && (l === question || (rank(l) < rank(question) && nest.includes(l)))).map((l) => l + 's').join(', ')}. Every number counts across the whole file, so \`${question}_7\` names one ${question} wherever it sits; \`line_N\` is line N of the file. A \`title\` is the heading that opens its unit.`;
+
+/** What jev is shown for the context unit `ctx`: the unit as text when it is also the question
+ *  level (a file's own markdown for a document, lens or section), else parsed JSON, perhaps only
+ *  the `keep`-ed chunk of it, described by `excerpt`. */
+export function stateFor(ctx: Node, question: Level, nest: Level[], raw: string, keep?: (n: Node) => boolean, excerpt?: string): Record<string, unknown> {
+  if (ctx.level === question) {
+    const text = ctx.level === 'document' ? raw : rank(ctx.level) < rank('paragraph') ? raw.split(/\r?\n/).slice(ctx.first, ctx.last + 1).join('\n') : ctx.text;
+    return { [question]: text };
   }
-  const [from, to] = cs[at];
-  const excerpt = `paragraphs ${from} to ${to} of 0 to ${all.length - 1} (part ${at + 1} of ${cs.length})`;
-  if (mode === 'raw') {
-    const lines = raw.split(/\r?\n/);
-    const first = all[from].lines[0].n, last = all[to].lines[all[to].lines.length - 1].n;
-    return { __excerpt: excerpt, document: lines.slice(first, last + 1).join('\n'), [unit.kind]: unit.text };
+  return { __format_description: formatDescription(ctx.level, question, nest), ...(excerpt ? { __excerpt: excerpt } : {}), [ctx.level]: render(ctx, question, nest, keep) };
+}
+
+/** The default chunk budget: jev answers a state plus one question of up to 32k tokens, and its
+ *  parsed JSON measures about 2.65 characters a token (75,734 characters were 28,153 tokens;
+ *  99,243 were refused), so 72,000 characters leave room for the question. */
+export const DEFAULT_MAX_CHARS = 72_000;
+
+/** The level chunks are cut at: whole questions, never a paragraph split. */
+export const atomLevel = (question: Level): Level => (rank(question) < rank('paragraph') ? question : 'paragraph');
+export const keepOnly = (atoms: Node[]) => {
+  const kept = new Set<Node>();
+  for (const a of atoms) for (let x: Node | undefined = a; x; x = x.parent) kept.add(x);
+  const lvl = atoms[0].level;
+  return (n: Node) => rank(n.level) > rank(lvl) || kept.has(n);
+};
+
+const chunkCache = new WeakMap<Node, Map<string, Node[][]>>();
+/** `ctx`'s question atoms cut into consecutive runs whose JSON is at most `max` characters (one
+ *  atom over `max` is a run of its own), cutting where a new parent opens once a run is half full. */
+export function chunks(ctx: Node, question: Level, nest: Level[], max: number): Node[][] {
+  const key = `${question}|${nest.join()}|${max}`;
+  const m = chunkCache.get(ctx) ?? new Map<string, Node[][]>();
+  chunkCache.set(ctx, m);
+  if (m.has(key)) return m.get(key)!;
+  const atoms = within(ctx, atomLevel(question));
+  const size = (run: Node[]) => JSON.stringify(render(ctx, question, nest, keepOnly(run))).length;
+  const out: Node[][] = [];
+  if (atoms.length && size(atoms) <= max) out.push(atoms); // (no text: no runs)
+  else {
+    let run: Node[] = [];
+    for (const a of atoms) {
+      const cut = run.length && (size([...run, a]) > max || (a.parent !== run[run.length - 1].parent && size(run) > max / 2));
+      if (cut) { out.push(run); run = []; }
+      run.push(a);
+    }
+    if (run.length) out.push(run);
   }
-  return { __format_description: FORMAT_DESCRIPTION, __excerpt: excerpt, document: docJson(doc, levels, (p) => p.idx >= from && p.idx <= to) };
+  m.set(key, out);
+  return out;
 }

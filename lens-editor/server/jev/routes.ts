@@ -39,6 +39,10 @@ export interface JevConfig {
 const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
 const MAX_TEXTS = 5000;
 const WORKERS = 8;
+// One jev call holds one state and every question about it, up to jev's 64k tokens per call
+// (state plus all questions; ~2.65 characters a token, measured) and a bounded count.
+const CALL_MAX_CHARS = 150_000;
+const CALL_MAX_QUESTIONS = 100;
 // Relay reads per /files request: at most this many files, this many at a time.
 const MAX_FILES = 300;
 const FILE_WORKERS = 4;
@@ -91,9 +95,11 @@ function answerCache(dir: string) {
 }
 
 type Req = { question: Question; state: Record<string, unknown> };
+type Batch = { state: Record<string, unknown>; questions: Question[] };
 /** What a request costs against the hourly budget: the characters jev is sent. */
-export const requestChars = (r: Req) =>
-  JSON.stringify(r.state).length + r.question.instructions.length + (r.question.criteria ? r.question.criteria.true.length + r.question.criteria.false.length : 0);
+const questionChars = (q: Question) => q.instructions.length + (q.criteria ? q.criteria.true.length + q.criteria.false.length : 0);
+/** What one question about one state costs against the hourly budget: the characters jev reads. */
+export const requestChars = (r: Req) => JSON.stringify(r.state).length + questionChars(r.question);
 // The cache key of what jev is shown: a lone paragraph keys by its text, as every cached
 // answer before other states existed did; any other state by its JSON (key order included,
 // since jev reads it).
@@ -121,24 +127,26 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
   const cache = answerCache(config.cacheDir);
   const used = new Map<string, { start: number; n: number }>();
 
-  // A request jev refuses as too long (a whole-file state on a big file) answers null and is
-  // left out of the run, instead of failing every other request with it.
-  async function askOne(model: string, q: Question, state: Record<string, unknown>, long = false): Promise<number | null> {
-    const noul: Record<string, unknown> = { type: 'noul', instructions: q.instructions };
-    if (q.criteria) noul.criteria = q.criteria;
+  // One call: jev reads `state` once and answers every question on it, the same answers as
+  // asking each alone. A call jev refuses as too long (a big state) answers null for all of them.
+  async function askBatch(model: string, state: Record<string, unknown>, qs: Question[], long: boolean): Promise<(number | null)[]> {
+    const questions = Object.fromEntries(qs.map((q, i) => [`q${i}`, { type: 'noul', instructions: q.instructions, ...(q.criteria ? { criteria: q.criteria } : {}) }]));
     for (let attempt = 0; ; attempt++) {
       const res = await doFetch(JEV_URL, {
         method: 'POST',
         headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json', ...(long ? { 'TypeSafe-Danger-Zone-Long-Context': 'true' } : {}) },
-        body: JSON.stringify({ model, state, questions: { q: noul } }),
+        body: JSON.stringify({ model, state, questions }),
       });
       if (res.ok) {
-        const p = (await res.json()).answers?.q?.noul;
-        if (typeof p !== 'number') throw new Error('jev answered without a probability');
-        return p;
+        const answers = (await res.json()).answers ?? {};
+        return qs.map((_, i) => {
+          const p = answers[`q${i}`]?.noul;
+          if (typeof p !== 'number') throw new Error('jev answered without a probability');
+          return p;
+        });
       }
       const body = await res.text();
-      if (res.status === 400 && body.includes('max_tokens_exceeded')) return null;
+      if (res.status === 400 && body.includes('max_tokens_exceeded')) return qs.map(() => null);
       if (attempt >= 3 || (res.status < 500 && res.status !== 429)) throw new Error(`jev ${res.status}: ${body.slice(0, 200)}`);
       await new Promise(r => setTimeout(r, 500 * 2 ** attempt));
     }
@@ -179,9 +187,13 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     const body = await c.req.json().catch(() => ({}));
     const { model } = body;
     const isQ = (q: unknown): q is Question => typeof (q as Question)?.instructions === 'string';
-    const reqs: Req[] | null = Array.isArray(body.requests)
-      && body.requests.every((r: Req) => isQ(r?.question) && r.state && typeof r.state === 'object' && !Array.isArray(r.state)) ? body.requests : null;
-    if (typeof model !== 'string' || !reqs) return c.json({ error: 'need model and requests[{question, state}]' }, 400);
+    const isState = (st: unknown) => !!st && typeof st === 'object' && !Array.isArray(st);
+    // Each item is one state with its questions ({state, questions}) or with one ({state, question});
+    // ps answers every question, in order.
+    const items: unknown[] | null = Array.isArray(body.requests) ? body.requests : null;
+    const reqs: Req[] | null = items && items.every((r) => isState((r as Req)?.state) && (isQ((r as Req).question) || (Array.isArray((r as Batch).questions) && (r as Batch).questions.every(isQ))))
+      ? items.flatMap((r) => ((r as Batch).questions ?? [(r as Req).question]).map((question) => ({ question, state: (r as Req).state }))) : null;
+    if (typeof model !== 'string' || !reqs) return c.json({ error: 'need model and requests[{state, questions[]}]' }, 400);
     // jev's long context (TypeSafe-Danger-Zone-Long-Context): larger states, answers TypeSafe
     // does not certify, so cached apart from normal answers.
     const long = body.longContext === true;
@@ -195,8 +207,19 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     const now = Date.now();
     let w = used.get(key);
     if (!w || now - w.start >= 3600_000) used.set(key, w = { start: now, n: 0 });
-    const cost = new Map([...todo].map(([h, r]) => [h, requestChars(r)]));
-    const total = [...cost.values()].reduce((a, b) => a + b, 0);
+    // Questions about the same state share a call, as many as fit.
+    const calls: { state: Record<string, unknown>; hs: string[]; qs: Question[]; cost: number }[] = [];
+    const open = new Map<string, (typeof calls)[number]>();
+    for (const [h, r] of todo) {
+      const k = stateKey(r.state);
+      let call = open.get(k);
+      if (!call || call.qs.length >= CALL_MAX_QUESTIONS || call.cost + questionChars(r.question) > CALL_MAX_CHARS) {
+        calls.push(call = { state: r.state, hs: [], qs: [], cost: JSON.stringify(r.state).length });
+        open.set(k, call);
+      }
+      call.hs.push(h); call.qs.push(r.question); call.cost += questionChars(r.question);
+    }
+    const total = calls.reduce((a, x) => a + x.cost, 0);
     if (w.n + total > config.charsPerHour) {
       return c.json({ error: `this link has sent ${w.n} characters to jev this hour; this run needs ${total} more, and the limit is ${config.charsPerHour}` }, 429);
     }
@@ -207,14 +230,13 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     let answered = 0;
     let failure: Error | null = null;
     const tooLong = new Set<string>();
-    const queue = [...todo];
+    const queue = [...calls];
     await Promise.all(Array.from({ length: WORKERS }, async () => {
-      for (let item = queue.shift(); item && !failure; item = queue.shift()) {
-        const [h, r] = item;
+      for (let call = queue.shift(); call && !failure; call = queue.shift()) {
         try {
-          const p = await askOne(model, r.question, r.state, long);
-          if (p === null) tooLong.add(h); else cache.put(h, p, model);
-          answered += cost.get(h)!;
+          const ps = await askBatch(model, call.state, call.qs, long);
+          ps.forEach((p, i) => (p === null ? tooLong.add(call!.hs[i]) : cache.put(call!.hs[i], p, model)));
+          answered += call.cost;
         }
         catch (e) { failure ??= e as Error; }
       }

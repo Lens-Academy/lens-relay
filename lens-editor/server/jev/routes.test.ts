@@ -11,7 +11,8 @@ const token = (o: Partial<ShareTokenPayload> = {}) => signShareToken({
   purpose: 'share', role: 'edit', folder: EDU_FOLDER,
   expiry: Math.floor(Date.now() / 1000) + 3600, ...o,
 });
-const jevReply = (p: number) => new Response(JSON.stringify({ answers: { q: { noul: p } } }), { status: 200 });
+// jev's reply to a call of up to 100 questions, every answer p.
+const jevReply = (p: number) => new Response(JSON.stringify({ answers: Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`q${i}`, { noul: p }])) }), { status: 200 });
 
 function mount(config: Partial<JevConfig> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'jev-'));
@@ -45,7 +46,7 @@ describe('jev routes', () => {
     expect(await (await ask(app, ['a', 'b'])).json()).toEqual({ ps: [0.7, 0.7], cached: 2 });
     expect(jev).toHaveBeenCalledTimes(2);
     const sent = JSON.parse(String(jev.mock.calls[0][1]!.body));
-    expect(sent).toEqual({ model: 'jev-1.14.0', state: { paragraph: 'a' }, questions: { q: { type: 'noul', instructions: 'Is `paragraph` bad?' } } });
+    expect(sent).toEqual({ model: 'jev-1.14.0', state: { paragraph: 'a' }, questions: { q0: { type: 'noul', instructions: 'Is `paragraph` bad?' } } });
   });
   it('refuses a request that would pass the hourly budget of new texts', async () => {
     const { app, jev } = mount({ charsPerHour: 3 * ONE });
@@ -106,7 +107,7 @@ describe('jev routes, any state', () => {
     expect(await res.json()).toEqual({ ps: [0.7], cached: 0 });
     const sent = JSON.parse(String(jev.mock.calls[0][1]!.body));
     expect(Object.keys(sent.state)).toEqual(['__format_description', 'document']);
-    expect(sent.questions.q.instructions).toBe('Is `paragraph_0` ok?');
+    expect(sent.questions.q0.instructions).toBe('Is `paragraph_0` ok?');
   });
   it('counts characters sent, so a whole-file request uses more of the hour', async () => {
     const { app } = mount({ charsPerHour: 1000 });
@@ -188,5 +189,35 @@ describe('jev routes, long context', () => {
     expect(jev).toHaveBeenCalledTimes(2);
     const headers = jev.mock.calls.map((c) => (c[1]!.headers as Record<string, string>)['TypeSafe-Danger-Zone-Long-Context']);
     expect(headers).toEqual([undefined, 'true']);
+  });
+});
+
+describe('jev routes, one call per shown text', () => {
+  const batch = (app: Hono, requests: unknown[]) => app.request('/api/jev/ask', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+    body: JSON.stringify({ model: 'jev-1.14.0', requests }),
+  });
+  const q = (i: number) => ({ instructions: `Is \`sentence_${i}\` bad?` });
+  it('asks every question about one state in one call, and caches each answer', async () => {
+    const { app, jev } = mount();
+    const state = { document: { sentence_0: 'a', sentence_1: 'b', sentence_2: 'c' } };
+    expect(await (await batch(app, [{ state, questions: [q(0), q(1)] }, { state, question: q(2) }])).json()).toEqual({ ps: [0.7, 0.7, 0.7], cached: 0 });
+    expect(jev).toHaveBeenCalledTimes(1);
+    expect(Object.keys(JSON.parse(String(jev.mock.calls[0][1]!.body)).questions)).toEqual(['q0', 'q1', 'q2']);
+    expect(await (await batch(app, [{ state, questions: [q(1), q(3)] }])).json()).toEqual({ ps: [0.7, 0.7], cached: 1 });
+    expect(JSON.parse(String(jev.mock.calls[1][1]!.body)).questions).toEqual({ q0: { type: 'noul', ...q(3) } });
+  });
+  it("splits a state's questions across calls past 100, and charges the state once per call", async () => {
+    const { app, jev } = mount({ charsPerHour: 1e9 });
+    const state = { document: 'x'.repeat(1000) };
+    expect((await batch(app, [{ state, questions: Array.from({ length: 150 }, (_, i) => q(i)) }])).status).toBe(200);
+    expect(jev).toHaveBeenCalledTimes(2);
+    const { app: app2 } = mount({ charsPerHour: 3000 });
+    // 20 questions about a 1000-character state fit an hour of 3000; asked one by one they would not.
+    expect((await batch(app2, [{ state, questions: Array.from({ length: 20 }, (_, i) => q(i)) }])).status).toBe(200);
+  });
+  it('refuses a malformed batch', async () => {
+    const { app } = mount();
+    expect((await batch(app, [{ state: { a: 'x' }, questions: [{ nope: 1 }] }])).status).toBe(400);
   });
 });

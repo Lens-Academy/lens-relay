@@ -16,7 +16,7 @@ import { InputPicker } from './InputPicker';
 import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary } from './Results';
 import type { Para, Run } from './types';
-import { buildRequests, DEFAULT_PRESENTATION, describe, isDefault, type Presentation, type Request } from './presentation';
+import { buildRequests, DEFAULT_PRESENTATION, describe, isDefault, type Batch, type Presentation } from './presentation';
 import { PresentationPicker } from './PresentationPicker';
 import { relayHeaders } from '../../lib/relay-api';
 
@@ -41,12 +41,12 @@ async function filesFor(sample: Para[]): Promise<Record<string, string>> {
   return fileCache;
 }
 
-async function ask(check: JevCheck, sample: Para[], pres: Presentation): Promise<Run & { first?: Request }> {
-  const { units, requests } = buildRequests(check, sample, pres, isDefault(pres) ? {} : await filesFor(sample));
-  const data = await post('/api/jev/ask', { model: check.model, requests, ...(pres.long && pres.mode !== 'isolated' ? { longContext: true } : {}) });
+async function ask(check: JevCheck, sample: Para[], pres: Presentation): Promise<Run & { first?: Batch }> {
+  const { units, batches } = buildRequests(check, sample, pres, isDefault(pres) ? {} : await filesFor(sample));
+  const data = await post('/api/jev/ask', { model: check.model, requests: batches, ...(pres.long && pres.context !== pres.question ? { longContext: true } : {}) });
   // Units jev refused as too long (null) are left out of the run, and counted.
   const scored = units.map((u, i) => ({ ...u, p: data.ps[i] as number | null })).filter((u): u is typeof u & { p: number } => u.p !== null);
-  return { check, pres: describe(pres), platform: isDefault(pres), cached: data.cached, tooLong: data.tooLong ?? 0, scored, first: requests[0] };
+  return { check, unit: pres.question, pres: describe(pres), platform: isDefault(pres), cached: data.cached, tooLong: data.tooLong ?? 0, scored, first: batches[0] };
 }
 
 export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
@@ -64,7 +64,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const [band, setBand] = useState<Band | null>(null);
   const [pres, setPres] = useState<Presentation>(DEFAULT_PRESENTATION);
   const [showSent, setShowSent] = useState(false);
-  const [sent, setSent] = useState<Request | undefined>();
+  const [sent, setSent] = useState<Batch | undefined>();
 
   const live = parsed.ok?.live;
   const draft = parsed.ok?.draft ?? null;
@@ -151,7 +151,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
       {err && <div className="px-4 py-2 text-red-700">{err}</div>}
       {showSent && sent && (
         <pre className="mx-4 my-2 max-h-96 overflow-auto rounded bg-gray-900 p-3 text-[11px] leading-snug text-gray-100">
-          {JSON.stringify({ model: c?.model, state: sent.state, questions: { q: { type: 'noul', ...sent.question } } }, null, 2)}
+          {JSON.stringify({ model: c?.model, state: sent.state, questions: Object.fromEntries(sent.questions.map((q, i) => [`q${i}`, { type: 'noul', ...q }])) }, null, 2)}
         </pre>
       )}
       {latest && (

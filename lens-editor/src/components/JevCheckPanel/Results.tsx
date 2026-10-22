@@ -2,7 +2,7 @@
 import { BANDS, bandOf, bandRule, histogram, percentileRows, shares, type Band } from '../../lib/jev-check';
 import { ParaText, ScoreChip } from './ParaText';
 
-const unitsOf = (run: Run) => (run.pres?.endsWith('sentence') ? 'sentences' : 'paragraphs');
+const unitsOf = (run: Run) => `${run.unit ?? 'paragraph'}s`;
 import type { Colormap, Run } from './types';
 
 const BINS = 20;

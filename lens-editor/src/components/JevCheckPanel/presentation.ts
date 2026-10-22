@@ -1,53 +1,75 @@
-// How a Run presents the check to jev (lib/jev-present.ts does the parsing): which units of the
-// sample are asked about, and the question and state each request carries.
+// How a Run presents the check to jev (lib/jev-present.ts parses the file): the three choices,
+// which units of the sample are asked about, and one batch per shown text with all its questions.
 import type { JevCheck } from '../../lib/jev-check';
-import { DEFAULT_MAX_CHARS, parseDoc, presentState, questionKey, sentencesAt, templateQuestion, unitOf, type Doc, type Level, type Mode, type Unit, type UnitKind } from '../../lib/jev-present';
+import { around, atomLevel, chunks, DEFAULT_MAX_CHARS, keepOnly, keyOf, LEVELS, paragraphOf, parseDoc, rank, stateFor, templateQuestion, within, type Level, type Node } from '../../lib/jev-present';
 import type { Para } from './types';
 
-/** long: jev's long context (uncertified by TypeSafe), so the whole file is shown unchunked. */
-export interface Presentation { mode: Mode; unit: UnitKind; levels: Level[]; long?: boolean }
-export const DEFAULT_PRESENTATION: Presentation = { mode: 'isolated', unit: 'paragraph', levels: ['heading', 'paragraph', 'sentence', 'line'] };
-export const isDefault = (p: Presentation) => p.mode === 'isolated' && p.unit === 'paragraph';
+/** context: how much jev sees; question: what each question is about (at most as coarse as
+ *  context); nest: levels in between that add a layer of keys; long: jev's uncertified long
+ *  context, so the context is never cut into chunks. */
+export interface Presentation { context: Level; question: Level; nest: Level[]; long?: boolean }
+export const DEFAULT_PRESENTATION: Presentation = { context: 'paragraph', question: 'paragraph', nest: [...LEVELS] };
+/** The platform's own way: each paragraph alone, as its splitter gives it. */
+export const isDefault = (p: Presentation) => p.context === 'paragraph' && p.question === 'paragraph';
+export const between = (p: Presentation) => LEVELS.filter((l) => rank(l) > rank(p.context) && rank(l) < rank(p.question));
 
 export function describe(p: Presentation): string {
-  const whole = p.long ? 'whole file, long context' : 'file in chunks that fit jev';
-  const sees = p.mode === 'isolated' ? `the ${p.unit} alone` : p.mode === 'raw' ? `the ${whole} as markdown, plus the ${p.unit}` : `the ${whole}, parsed (${p.levels.join(', ')})`;
-  return `jev sees ${sees}; asked about each ${p.unit}`;
+  if (p.context === p.question) return `jev sees each ${p.question} alone`;
+  const nest = between(p).filter((l) => p.nest.includes(l));
+  return `jev sees each ${p.context}${p.long ? ' (long context)' : ', in chunks that fit'}, nested by ${[...nest, p.question].join(', ')}; asked about each ${p.question}`;
 }
 
-export interface Request { question: { instructions: string; criteria?: { true: string; false: string } | null }; state: Record<string, unknown> }
+export interface Question { instructions: string; criteria?: { true: string; false: string } | null }
+/** One shown text and every question asked about it; jev answers them together. */
+export interface Batch { state: Record<string, unknown>; questions: Question[] }
 
-/** The units a sample expands to under `p`, each with its request. Paragraph units in isolation
- *  keep the platform splitter's text (what the live check asks about); everything else comes from
- *  parsing the file, whose paragraphs keep Markdown the splitter strips. */
 const fail = (msg: string): never => { throw new Error(msg); };
+const short = (s: string) => (s.length > 600 ? s.slice(0, 600) + '…' : s);
 
-export function buildRequests(check: JevCheck, sample: Para[], p: Presentation, files: Record<string, string>): { units: Para[]; requests: Request[] } {
-  const levels = [...new Set<Level>([...p.levels, p.unit])];
-  const docs = new Map<string, Doc>();
-  const raw = (path: string) => {
-    if (isDefault(p)) return '';
-    const t = files[path];
-    if (t === undefined) throw new Error(`${path} could not be read from the relay`);
-    return t;
+/** The sample's units at the question level (a paragraph's sentences, or the section around it),
+ *  each with the batch that asks about it; `units` follows the batches' questions in order. */
+export function buildRequests(check: JevCheck, sample: Para[], p: Presentation, files: Record<string, string>): { units: Para[]; batches: Batch[] } {
+  const ask = (key: string): Question => {
+    const t = (s: string) => templateQuestion(s, key);
+    return { instructions: t(check.question), criteria: check.criteria ? { true: t(check.criteria.true), false: t(check.criteria.false) } : null };
   };
-  const doc = (path: string) => { if (!docs.has(path)) docs.set(path, parseDoc(raw(path))); return docs.get(path)!; };
-  const units: Para[] = [];
-  const requests: Request[] = [];
+  if (isDefault(p)) return { units: sample, batches: sample.map((row) => ({ state: { paragraph: row.text }, questions: [ask('paragraph')] })) };
+
+  const docs = new Map<string, Node>();
+  const doc = (path: string) => {
+    if (!docs.has(path)) docs.set(path, parseDoc(files[path] ?? fail(`${path} could not be read from the relay`)));
+    return docs.get(path)!;
+  };
+  // Each unit once, however many sampled paragraphs lead to it.
+  const units = new Map<string, { row: Para; node: Node }>();
   for (const row of sample) {
-    const d = doc(row.path);
-    const found: Unit[] = p.unit === 'sentence' ? sentencesAt(d, row.line, row.text)
-      : isDefault(p) ? [{ kind: 'paragraph', key: 'paragraph', text: row.text }]
-      : [unitOf(d, 'paragraph', row.line, row.text) ?? fail(`no paragraph like "${row.text.slice(0, 40)}…" in ${row.path} now (edited since the corpus was taken?)`)];
-    for (const u of found) {
-      const key = questionKey(p.mode, u);
-      const t = (s: string) => templateQuestion(s, key);
-      units.push(p.unit === 'sentence' ? { ...row, id: `${row.id}#${u.key}`, text: u.text } : row);
-      requests.push({
-        question: { instructions: t(check.question), criteria: check.criteria ? { true: t(check.criteria.true), false: t(check.criteria.false) } : null },
-        state: presentState(p.mode, d, raw(row.path), u, levels, p.long ? null : DEFAULT_MAX_CHARS),
-      });
+    const para = paragraphOf(doc(row.path), row.line, row.text) ?? fail(`no paragraph like "${row.text.slice(0, 40)}…" in ${row.path} now (edited since the corpus was taken?)`);
+    const found = rank(p.question) > rank('paragraph') ? within(para, p.question) : [around(para, p.question)];
+    for (const node of found) {
+      const id = p.question === 'paragraph' ? row.id : `${row.path}#${keyOf(node)}`;
+      if (!units.has(id)) units.set(id, { row: { ...row, id, line: node.first + 1, text: short(node.text) }, node });
     }
   }
-  return { units, requests };
+  // Units sharing a context (and chunk) share one batch.
+  const groups = new Map<string, Batch & { units: Para[] }>();
+  for (const { row, node } of units.values()) {
+    const ctx = around(node, p.context);
+    const raw = files[row.path];
+    let group = `${row.path}|${keyOf(ctx)}`, state: () => Record<string, unknown>;
+    if (ctx === node || p.long) state = () => stateFor(ctx, p.question, p.nest, raw);
+    else {
+      const runs = chunks(ctx, p.question, p.nest, DEFAULT_MAX_CHARS);
+      const k = runs.findIndex((r) => r.includes(around(node, atomLevel(p.question))));
+      const run = runs[k], lvl = atomLevel(p.question), all = within(ctx, lvl);
+      group += `|${k}`;
+      state = () => runs.length === 1 ? stateFor(ctx, p.question, p.nest, raw)
+        : stateFor(ctx, p.question, p.nest, raw, keepOnly(run), `${lvl}s ${run[0].idx} to ${run[run.length - 1].idx} of ${all[0].idx} to ${all[all.length - 1].idx} (part ${k + 1} of ${runs.length})`);
+    }
+    if (!groups.has(group)) groups.set(group, { state: state(), questions: [], units: [] });
+    const g = groups.get(group)!;
+    g.questions.push(ask(ctx === node ? p.question : keyOf(node)));
+    g.units.push(row);
+  }
+  const batches = [...groups.values()];
+  return { units: batches.flatMap((b) => b.units), batches: batches.map(({ state, questions }) => ({ state, questions })) };
 }

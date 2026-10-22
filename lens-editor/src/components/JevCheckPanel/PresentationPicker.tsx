@@ -1,30 +1,30 @@
-// What jev is shown and what it is asked about (presentation.ts), plus a switch to show the
-// first request exactly as sent.
-import { LEVELS, type Level, type Mode, type UnitKind } from '../../lib/jev-present';
-import type { Presentation } from './presentation';
+// The three presentation choices (presentation.ts): how much jev sees, what each question is
+// about, and which levels in between nest the JSON; plus a switch to show the first request sent.
+import { LEVELS, rank, type Level } from '../../lib/jev-present';
+import { between, type Presentation } from './presentation';
 
-const MODES: [Mode, string][] = [['isolated', 'the unit alone'], ['raw', 'whole file, markdown'], ['parsed', 'whole file, parsed JSON']];
+const select = 'ml-1 rounded border border-gray-200';
 
 export function PresentationPicker({ value, onChange, showSent, onShowSent }: {
   value: Presentation; onChange: (p: Presentation) => void; showSent: boolean; onShowSent: (b: boolean) => void;
 }) {
-  const toggle = (l: Level) => onChange({ ...value, levels: value.levels.includes(l) ? value.levels.filter((x) => x !== l) : LEVELS.filter((x) => x === l || value.levels.includes(x)) });
+  const setContext = (context: Level) => onChange({ ...value, context, question: rank(value.question) < rank(context) ? context : value.question });
+  const toggle = (l: Level) => onChange({ ...value, nest: value.nest.includes(l) ? value.nest.filter((x) => x !== l) : LEVELS.filter((x) => x === l || value.nest.includes(x)) });
   return (
     <span className="flex flex-wrap items-end gap-3">
-      <label>jev sees <select value={value.mode} onChange={(e) => onChange({ ...value, mode: e.target.value as Mode })} className="ml-1 rounded border border-gray-200">
-        {MODES.map(([m, label]) => <option key={m} value={m}>{label}</option>)}</select></label>
-      <label>asked about each <select value={value.unit} onChange={(e) => onChange({ ...value, unit: e.target.value as UnitKind })} className="ml-1 rounded border border-gray-200">
-        <option value="paragraph">paragraph</option><option value="sentence">sentence</option></select></label>
-      {value.mode === 'parsed' && (
-        <span title="levels kept in the parsed document; the asked-about level is always kept">
-          {LEVELS.map((l) => (
-            <label key={l} className="mr-2"><input type="checkbox" checked={value.levels.includes(l) || l === value.unit} disabled={l === value.unit}
-              onChange={() => toggle(l)} className="mr-0.5" />{l}</label>
+      <label>jev sees each <select aria-label="jev sees" value={value.context} onChange={(e) => setContext(e.target.value as Level)} className={select}>
+        {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
+      <label>asked about each <select aria-label="asked about each" value={value.question} onChange={(e) => onChange({ ...value, question: e.target.value as Level })} className={select}>
+        {LEVELS.filter((l) => rank(l) >= rank(value.context)).map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
+      {between(value).length > 0 && (
+        <span title="levels between the two that nest the JSON jev is shown; off levels add no layer of keys">
+          nested by {between(value).map((l) => (
+            <label key={l} className="mr-2"><input type="checkbox" checked={value.nest.includes(l)} onChange={() => toggle(l)} className="mr-0.5" />{l}</label>
           ))}
         </span>
       )}
-      {value.mode !== 'isolated' && (
-        <label title="Shows jev the whole file in one request (up to ~262k tokens) instead of in chunks. TypeSafe: slower and less accurate.">
+      {value.context !== value.question && (
+        <label title="Shows jev each context whole (up to ~262k tokens) instead of in chunks that fit. TypeSafe: slower and less accurate.">
           <input type="checkbox" checked={!!value.long} onChange={(e) => onChange({ ...value, long: e.target.checked })} className="mr-1" />long context (uncertified)</label>
       )}
       <label><input type="checkbox" checked={showSent} onChange={(e) => onShowSent(e.target.checked)} className="mr-1" />show what jev gets</label>
