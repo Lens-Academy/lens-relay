@@ -6,6 +6,7 @@ import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
 import { GFM, parser } from '@lezer/markdown';
 import { createLinkElement } from './linkElement';
+import { linkMarkup, pastedUrl } from './pasteLink';
 
 type Align = 'left' | 'center' | 'right';
 
@@ -287,12 +288,21 @@ class TableWidget extends WidgetType {
     // Plain-text paste only; newlines collapse to spaces so the paste
     // doesn't split the markdown row across multiple lines. Pipes and
     // backslashes are handled by the input handler's escapeForCell.
+    // A URL pasted over selected text links that text (a markdown link,
+    // even to a doc: cells don't render wikilinks).
     el.addEventListener('paste', e => {
       e.preventDefault();
-      const text = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r?\n/g, ' ');
+      const pasted = e.clipboardData?.getData('text/plain') ?? '';
       const sel = window.getSelection();
       if (!sel?.rangeCount) return;
       const range = sel.getRangeAt(0);
+      let text = pasted.replace(/\r?\n/g, ' ');
+      const url = pastedUrl(pasted);
+      if (url && !range.collapsed) {
+        const [, lead, selected, trail] = range.toString().match(/^(\s*)([\s\S]*?)(\s*)$/)!;
+        const markup = linkMarkup(selected, url);
+        if (markup) text = lead + markup.before + selected + markup.after + trail;
+      }
       range.deleteContents();
       range.insertNode(document.createTextNode(text));
       sel.collapseToEnd();
