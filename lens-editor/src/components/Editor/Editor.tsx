@@ -63,6 +63,7 @@ import { openDocInNewTab } from '../../lib/url-utils';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
 import { imagePasteExtension } from './extensions/imagePaste';
+import { pasteLink } from './extensions/pasteLink';
 import { keepAuthorship } from './extensions/keepAuthorship';
 import { updateNoteEmbedContext } from './extensions/noteEmbed';
 import { closeLive } from '../../lib/embed-docs';
@@ -432,6 +433,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           base: markdownLanguage,
           extensions: [WikilinkExtension, TaskList, Autolink, Table],
           addKeymap: false,
+          // pasteLink below does this, with wikilinks for docs
+          pasteURLAsLink: false,
         }),
         livePreview(wikilinkContextRef.current),
         codeBlockCopyButton(),
@@ -480,6 +483,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         ...(!readOnly && getFolderDoc
           ? [imagePasteExtension({ getFolderDoc, getCurrentFilePath })]
           : []),
+        // A URL pasted over selected text links it; after image paste, so an
+        // image on the clipboard wins
+        ...(readOnly ? [] : [pasteLink({ getMetadata, getCurrentFilePath })]),
         Prec.highest(keymap.of([{
           key: 'Mod-Shift-m',
           run: () => {
