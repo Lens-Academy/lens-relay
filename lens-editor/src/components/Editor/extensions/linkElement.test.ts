@@ -28,6 +28,13 @@ describe('createLinkElement', () => {
     open.mockRestore();
   });
 
+  it('is just the underlined text, with no icon after it', () => {
+    const el = createLinkElement('x', 'https://a.org');
+    expect(el.className).toBe('cm-link-widget');
+    expect(el.childNodes).toHaveLength(1);
+    expect(el.textContent).toBe('x');
+  });
+
   it('renders a refused link as plain text', () => {
     const el = createLinkElement('x', 'javascript:alert(1)');
     expect(el.className).toBe('');

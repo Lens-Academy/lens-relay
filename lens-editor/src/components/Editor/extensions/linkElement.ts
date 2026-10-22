@@ -22,10 +22,6 @@ export function createLinkElement(label: string | Node, url: string): HTMLElemen
   if (!href) return span;
 
   span.className = 'cm-link-widget';
-  const icon = document.createElement('span');
-  icon.className = 'cm-link-icon';
-  span.appendChild(icon);
-
   span.style.cursor = 'pointer';
   span.onclick = (e) => {
     e.preventDefault();
