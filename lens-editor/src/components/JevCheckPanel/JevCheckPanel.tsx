@@ -5,7 +5,7 @@
 //   results (Results.tsx) compare the draft with the live check, or a run with the one before it.
 import { useMemo, useState } from 'react';
 import type * as Y from 'yjs';
-import { discardDraft, parseCheckFile, parsePercentiles, saveDraft, setCheckFields, setDraftField, type Band, type JevCheck } from '../../lib/jev-check';
+import { discardDraft, parseCheckFile, parsePercentiles, platformProblems, saveDraft, setCheckFields, setDraftField, type Band, type JevCheck } from '../../lib/jev-check';
 import { COLORMAPS, type ColormapName } from '../../lib/colormaps';
 import { useLiveText, writeText } from './checkFile';
 import { useCorpus } from './useCorpus';
@@ -61,8 +61,16 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
     } catch (e) { setErr((e as Error).message); } finally { setRunning(false); }
   }
 
-  const set = (path: string[]) => (v: string) => writeText(ytext, (t) => setDraftField(t, path, v));
+  // "---" anywhere in the frontmatter cuts it short for the platform, which then drops the
+  // LIVE check, even when the "---" is only in a draft field.
+  const set = (path: string[]) => (v: string) => {
+    if (v.includes('---')) { window.alert('"---" cannot go in a check field: the platform reads it as the end of the frontmatter.'); return; }
+    writeText(ytext, (t) => setDraftField(t, path, v));
+  };
   const setNum = (path: string[]) => (v: string) => { const x = Number(v); if (Number.isFinite(x)) writeText(ytext, (t) => setDraftField(t, path, x)); };
+  // What the platform would make of the file now (and so after Enable), and after Save.
+  const nowProblems = useMemo(() => platformProblems(text), [text]);
+  const saveProblems = useMemo(() => attempt(() => platformProblems(saveDraft(text))).ok ?? ['the draft cannot be saved'], [text]);
   const latest = result?.run;
   const stale = latest && c && JSON.stringify(latest.check) !== JSON.stringify(c);
   const color = COLORMAPS[cmap];
@@ -77,7 +85,8 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           {live && !live.enabled && (
             <span className="text-[12px] font-normal text-amber-800">not live yet
               <button onClick={() => writeText(ytext, (t) => setCheckFields(t, [{ path: ['enabled'], value: true }]))}
-                className="ml-2 rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-800">Enable</button></span>
+                disabled={nowProblems.length > 0} title={nowProblems.join('\n')}
+                className="ml-2 rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50">Enable</button></span>
           )}
           <NewCheckButton />
         </span>
@@ -85,7 +94,10 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
 
       {c && live && (
         <div className="space-y-3 px-4 py-3">
-          {draft ? <DraftBar onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
+          {live.enabled && nowProblems.length > 0 && (
+            <div className="rounded-md bg-red-50 px-3 py-2 text-[13px] text-red-800">The platform cannot read this check as it is, so it is not running: {nowProblems.join('; ')}.</div>
+          )}
+          {draft ? <DraftBar problems={saveProblems} onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
             : <div className="text-[12px] text-gray-400">Edits here make a draft beside the live check; the live check changes only when you Save.</div>}
           <Field label="Question" value={c.question} live={live.question} onCommit={set(['question'])} hint={keyHint(c.question)} />
           <Field label="Yes means" value={c.criteria?.true ?? ''} live={live.criteria?.true ?? ''} onCommit={set(['criteria', 'true'])} />
@@ -130,12 +142,14 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   );
 }
 
-function DraftBar({ onSave, onDiscard }: { onSave: () => void; onDiscard: () => void }) {
+function DraftBar({ problems, onSave, onDiscard }: { problems: string[]; onSave: () => void; onDiscard: () => void }) {
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 px-3 py-2 text-[13px] text-amber-900">
       <span className="flex-1">This file has a draft. Run tests it beside the live check; nothing else uses it until you Save.</span>
       <button onClick={onDiscard} className="rounded border border-amber-300 px-3 py-1 hover:bg-amber-100">Discard draft</button>
-      <button onClick={onSave} className="rounded bg-amber-700 px-3 py-1 font-medium text-white hover:bg-amber-800">Save as live</button>
+      <button onClick={onSave} disabled={problems.length > 0}
+        className="rounded bg-amber-700 px-3 py-1 font-medium text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50">Save as live</button>
+      {problems.length > 0 && <div className="w-full text-red-800">Saving would stop the platform running this check: {problems.join('; ')}.</div>}
     </div>
   );
 }

@@ -187,3 +187,35 @@ fix: "…"
 Why this check exists, and examples of what it should and should not catch.
 `;
 }
+
+/** The model the platform pins (lens-platform core/course_checks/checks.py MODEL): it drops a
+ *  check file naming any other. */
+export const PLATFORM_MODEL = 'jev-1.14.0';
+
+/** Why the platform's checks.from_files would leave this file out, in its own rules (empty if
+ *  it would load it). Save and Enable refuse while this is non-empty, so a live check is never
+ *  dropped by an edit made here. Its frontmatter is cut with text.split("---", 2), so any
+ *  "---" inside the frontmatter, even in a draft field, cuts it short. */
+export function platformProblems(text: string): string[] {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return ['no frontmatter'];
+  if (text.split('---')[1] !== text.slice(3, m[0].length - 3)) return ['"---" inside the frontmatter cuts it short for the platform'];
+  let fm: Record<string, unknown>;
+  try { fm = (parseYaml(m[1]) ?? {}) as Record<string, unknown>; } catch (e) { return [`frontmatter is not valid YAML: ${(e as Error).message}`]; }
+  const out: string[] = [];
+  const text_ = (k: string) => typeof fm[k] === 'string' && (fm[k] as string).trim() !== '';
+  if (!text_('id')) out.push('id must be text');
+  if (fm.model !== PLATFORM_MODEL) out.push(`model must be ${PLATFORM_MODEL} (the platform pins it)`);
+  if ('name' in fm && !text_('name')) out.push('name must be text');
+  for (const k of ['question', 'fix']) if (!text_(k)) out.push(`${k} must be text`);
+  for (const k of ['fail_at', 'pass_below']) {
+    const v = fm[k];
+    if (k in fm && (typeof v !== 'number' || v < 0 || v > 1)) out.push(`${k} must be a number from 0 to 1`);
+  }
+  const c = fm.criteria as Record<string, unknown> | undefined;
+  if ('criteria' in fm && !(c && typeof c === 'object' && Object.keys(c).sort().join() === 'false,true' && Object.values(c).every((v) => typeof v === 'string')))
+    out.push('criteria must have exactly "true" and "false" texts');
+  const s = fm.skip_folders;
+  if ('skip_folders' in fm && !(Array.isArray(s) && s.every((v) => typeof v === 'string'))) out.push('skip_folders must be a list of folder names');
+  return out;
+}

@@ -247,7 +247,6 @@ export default defineConfig(() => {
     };
   }
 
-  /** Dev /api/tts endpoints (read-aloud's Speechify proxy). */
   // Jev for the check workbench. In dev the key may also come from ~/.typesafe.ai-apikey.txt.
   function jevPlugin(): Plugin {
     return honoDevPlugin({
@@ -264,6 +263,7 @@ export default defineConfig(() => {
     });
   }
 
+  /** Dev /api/tts endpoints (read-aloud's Speechify proxy). */
   function ttsPlugin(): Plugin {
     return honoDevPlugin({
       name: 'tts-api',

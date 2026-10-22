@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createJevRoutes, type JevConfig } from './routes';
@@ -53,5 +53,40 @@ describe('jev routes', () => {
     const auth = { headers: { 'X-Share-Token': token() } };
     expect((await mount().app.request('/api/jev/corpus', auth)).status).toBe(200);
     expect((await mount({ corpusPath: '/nonexistent/corpus.json' }).app.request('/api/jev/corpus', auth)).status).toBe(404);
+  });
+});
+
+describe('jev routes, review fixes', () => {
+  const askQ = (app: Hono, texts: string[], criteria?: { true: string; false: string }) => app.request('/api/jev/ask', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+    body: JSON.stringify({ model: 'jev-1.14.0', question: { instructions: 'q', criteria }, texts }),
+  });
+  it('treats different criteria as a different question', async () => {
+    const { app, jev } = mount();
+    await askQ(app, ['a'], { true: 'x', false: 'y' });
+    await askQ(app, ['a'], { true: 'x2', false: 'y' });
+    expect(jev).toHaveBeenCalledTimes(2);
+  });
+  it('asks once for a text repeated in one request', async () => {
+    const { app, jev } = mount();
+    expect(await (await askQ(app, ['a', 'a', 'a'])).json()).toEqual({ ps: [0.7, 0.7, 0.7], cached: 0 });
+    expect(jev).toHaveBeenCalledTimes(1);
+  });
+  it('survives a truncated cache line and keeps the file appendable', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jev-'));
+    writeFileSync(join(dir, 'answers.jsonl'), '{"h":"zz","p":0.1}\n{"h":"tr');
+    const jev = vi.fn<typeof fetch>(async () => jevReply(0.7));
+    const app = new Hono();
+    app.route('/api/jev', createJevRoutes({ apiKey: 'k', cacheDir: dir, corpusPath: join(dir, 'c.json'), textsPerHour: 100, fetchImpl: jev }));
+    expect((await askQ(app, ['a'])).status).toBe(200);
+    const lines = readFileSync(join(dir, 'answers.jsonl'), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[lines.length - 1]).p).toBe(0.7);
+  });
+  it('refunds the budget when jev fails, and retries a 429', async () => {
+    const { app, jev } = mount({ textsPerHour: 3 });
+    jev.mockImplementation(async () => new Response('bad', { status: 400 }));
+    expect((await askQ(app, ['a', 'b', 'c'])).status).toBe(502);
+    jev.mockImplementationOnce(async () => new Response('slow down', { status: 429 })).mockImplementation(async () => jevReply(0.2));
+    expect((await askQ(app, ['d'])).status).toBe(200);
   });
 });

@@ -64,7 +64,16 @@ function answerCache(dir: string) {
     if (map) return map;
     map = new Map();
     mkdirSync(dir, { recursive: true });
-    if (existsSync(file)) for (const line of readFileSync(file, 'utf8').split('\n')) if (line) { const r = JSON.parse(line); map.set(r.h, r.p); }
+    if (existsSync(file)) {
+      const raw = readFileSync(file, 'utf8');
+      // A crash or a full disk mid-append leaves a partial last line: skip bad lines, and end
+      // the file with a newline so the next append starts a line of its own.
+      for (const line of raw.split('\n')) {
+        if (!line) continue;
+        try { const r = JSON.parse(line); if (typeof r.h === 'string' && typeof r.p === 'number') map.set(r.h, r.p); } catch { /* partial line */ }
+      }
+      if (raw && !raw.endsWith('\n')) appendFileSync(file, '\n');
+    }
     return map;
   };
   return {
@@ -95,8 +104,12 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
         headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, state: { paragraph: text }, questions: { q: noul } }),
       });
-      if (res.ok) return (await res.json()).answers.q.noul as number;
-      if (attempt >= 3 || res.status < 500) throw new Error(`jev ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      if (res.ok) {
+        const p = (await res.json()).answers?.q?.noul;
+        if (typeof p !== 'number') throw new Error('jev answered without a probability');
+        return p;
+      }
+      if (attempt >= 3 || (res.status < 500 && res.status !== 429)) throw new Error(`jev ${res.status}: ${(await res.text()).slice(0, 200)}`);
       await new Promise(r => setTimeout(r, 500 * 2 ** attempt));
     }
   }
@@ -114,9 +127,10 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
       return c.json({ error: 'need model, question.instructions, texts[]' }, 400);
     }
     if (texts.length > MAX_TEXTS) return c.json({ error: `at most ${MAX_TEXTS} texts per request` }, 400);
+    // Each distinct uncached text is asked once, however often it repeats in the request.
     const ps: number[] = new Array(texts.length);
-    const todo: number[] = [];
-    texts.forEach((t, i) => { const hit = cache.get(hashOf(model, question, t)); if (hit === undefined) todo.push(i); else ps[i] = hit; });
+    const todo: string[] = [];
+    for (const t of new Set(texts as string[])) if (cache.get(hashOf(model, question, t)) === undefined) todo.push(t);
 
     const key = c.get('jevBudgetKey' as never) as string;
     const now = Date.now();
@@ -127,20 +141,23 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     }
     w.n += todo.length;
 
+    let answered = 0;
     try {
       let next = 0;
       await Promise.all(Array.from({ length: WORKERS }, async () => {
         while (next < todo.length) {
-          const i = todo[next++];
-          const p = await askOne(model, question, texts[i]);
-          cache.put(hashOf(model, question, texts[i]), p, model);
-          ps[i] = p;
+          const t = todo[next++];
+          cache.put(hashOf(model, question, t), await askOne(model, question, t), model);
+          answered++;
         }
       }));
     } catch (e) {
+      w.n -= todo.length - answered; // only answered texts count against the link's hour
       return c.json({ error: (e as Error).message }, 502);
     }
-    return c.json({ ps, cached: texts.length - todo.length });
+    texts.forEach((t: string, i: number) => { ps[i] = cache.get(hashOf(model, question, t))!; });
+    const fresh = new Set(todo);
+    return c.json({ ps, cached: texts.filter((t: string) => !fresh.has(t)).length });
   });
   return app;
 }

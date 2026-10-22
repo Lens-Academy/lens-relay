@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares } from './jev-check';
+import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares , platformProblems } from './jev-check';
 
 const T1 = `---
 id: T1
@@ -148,5 +148,20 @@ describe('newCheckText', () => {
   it('refuses ids and names that would make a bad file', () => {
     expect(() => newCheckText('6 x', 'n')).toThrow();
     expect(() => newCheckText('T6', 'a/b')).toThrow();
+  });
+});
+
+describe('platformProblems: what would make the platform drop the check', () => {
+  const ok = `---\nid: T9\nname: n\nmodel: jev-1.14.0\nfail_at: 0.8\npass_below: 0.5\nquestion: Is \`paragraph\` bad?\ncriteria:\n  "true": yes\n  "false": no\nfix: Fix it.\n---\nnotes\n`;
+  it('passes a well-formed check', () => expect(platformProblems(ok)).toEqual([]));
+  it('names each rule broken', () => {
+    expect(platformProblems(ok.replace('jev-1.14.0', 'jev-1.15.0'))).toEqual(['model must be jev-1.14.0 (the platform pins it)']);
+    expect(platformProblems(ok.replace('fail_at: 0.8', 'fail_at: 80'))).toEqual(['fail_at must be a number from 0 to 1']);
+    expect(platformProblems(ok.replace('fix: Fix it.\n', ''))).toEqual(['fix must be text']);
+    expect(platformProblems(ok.replace('  "false": no\n', ''))).toEqual(['criteria must have exactly "true" and "false" texts']);
+  });
+  it('catches --- anywhere in the frontmatter, even in a draft', () => {
+    const t = ok.replace('fix: Fix it.\n', 'fix: Fix it.\ndraft:\n  question: a --- b\n');
+    expect(platformProblems(t)).toEqual(['"---" inside the frontmatter cuts it short for the platform']);
   });
 });
