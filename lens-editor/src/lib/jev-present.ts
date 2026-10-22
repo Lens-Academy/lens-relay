@@ -106,8 +106,6 @@ export function paragraphOf(doc: Node, line: number, text?: string): Node | unde
   return atLine();
 }
 
-/** The check's question, its `paragraph` pointed at the key jev is shown the unit under. */
-export const templateQuestion = (question: string, key: string) => question.replace(/`paragraph`/g, '`' + key + '`');
 
 type Json = string | { [k: string]: Json };
 

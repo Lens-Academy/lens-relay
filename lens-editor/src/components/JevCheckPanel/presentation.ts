@@ -1,7 +1,8 @@
 // How a Run presents the check to jev (lib/jev-present.ts parses the file): the three choices,
 // which units of the sample are asked about, and one batch per shown text with all its questions.
 import type { JevCheck } from '../../lib/jev-check';
-import { around, atomLevel, chunks, DEFAULT_MAX_CHARS, keepOnly, keyOf, LEVELS, paragraphOf, parseDoc, rank, stateFor, templateQuestion, within, type Level, type Node } from '../../lib/jev-present';
+import { around, atomLevel, chunks, DEFAULT_MAX_CHARS, keepOnly, keyOf, LEVELS, paragraphOf, parseDoc, rank, stateFor, within, type Level, type Node } from '../../lib/jev-present';
+import { fillRefs } from '../../lib/jev-keys';
 import type { Para } from './types';
 
 /** context: how much jev sees; question: what each question is about (at most as coarse as
@@ -29,11 +30,12 @@ const short = (s: string) => (s.length > 600 ? s.slice(0, 600) + '…' : s);
 /** The sample's units at the question level (a paragraph's sentences, or the section around it),
  *  each with the batch that asks about it; `units` follows the batches' questions in order. */
 export function buildRequests(check: JevCheck, sample: Para[], p: Presentation, files: Record<string, string>): { units: Para[]; batches: Batch[] } {
-  const ask = (key: string): Question => {
-    const t = (s: string) => templateQuestion(s, key);
+  // References to units (`sentence`, `paragraph`) become the numbered keys jev is shown.
+  const ask = (unit?: Node): Question => {
+    const t = (s: string) => (unit ? fillRefs(s, unit, p) : s);
     return { instructions: t(check.question), criteria: check.criteria ? { true: t(check.criteria.true), false: t(check.criteria.false) } : null };
   };
-  if (isDefault(p)) return { units: sample, batches: sample.map((row) => ({ state: { paragraph: row.text }, questions: [ask('paragraph')] })) };
+  if (isDefault(p)) return { units: sample, batches: sample.map((row) => ({ state: { paragraph: row.text }, questions: [ask()] })) };
 
   const docs = new Map<string, Node>();
   const doc = (path: string) => {
@@ -67,7 +69,7 @@ export function buildRequests(check: JevCheck, sample: Para[], p: Presentation, 
     }
     if (!groups.has(group)) groups.set(group, { state: state(), questions: [], units: [] });
     const g = groups.get(group)!;
-    g.questions.push(ask(ctx === node ? p.question : keyOf(node)));
+    g.questions.push(ask(node));
     g.units.push(row);
   }
   const batches = [...groups.values()];

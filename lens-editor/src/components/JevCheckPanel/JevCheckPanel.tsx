@@ -11,7 +11,7 @@ import { COLORMAPS, type ColormapName } from '../../lib/colormaps';
 import { useLiveText, writeText } from './checkFile';
 import { useCorpus } from './useCorpus';
 import { Field, Small } from './Field';
-import { keyHint } from '../../lib/jev-keys';
+import { keyHint, refSyntax, renameRef } from '../../lib/jev-keys';
 import { InputPicker } from './InputPicker';
 import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary } from './Results';
@@ -20,7 +20,13 @@ import { buildRequests, DEFAULT_PRESENTATION, describe, isDefault, type Batch, t
 import { PresentationPicker } from './PresentationPicker';
 import { relayHeaders } from '../../lib/relay-api';
 
-const DEFAULT_PCTS = '[0, 0.01, 0.03, 0.1, 0.3, 0.5, 0.7, 0.9, 0.97, 0.99, 1]';
+// Percentile stops, the lower half; the upper half mirrors them (percentileRows).
+const PCT_PRESETS: [string, string][] = [
+  ['tens and thirds', '[0, 0.01, 0.03, 0.1, 0.3, 0.5]'],
+  ['every tenth', '[0, 0.1, 0.2, 0.3, 0.4, 0.5]'],
+  ['every twentieth', '[0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]'],
+];
+const DEFAULT_PCTS = PCT_PRESETS[0][1];
 
 function attempt<T>(f: () => T): { ok?: T; error?: string } {
   try { return { ok: f() }; } catch (e) { return { error: (e as Error).message }; }
@@ -87,6 +93,16 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
     if (v.includes('---')) { window.alert('"---" cannot go in a check field: the platform reads it as the end of the frontmatter.'); return; }
     writeText(ytext, (t) => setDraftField(t, path, v));
   };
+  // A new question level renames references to the old one in the check's words, as a draft.
+  const changePres = (np: Presentation) => {
+    const from = pres.question, to = np.question;
+    if (c && from !== to) {
+      const fields: [string[], string][] = [[['question'], c.question], ...(c.criteria ? [[['criteria', 'true'], c.criteria.true], [['criteria', 'false'], c.criteria.false]] as [string[], string][] : [])];
+      const changed = fields.filter(([, v]) => renameRef(v, from, to) !== v);
+      if (changed.length) writeText(ytext, (t) => changed.reduce((acc, [path, v]) => setDraftField(acc, path, renameRef(v, from, to)), t));
+    }
+    setPres(np);
+  };
   const setNum = (path: string[]) => (v: string) => { const x = Number(v); if (Number.isFinite(x)) writeText(ytext, (t) => setDraftField(t, path, x)); };
   // What the platform would make of the file now (and so after Enable), and after Save.
   const nowProblems = useMemo(() => platformProblems(text), [text]);
@@ -119,9 +135,10 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           )}
           {draft ? <DraftBar problems={saveProblems} lastRun={latest?.platform === false ? 'Your last run was an experiment, not how the platform asks.' : undefined} onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
             : <div className="text-[12px] text-gray-400">Edits here make a draft beside the live check; the live check changes only when you Save.</div>}
-          <Field label="Question" value={c.question} live={live.question} onCommit={set(['question'])} hint={keyHint(c.question)} />
-          <Field label="Yes means" value={c.criteria?.true ?? ''} live={live.criteria?.true ?? ''} onCommit={set(['criteria', 'true'])} />
-          <Field label="No means" value={c.criteria?.false ?? ''} live={live.criteria?.false ?? ''} onCommit={set(['criteria', 'false'])} />
+          <Field label="Question" value={c.question} live={live.question} onCommit={set(['question'])} hint={keyHint(c.question, pres)} shape={pres} />
+          <Field label="Yes means" value={c.criteria?.true ?? ''} live={live.criteria?.true ?? ''} onCommit={set(['criteria', 'true'])} shape={pres} />
+          <Field label="No means" value={c.criteria?.false ?? ''} live={live.criteria?.false ?? ''} onCommit={set(['criteria', 'false'])} shape={pres} />
+          <div className="px-1 text-[12px] text-gray-500">{refSyntax(pres)}</div>
           <div className="flex flex-wrap items-end gap-4 text-[13px] text-gray-600">
             <Small label="model" value={c.model} live={live.model} onCommit={set(['model'])} width="w-28" />
             <Small label="fail at" value={String(c.fail_at)} live={String(live.fail_at)} onCommit={setNum(['fail_at'])} width="w-14" />
@@ -134,14 +151,18 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
         <label>sample <input type="number" min={1} max={pool?.length ?? 1000} value={n}
           onChange={(e) => setN(Math.max(1, parseInt(e.target.value || '1', 10)))} className="ml-1 w-20 rounded border border-gray-200 px-1.5 py-0.5" />
           {pool && <span className="text-gray-400"> / {pool.length}</span>}</label>
-        <label className="min-w-[240px] flex-1">percentiles
-          <input value={pctSpec} onChange={(e) => setPctSpec(e.target.value)} title='a list like [0, 0.5, 1], or "9 even"'
-            className={`ml-1 w-[calc(100%-5.5rem)] rounded border px-1.5 py-0.5 font-mono text-xs ${pcts.error ? 'border-red-400' : 'border-gray-200'}`} /></label>
+        <label className="flex min-w-[300px] flex-1 items-center gap-1">percentiles
+          <select aria-label="percentile preset" value={PCT_PRESETS.find(([, v]) => v === pctSpec)?.[1] ?? ''} onChange={(e) => e.target.value && setPctSpec(e.target.value)}
+            className="rounded border border-gray-200">
+            {PCT_PRESETS.map(([name, v]) => <option key={name} value={v}>{name}</option>)}
+            <option value="">custom</option></select>
+          <input value={pctSpec} onChange={(e) => setPctSpec(e.target.value)} title={pcts.error ?? 'stops from 0 to 0.5; the upper half mirrors them, and a small sample takes the next free item in from each end'}
+            className={`min-w-0 flex-1 rounded border px-1.5 py-0.5 font-mono text-xs ${pcts.error ? 'border-red-400' : 'border-gray-200'}`} /></label>
         <button onClick={run} disabled={running || !c || !pool?.length || !!pcts.error} title="Ctrl/Cmd+Enter"
           className="rounded-md bg-gray-900 px-4 py-1.5 font-medium text-white hover:bg-gray-700 disabled:opacity-40">{running ? 'Asking jev…' : 'Run'}</button>
         <label>colours <select value={cmap} onChange={(e) => setCmap(e.target.value as ColormapName)} className="ml-1 rounded border border-gray-200">
           {Object.keys(COLORMAPS).map((k) => <option key={k}>{k}</option>)}</select></label>
-        <PresentationPicker value={pres} onChange={setPres} showSent={showSent} onShowSent={setShowSent} />
+        <PresentationPicker value={pres} onChange={changePres} showSent={showSent} onShowSent={setShowSent} />
         {corpus.meta && pool && (
           <InputPicker meta={corpus.meta} pool={pool} n={n} courses={corpus.courses} kinds={corpus.kinds}
             onCourses={corpus.setCourses} onKinds={corpus.setKinds} />

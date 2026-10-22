@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { around, chunks, keepOnly, LEVELS, paragraphOf, parseDoc, render, stateFor, templateQuestion, within } from './jev-present';
+import { around, chunks, keepOnly, LEVELS, paragraphOf, parseDoc, render, stateFor, within } from './jev-present';
 
 // Lauren's example, 2026-10-21 (her `heading_N` level is now `section_N`, 2026-10-22).
 const LAUREN = `this is line 0 in implicit header 0,
@@ -106,9 +106,6 @@ describe('finding a corpus row in a file that may have changed', () => {
     expect(paragraphOf(d, 7, 'The METR result.')?.idx).toBe(3);
     expect(paragraphOf(d, 2, 'Gone now.')).toBeUndefined();
     expect(paragraphOf(d, 3)?.text).toBe('Intro here.');
-  });
-  it('templates the question onto the unit key', () => {
-    expect(templateQuestion('Does `paragraph` use `paragraph`?', 'sentence_3')).toBe('Does `sentence_3` use `sentence_3`?');
   });
   it('finds the unit around another', () => {
     const d = parseDoc(LAUREN);

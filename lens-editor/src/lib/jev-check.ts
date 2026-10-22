@@ -49,26 +49,34 @@ export function parseCheck(text: string): JevCheck {
 }
 
 /** "[0, 0.01, 1]" or "9 even" (both ends included). */
+/** The lower half of the percentile stops (each 0 to 0.5); percentileRows mirrors them. */
 export function parsePercentiles(spec: string): number[] {
-  const s = spec.trim();
-  const even = s.match(/^(\d+)\s+even$/);
-  if (even) {
-    const n = parseInt(even[1], 10);
-    if (n < 2) throw new Error('"N even" needs N >= 2');
-    return Array.from({ length: n }, (_, i) => i / (n - 1));
-  }
   let xs: unknown;
-  try { xs = JSON.parse(s); } catch { throw new Error('use a list like [0, 0.5, 1] or "9 even"'); }
-  if (!Array.isArray(xs) || !xs.every((x) => typeof x === 'number' && x >= 0 && x <= 1)) {
-    throw new Error('percentiles are numbers from 0 to 1');
+  try { xs = JSON.parse(spec.trim()); } catch { throw new Error('use a list like [0, 0.1, 0.5]'); }
+  if (!Array.isArray(xs) || !xs.length || !xs.every((x) => typeof x === 'number' && x >= 0 && x <= 0.5)) {
+    throw new Error('stops are numbers from 0 to 0.5; the upper half mirrors them');
   }
-  return xs as number[];
+  return [...new Set(xs as number[])].sort((a, b) => a - b);
 }
 
-export function percentileRows<T extends { p: number }>(items: T[], ps: number[]): { at: number; item: T }[] {
+/** The items at the stops `half` (each 0 to 0.5) and their mirror images (1 - stop), Lauren's
+ *  design, 2026-10-22: in from both ends, each stop takes index floor(n * stop), or the next
+ *  index not yet taken, so a small sample shows distinct items and a big one the true
+ *  percentiles. A stop that reaches the middle (within 0.6 of n/2) is shown once. */
+export function percentileRows<T extends { p: number }>(items: T[], half: number[]): { at: number; item: T }[] {
   const sorted = [...items].sort((a, b) => a.p - b.p);
-  if (!sorted.length) return [];
-  return ps.map((at) => ({ at, item: sorted[Math.round(at * (sorted.length - 1))] }));
+  const n = sorted.length;
+  const lo: { at: number; idx: number }[] = [];
+  const mid: { at: number; idx: number }[] = [];
+  for (const at of half) {
+    const idx = Math.max(lo.length ? lo[lo.length - 1].idx + 1 : 0, Math.floor(n * at));
+    if (n - 1 - idx > idx) { lo.push({ at, idx }); continue; }
+    if (idx < n && Math.abs(idx - n / 2) <= 0.6) mid.push({ at, idx });
+    break;
+  }
+  const taken = new Set([...lo, ...mid].map((r) => r.idx));
+  const hi = [...lo].reverse().map((r) => ({ at: Math.round((1 - r.at) * 1e9) / 1e9, idx: n - 1 - r.idx })).filter((r) => !taken.has(r.idx));
+  return [...lo, ...mid, ...hi].map(({ at, idx }) => ({ at, item: sorted[idx] }));
 }
 
 export function histogram(ps: number[], bins: number): number[] {
