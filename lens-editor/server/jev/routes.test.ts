@@ -117,17 +117,15 @@ describe('jev routes, any state', () => {
     expect(res.status).toBe(429);
     expect((await ask(app, ['a'])).status).toBe(200);
   });
-  it('serves the snapshot files it has', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'jev-'));
-    writeFileSync(join(dir, 'corpus.json'), '{}');
-    writeFileSync(join(dir, 'files.json'), JSON.stringify({ commit: 'c', files: { 'Lens Edu/a.md': '# A' } }));
-    const app = new Hono();
-    app.route('/api/jev', createJevRoutes({ apiKey: 'k', cacheDir: dir, corpusPath: join(dir, 'corpus.json'), charsPerHour: 100_000 }));
-    const res = await app.request('/api/jev/files', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
-      body: JSON.stringify({ paths: ['Lens Edu/a.md', 'nope.md'] }),
-    });
-    expect(await res.json()).toEqual({ files: { 'Lens Edu/a.md': '# A' } });
+  it('reads files live, once a minute per path', async () => {
+    const readFile = vi.fn(async (p: string) => (p === 'Lens Edu/a.md' ? '# A' : null));
+    const { app } = mount({ readFile });
+    const files = (paths: string[]) => app.request('/api/jev/files', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() }, body: JSON.stringify({ paths }),
+    }).then((r) => r.json());
+    expect(await files(['Lens Edu/a.md', 'nope.md'])).toEqual({ files: { 'Lens Edu/a.md': '# A' } });
+    await files(['Lens Edu/a.md']);
+    expect(readFile).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -142,5 +140,15 @@ describe('jev routes, failure stops the batch', () => {
     jev.mockImplementation(async () => jevReply(0.5));
     // Everything not answered was refunded: 40 new texts still fit in the hour of 50.
     expect((await ask(app, texts.map((t) => t + 'x'))).status).toBe(200);
+  });
+});
+
+describe('jev routes, too long', () => {
+  it('answers null for a request jev refuses as too long, and the rest go through', async () => {
+    const { app, jev } = mount();
+    jev.mockImplementation(async (_u, init) => String(init!.body).includes('huge')
+      ? new Response('{"detail":{"error_type":"max_tokens_exceeded"}}', { status: 400 }) : jevReply(0.3));
+    const res = await ask(app, ['huge', 'small']);
+    expect(await res.json()).toEqual({ ps: [null, 0.3], cached: 0, tooLong: 1 });
   });
 });

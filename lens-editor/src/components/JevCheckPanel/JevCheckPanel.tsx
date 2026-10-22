@@ -44,7 +44,9 @@ async function filesFor(sample: Para[]): Promise<Record<string, string>> {
 async function ask(check: JevCheck, sample: Para[], pres: Presentation): Promise<Run & { first?: Request }> {
   const { units, requests } = buildRequests(check, sample, pres, isDefault(pres) ? {} : await filesFor(sample));
   const data = await post('/api/jev/ask', { model: check.model, requests });
-  return { check, pres: describe(pres), platform: isDefault(pres), cached: data.cached, scored: units.map((u, i) => ({ ...u, p: data.ps[i] })), first: requests[0] };
+  // Units jev refused as too long (null) are left out of the run, and counted.
+  const scored = units.map((u, i) => ({ ...u, p: data.ps[i] as number | null })).filter((u): u is typeof u & { p: number } => u.p !== null);
+  return { check, pres: describe(pres), platform: isDefault(pres), cached: data.cached, tooLong: data.tooLong ?? 0, scored, first: requests[0] };
 }
 
 export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
@@ -159,6 +161,8 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
             <div className="mb-2 rounded border border-violet-300 bg-violet-50 px-2 py-1 text-[13px] text-violet-900">
               Experiment: the platform does not ask this way. It asks about each paragraph alone, so scores here can differ from what agents will see after Save.</div>
           )}
+          {!!latest.tooLong && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-[13px] text-amber-900">
+            {latest.tooLong} left out: jev refused them as too long (the whole file is too big for jev here).</div>}
           {latest.pres && <div className="mb-1 text-[12px] text-gray-500">{latest.pres}
             {result?.base?.run.pres && result.base.run.pres !== latest.pres && <> · compared with a run where {result.base.run.pres.replace(/^jev /, '')}</>}</div>}
           <Summary run={latest} base={result?.base} band={band} onBand={(b) => setBand(band === b ? null : b)} />

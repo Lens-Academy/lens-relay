@@ -11,7 +11,7 @@ describe('buildRequests', () => {
     expect(requests).toEqual([{ question: { instructions: 'Is `paragraph` x?', criteria: { true: '`paragraph` is', false: 'it is not' } }, state: { paragraph: 'One. Two.' } }]);
   });
   it('refuses to show jev an empty document when the file is missing', () => {
-    expect(() => buildRequests(check, [row], { ...DEFAULT_PRESENTATION, mode: 'parsed' }, {})).toThrow(/no snapshot of a.md/);
+    expect(() => buildRequests(check, [row], { ...DEFAULT_PRESENTATION, mode: 'parsed' }, {})).toThrow(/a.md could not be read/);
   });
   it('templates question and criteria onto the parsed key, one request per sentence', () => {
     const { units, requests } = buildRequests(check, [row], { ...DEFAULT_PRESENTATION, mode: 'parsed', unit: 'sentence' }, { 'a.md': 'One. Two.\n' });

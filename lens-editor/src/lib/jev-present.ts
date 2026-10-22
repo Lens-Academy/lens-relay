@@ -83,20 +83,33 @@ export function docJson(doc: Doc, levels: Level[] = LEVELS): Record<string, Json
   }));
 }
 
-function paragraphAt(doc: Doc, line: number): Paragraph | undefined {
-  const n = line - 1;
-  return doc.headings.flatMap((h) => h.paragraphs).find((x) => x.lines.some((f) => f.n === n));
+const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** The paragraph of a corpus row (`line`: 1-based, as the platform's splitter gives it; `text`:
+ *  its words). The file may have changed since the corpus was taken, so the words decide, and
+ *  the line only picks the nearest of several matches. Without `text`, the line alone. */
+function paragraphOf(doc: Doc, line: number, text?: string): Paragraph | undefined {
+  const all = doc.headings.flatMap((h) => h.paragraphs);
+  if (text === undefined) return all.find((x) => x.lines.some((f) => f.n === line - 1));
+  const near = (xs: Paragraph[]) => xs.sort((a, b) => Math.abs(a.lines[0].n - (line - 1)) - Math.abs(b.lines[0].n - (line - 1)))[0];
+  // Markdown the splitter strips (a link's URL) can split the words, so a shorter start, and
+  // then the line, are tried before giving up.
+  for (const len of [60, 25]) {
+    const head = words(text).slice(0, len);
+    const hit = near(all.filter((x) => words(x.text).includes(head)));
+    if (hit) return hit;
+  }
+  return all.find((x) => x.lines.some((f) => f.n === line - 1));
 }
 
-/** The paragraph a corpus row starts on (`line`: 1-based, as the platform's splitter gives it). */
-export function unitOf(doc: Doc, kind: 'paragraph', line: number): Unit | null {
-  const x = paragraphAt(doc, line);
+export function unitOf(doc: Doc, kind: 'paragraph', line: number, text?: string): Unit | null {
+  const x = paragraphOf(doc, line, text);
   return x ? { kind, key: `paragraph_${x.idx}`, text: x.text } : null;
 }
 
-/** The sentences of the paragraph a corpus row starts on. */
-export function sentencesAt(doc: Doc, line: number): Unit[] {
-  return (paragraphAt(doc, line)?.sentences ?? []).map((x) => ({ kind: 'sentence', key: `sentence_${x.idx}`, text: x.text }));
+/** The sentences of a corpus row's paragraph. */
+export function sentencesAt(doc: Doc, line: number, text?: string): Unit[] {
+  return (paragraphOf(doc, line, text)?.sentences ?? []).map((x) => ({ kind: 'sentence', key: `sentence_${x.idx}`, text: x.text }));
 }
 
 /** The check's question, its `paragraph` pointed at the key jev is shown the unit under. */

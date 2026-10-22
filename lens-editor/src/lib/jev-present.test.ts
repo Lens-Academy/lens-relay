@@ -80,3 +80,12 @@ describe('what a learner never sees', () => {
     expect(docJson(d, ['line'])).toEqual({ line_2: 'Seen here.', line_3: 'also  seen.' });
   });
 });
+
+describe('finding a corpus row in a file that has changed since', () => {
+  it('finds the paragraph by its words when lines have moved, nearest the old line when repeated', () => {
+    const d = parseDoc('New line added.\n\nIntro here.\n\nThe METR result.\n\nThe METR result.\n');
+    expect(unitOf(d, 'paragraph', 3, 'The METR result.')?.key).toBe('paragraph_2');
+    expect(unitOf(d, 'paragraph', 7, 'The METR result.')?.key).toBe('paragraph_3');
+    expect(unitOf(d, 'paragraph', 2, 'Gone now.')).toBeNull(); // no match, and line 2 is blank
+  });
+});

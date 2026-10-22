@@ -26,7 +26,7 @@ export function buildRequests(check: JevCheck, sample: Para[], p: Presentation, 
   const raw = (path: string) => {
     if (isDefault(p)) return '';
     const t = files[path];
-    if (t === undefined) throw new Error(`no snapshot of ${path} to show jev (files.json is missing it); rebuild the corpus`);
+    if (t === undefined) throw new Error(`${path} could not be read from the relay`);
     return t;
   };
   const doc = (path: string) => { if (!docs.has(path)) docs.set(path, parseDoc(raw(path))); return docs.get(path)!; };
@@ -34,9 +34,9 @@ export function buildRequests(check: JevCheck, sample: Para[], p: Presentation, 
   const requests: Request[] = [];
   for (const row of sample) {
     const d = doc(row.path);
-    const found: Unit[] = p.unit === 'sentence' ? sentencesAt(d, row.line)
+    const found: Unit[] = p.unit === 'sentence' ? sentencesAt(d, row.line, row.text)
       : isDefault(p) ? [{ kind: 'paragraph', key: 'paragraph', text: row.text }]
-      : [unitOf(d, 'paragraph', row.line) ?? fail(`no paragraph at ${row.path}:${row.line} in its snapshot`)];
+      : [unitOf(d, 'paragraph', row.line, row.text) ?? fail(`no paragraph like "${row.text.slice(0, 40)}…" in ${row.path} now (edited since the corpus was taken?)`)];
     for (const u of found) {
       const key = questionKey(p.mode, u);
       const t = (s: string) => templateQuestion(s, key);

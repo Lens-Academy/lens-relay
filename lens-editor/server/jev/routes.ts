@@ -2,7 +2,8 @@ import { Hono, type MiddlewareHandler } from 'hono';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { readRelayDocAtPath } from '../add-video/relay-docs.ts';
 import { roleAtLeast, shareTokenFromHeaders, verifyShareToken } from '../share-token.ts';
 
 /**
@@ -10,7 +11,7 @@ import { roleAtLeast, shareTokenFromHeaders, verifyShareToken } from '../share-t
  *
  *   GET  /api/jev/corpus  → {meta, rows:[{id, path, line, kind, title, courses, text}]}
  *   POST /api/jev/ask     {model, requests:[{question:{instructions, criteria?}, state}]} → {ps:[...], cached:n}
- *   POST /api/jev/files   {paths:[...]} → {files:{path: markdown}} (the corpus snapshot's files)
+ *   POST /api/jev/files   {paths:[...]} → {files:{path: markdown}}, read live from the relay
  *
  * Every answer is appended to <cacheDir>/answers.jsonl and reused when the same
  * (model, question, text) comes again, so re-running a phrasing is free. Edit share
@@ -27,6 +28,11 @@ export interface JevConfig {
    *  guard). Counted in characters, since a whole-file request carries ~24x a paragraph's. */
   charsPerHour: number;
   fetchImpl?: typeof fetch;
+  /** A file's current markdown by relay path, or null; the relay by default. */
+  readFile?: (path: string) => Promise<string | null>;
+  /** Read course files from this checkout of lens-edu-staging instead of the relay (dev:
+   *  yjs's dev mode breaks server-side relay reads under Vite). */
+  filesDir?: string;
 }
 
 const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
@@ -40,8 +46,10 @@ export function loadJevConfig(env: NodeJS.ProcessEnv = process.env): JevConfig {
     apiKey: env.JEV_API_KEY?.trim() || undefined,
     cacheDir,
     corpusPath: env.JEV_CORPUS_PATH || join(cacheDir, 'corpus.json'),
-    // About 20,000 paragraph requests an hour.
-    charsPerHour: Number.isFinite(limit) && limit > 0 ? limit : 5_000_000,
+    filesDir: env.JEV_FILES_DIR || undefined,
+    // About 20,000 paragraph requests an hour: a T1 paragraph request (question, both criteria,
+    // paragraph) is about 650 characters at the corpus median.
+    charsPerHour: Number.isFinite(limit) && limit > 0 ? limit : 13_000_000,
   };
 }
 
@@ -97,6 +105,12 @@ const stateKey = (st: Record<string, unknown>) => {
   return k.length === 1 && k[0] === 'paragraph' && typeof st.paragraph === 'string' ? st.paragraph : JSON.stringify(st);
 };
 const reqHash = (model: string, r: Req) => hashOf(model, r.question, stateKey(r.state));
+/** Files by relay path ("Lens Edu/x.md") from a checkout of the Lens Edu folder's repo. */
+const readFromDir = (dir: string) => async (path: string): Promise<string | null> => {
+  const rel = path.replace(/^Lens Edu\//, '');
+  if (rel === path || rel.split('/').includes('..')) return null;
+  return existsSync(join(dir, rel)) ? readFileSync(join(dir, rel), 'utf8') : null;
+};
 const hashOf = (model: string, q: Question, text: string) =>
   createHash('sha256').update(JSON.stringify([model, q.instructions, q.criteria ?? null, text])).digest('hex');
 
@@ -110,7 +124,9 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
   const cache = answerCache(config.cacheDir);
   const used = new Map<string, { start: number; n: number }>();
 
-  async function askOne(model: string, q: Question, state: Record<string, unknown>): Promise<number> {
+  // A request jev refuses as too long (a whole-file state on a big file) answers null and is
+  // left out of the run, instead of failing every other request with it.
+  async function askOne(model: string, q: Question, state: Record<string, unknown>): Promise<number | null> {
     const noul: Record<string, unknown> = { type: 'noul', instructions: q.instructions };
     if (q.criteria) noul.criteria = q.criteria;
     for (let attempt = 0; ; attempt++) {
@@ -124,7 +140,9 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
         if (typeof p !== 'number') throw new Error('jev answered without a probability');
         return p;
       }
-      if (attempt >= 3 || (res.status < 500 && res.status !== 429)) throw new Error(`jev ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      const body = await res.text();
+      if (res.status === 400 && body.includes('max_tokens_exceeded')) return null;
+      if (attempt >= 3 || (res.status < 500 && res.status !== 429)) throw new Error(`jev ${res.status}: ${body.slice(0, 200)}`);
       await new Promise(r => setTimeout(r, 500 * 2 ** attempt));
     }
   }
@@ -136,17 +154,26 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     return c.body(readFileSync(config.corpusPath, 'utf8'), 200, { 'Content-Type': 'application/json' });
   });
 
-  // The corpus snapshot's raw files, for presentations that show jev the whole document.
-  const filesPath = join(dirname(config.corpusPath), 'files.json');
-  let files: Record<string, string> | null = null;
+  // Course files as they are now, for presentations that show jev the whole file. Read
+  // through the relay (a minute's cache), so an edit made in the editor reaches the next Run.
+  const readFile = config.readFile ?? (config.filesDir ? readFromDir(config.filesDir) : (p: string) => readRelayDocAtPath(p));
+  const fileCache = new Map<string, { at: number; text: string | null }>();
   app.post('/files', async c => {
     const { paths } = await c.req.json().catch(() => ({}));
-    if (!Array.isArray(paths)) return c.json({ error: 'need paths[]' }, 400);
-    if (!files) {
-      if (!existsSync(filesPath)) return c.json({ error: `no files at ${filesPath}` }, 404);
-      files = JSON.parse(readFileSync(filesPath, 'utf8')).files as Record<string, string>;
+    if (!Array.isArray(paths) || !paths.every((p: unknown) => typeof p === 'string') || paths.length > 500) {
+      return c.json({ error: 'need paths[] (at most 500)' }, 400);
     }
-    return c.json({ files: Object.fromEntries(paths.filter((p: unknown) => typeof p === 'string' && files![p as string] !== undefined).map((p: string) => [p, files![p]])) });
+    const now = Date.now();
+    const todo = (paths as string[]).filter((p) => !((fileCache.get(p)?.at ?? 0) > now - 60_000));
+    try {
+      let next = 0;
+      await Promise.all(Array.from({ length: WORKERS }, async () => {
+        while (next < todo.length) { const p = todo[next++]; fileCache.set(p, { at: now, text: await readFile(p) }); }
+      }));
+    } catch (e) {
+      return c.json({ error: `reading files from the relay: ${(e as Error).message}` }, 502);
+    }
+    return c.json({ files: Object.fromEntries((paths as string[]).flatMap((p) => { const t = fileCache.get(p)?.text; return typeof t === 'string' ? [[p, t]] : []; })) });
   });
 
   app.post('/ask', async c => {
@@ -177,11 +204,16 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     // requests never answered are refunded to the link's hour.
     let answered = 0;
     let failure: Error | null = null;
+    const tooLong = new Set<string>();
     const queue = [...todo];
     await Promise.all(Array.from({ length: WORKERS }, async () => {
       for (let item = queue.shift(); item && !failure; item = queue.shift()) {
         const [h, r] = item;
-        try { cache.put(h, await askOne(model, r.question, r.state), model); answered += cost.get(h)!; }
+        try {
+          const p = await askOne(model, r.question, r.state);
+          if (p === null) tooLong.add(h); else cache.put(h, p, model);
+          answered += cost.get(h)!;
+        }
         catch (e) { failure ??= e as Error; }
       }
     }));
@@ -189,7 +221,7 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
       w.n -= total - answered; // refund what was never answered
       return c.json({ error: (failure as Error).message }, 502);
     }
-    return c.json({ ps: hashes.map((h) => cache.get(h)!), cached: hashes.filter((h) => !todo.has(h)).length });
+    return c.json({ ps: hashes.map((h) => (tooLong.has(h) ? null : cache.get(h)!)), cached: hashes.filter((h) => !todo.has(h)).length, ...(tooLong.size ? { tooLong: tooLong.size } : {}) });
   });
   return app;
 }
