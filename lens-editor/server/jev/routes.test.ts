@@ -221,3 +221,28 @@ describe('jev routes, one call per shown text', () => {
     expect((await batch(app, [{ state: { a: 'x' }, questions: [{ nope: 1 }] }])).status).toBe(400);
   });
 });
+
+describe('jev routes, review round on #195', () => {
+  const batch = (app: Hono, requests: unknown[], longContext = false) => app.request('/api/jev/ask', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+    body: JSON.stringify({ model: 'jev-1.14.0', requests, ...(longContext ? { longContext } : {}) }),
+  });
+  const q = (i: number) => ({ instructions: `Is \`s_${i}\` bad?` });
+  it('with long context, a state over the normal call size still takes one call', async () => {
+    const { app, jev } = mount({ charsPerHour: 1e9 });
+    const state = { document: 'x'.repeat(200_000) };
+    expect((await batch(app, [{ state, questions: Array.from({ length: 40 }, (_, i) => q(i)) }], true)).status).toBe(200);
+    expect(jev).toHaveBeenCalledTimes(1);
+  });
+  it('refunds exactly the calls that failed', async () => {
+    const a = { state: { d: 'a'.repeat(100) }, question: q(0) }, b = { state: { d: 'b'.repeat(100) }, question: q(0) };
+    const one = requestChars(a);
+    const { app, jev } = mount({ charsPerHour: 2 * one });
+    jev.mockImplementation(async (_u, init) => (String(init!.body).includes('bbbb') ? new Response('bad', { status: 400 }) : jevReply(0.5)));
+    expect((await batch(app, [a, b])).status).toBe(502);
+    jev.mockImplementation(async () => jevReply(0.5));
+    const c = { state: { d: 'c'.repeat(100) }, question: q(0) }, d = { state: { d: 'd'.repeat(100) }, question: q(0) };
+    expect((await batch(app, [c, d])).status).toBe(429); // a's cost was kept
+    expect((await batch(app, [c])).status).toBe(200); // b's was refunded
+  });
+});

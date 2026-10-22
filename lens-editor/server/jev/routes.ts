@@ -42,6 +42,8 @@ const WORKERS = 8;
 // One jev call holds one state and every question about it, up to jev's 64k tokens per call
 // (state plus all questions; ~2.65 characters a token, measured) and a bounded count.
 const CALL_MAX_CHARS = 150_000;
+// With long context on, ~262k tokens a call.
+const LONG_CALL_MAX_CHARS = 650_000;
 const CALL_MAX_QUESTIONS = 100;
 // Relay reads per /files request: at most this many files, this many at a time.
 const MAX_FILES = 300;
@@ -213,7 +215,7 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     for (const [h, r] of todo) {
       const k = stateKey(r.state);
       let call = open.get(k);
-      if (!call || call.qs.length >= CALL_MAX_QUESTIONS || call.cost + questionChars(r.question) > CALL_MAX_CHARS) {
+      if (!call || call.qs.length >= CALL_MAX_QUESTIONS || call.cost + questionChars(r.question) > (long ? LONG_CALL_MAX_CHARS : CALL_MAX_CHARS)) {
         calls.push(call = { state: r.state, hs: [], qs: [], cost: JSON.stringify(r.state).length });
         open.set(k, call);
       }
