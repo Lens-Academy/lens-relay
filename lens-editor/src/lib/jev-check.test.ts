@@ -227,6 +227,10 @@ describe('a check file\'s presentation and view', () => {
     expect(parseCheckFile(drafted).live.presentation).toEqual(DEFAULT_PRESENTATION);
     expect(setDraftPresentation(drafted, DEFAULT_PRESENTATION)).toBe(T);
   });
+  it('drafts a presentation over an unreadable live block', () => {
+    const bad = T.replace('fix: f', 'fix: f\npresentation: {context: page}');
+    expect(setDraftPresentation(bad, DEFAULT_PRESENTATION)).toContain('draft:');
+  });
   it('refuses to save a presentation the platform cannot run yet, and checks words against it', () => {
     const saved = saveDraft(setDraftPresentation(T, { context: 'document', question: 'sentence', nest: [] }));
     const problems = platformProblems(saved);

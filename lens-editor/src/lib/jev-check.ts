@@ -168,7 +168,9 @@ export function setDraftField(text: string, path: string[], value: string | numb
  *  is the live one. */
 export function setDraftPresentation(text: string, p: Presentation): string {
   return editFrontmatter(text, (doc) => {
-    const live = presentationBlock(parsePresentation(doc.toJS()?.presentation));
+    // An unreadable live block equals nothing the picker can choose, so the draft is always set.
+    let live: Record<string, unknown> | null | undefined;
+    try { live = presentationBlock(parsePresentation(doc.toJS()?.presentation)); } catch { live = undefined; }
     const next = presentationBlock(p);
     if (JSON.stringify(live) === JSON.stringify(next)) {
       if (!doc.hasIn(['draft', 'presentation'])) return false;

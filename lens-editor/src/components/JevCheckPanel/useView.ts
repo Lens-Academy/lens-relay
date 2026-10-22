@@ -15,11 +15,14 @@ export function useView<K extends keyof View>(ytext: Y.Text, text: string, key: 
   // Once the file holds what was set here, follow the file again (another viewer's change);
   // React's "adjust state while rendering" pattern, as Field.tsx follows its value.
   if (mine && JSON.stringify(inFile) === JSON.stringify(mine.v)) setMine(null);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  // A change still waiting when the panel closes is written then, not lost.
+  const pending = useRef<(() => void) | null>(null);
+  useEffect(() => () => { window.clearTimeout(timer.current); pending.current?.(); }, []);
   const set = (v: NonNullable<View[K]>) => {
     setMine({ v });
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => writeText(ytext, (t) => setView(t, key, v)), PAUSE_MS);
+    pending.current = () => { pending.current = null; writeText(ytext, (t) => setView(t, key, v)); };
+    timer.current = window.setTimeout(() => pending.current?.(), PAUSE_MS);
   };
   return [mine ? mine.v : (inFile ?? fallback) as NonNullable<View[K]>, set];
 }
