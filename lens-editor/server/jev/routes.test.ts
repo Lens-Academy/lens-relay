@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createJevRoutes, type JevConfig } from './routes';
+import { createJevRoutes, requestChars, type JevConfig } from './routes';
 import { signShareToken, type ShareTokenPayload } from '../share-token';
 
 const token = (o: Partial<ShareTokenPayload> = {}) => signShareToken({
@@ -17,13 +17,16 @@ function mount(config: Partial<JevConfig> = {}) {
   writeFileSync(join(dir, 'corpus.json'), JSON.stringify({ meta: { title: 't' }, rows: [] }));
   const jev = vi.fn<typeof fetch>(async () => jevReply(0.7));
   const app = new Hono();
-  app.route('/api/jev', createJevRoutes({ apiKey: 'key', cacheDir: dir, corpusPath: join(dir, 'corpus.json'), textsPerHour: 100, fetchImpl: jev, ...config }));
+  app.route('/api/jev', createJevRoutes({ apiKey: 'key', cacheDir: dir, corpusPath: join(dir, 'corpus.json'), charsPerHour: 100_000, fetchImpl: jev, ...config }));
   return { app, jev };
 }
+const Q = { instructions: 'Is `paragraph` bad?' };
+// One paragraph request's cost against the hourly budget.
+const ONE = requestChars({ question: Q, state: { paragraph: 'a' } });
 const ask = (app: Hono, texts: string[], headers: Record<string, string> = { 'X-Share-Token': token() }) =>
   app.request('/api/jev/ask', {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify({ model: 'jev-1.14.0', question: { instructions: 'Is `paragraph` bad?' }, texts }),
+    body: JSON.stringify({ model: 'jev-1.14.0', requests: texts.map((t) => ({ question: Q, state: { paragraph: t } })) }),
   });
 
 describe('jev routes', () => {
@@ -44,7 +47,7 @@ describe('jev routes', () => {
     expect(sent).toEqual({ model: 'jev-1.14.0', state: { paragraph: 'a' }, questions: { q: { type: 'noul', instructions: 'Is `paragraph` bad?' } } });
   });
   it('refuses a request that would pass the hourly budget of new texts', async () => {
-    const { app, jev } = mount({ textsPerHour: 3 });
+    const { app, jev } = mount({ charsPerHour: 3 * ONE });
     expect((await ask(app, ['a', 'b'])).status).toBe(200);
     expect((await ask(app, ['c', 'd'])).status).toBe(429);
     expect(jev).toHaveBeenCalledTimes(2);
@@ -59,7 +62,7 @@ describe('jev routes', () => {
 describe('jev routes, review fixes', () => {
   const askQ = (app: Hono, texts: string[], criteria?: { true: string; false: string }) => app.request('/api/jev/ask', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
-    body: JSON.stringify({ model: 'jev-1.14.0', question: { instructions: 'q', criteria }, texts }),
+    body: JSON.stringify({ model: 'jev-1.14.0', requests: texts.map((t) => ({ question: { instructions: 'q', criteria }, state: { paragraph: t } })) }),
   });
   it('treats different criteria as a different question', async () => {
     const { app, jev } = mount();
@@ -77,13 +80,13 @@ describe('jev routes, review fixes', () => {
     writeFileSync(join(dir, 'answers.jsonl'), '{"h":"zz","p":0.1}\n{"h":"tr');
     const jev = vi.fn<typeof fetch>(async () => jevReply(0.7));
     const app = new Hono();
-    app.route('/api/jev', createJevRoutes({ apiKey: 'k', cacheDir: dir, corpusPath: join(dir, 'c.json'), textsPerHour: 100, fetchImpl: jev }));
+    app.route('/api/jev', createJevRoutes({ apiKey: 'k', cacheDir: dir, corpusPath: join(dir, 'c.json'), charsPerHour: 100_000, fetchImpl: jev }));
     expect((await askQ(app, ['a'])).status).toBe(200);
     const lines = readFileSync(join(dir, 'answers.jsonl'), 'utf8').trim().split('\n');
     expect(JSON.parse(lines[lines.length - 1]).p).toBe(0.7);
   });
   it('refunds the budget when jev fails, and retries a 429', async () => {
-    const { app, jev } = mount({ textsPerHour: 3 });
+    const { app, jev } = mount({ charsPerHour: 3 * ONE });
     jev.mockImplementation(async () => new Response('bad', { status: 400 }));
     expect((await askQ(app, ['a', 'b', 'c'])).status).toBe(502);
     jev.mockImplementationOnce(async () => new Response('slow down', { status: 429 })).mockImplementation(async () => jevReply(0.2));
@@ -104,21 +107,22 @@ describe('jev routes, any state', () => {
     expect(Object.keys(sent.state)).toEqual(['__format_description', 'document']);
     expect(sent.questions.q.instructions).toBe('Is `paragraph_0` ok?');
   });
-  it('a lone-paragraph request shares the cache with the texts form', async () => {
-    const { app, jev } = mount();
-    await ask(app, ['a']);
-    await app.request('/api/jev/ask', {
+  it('counts characters sent, so a whole-file request uses more of the hour', async () => {
+    const { app } = mount({ charsPerHour: 1000 });
+    const big = { question: Q, state: { document: 'x'.repeat(2000), paragraph: 'a' } };
+    const res = await app.request('/api/jev/ask', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
-      body: JSON.stringify({ model: 'jev-1.14.0', requests: [{ question: { instructions: 'Is `paragraph` bad?' }, state: { paragraph: 'a' } }] }),
+      body: JSON.stringify({ model: 'jev-1.14.0', requests: [big] }),
     });
-    expect(jev).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(429);
+    expect((await ask(app, ['a'])).status).toBe(200);
   });
   it('serves the snapshot files it has', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'jev-'));
     writeFileSync(join(dir, 'corpus.json'), '{}');
     writeFileSync(join(dir, 'files.json'), JSON.stringify({ commit: 'c', files: { 'Lens Edu/a.md': '# A' } }));
     const app = new Hono();
-    app.route('/api/jev', createJevRoutes({ apiKey: 'k', cacheDir: dir, corpusPath: join(dir, 'corpus.json'), textsPerHour: 10 }));
+    app.route('/api/jev', createJevRoutes({ apiKey: 'k', cacheDir: dir, corpusPath: join(dir, 'corpus.json'), charsPerHour: 100_000 }));
     const res = await app.request('/api/jev/files', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
       body: JSON.stringify({ paths: ['Lens Edu/a.md', 'nope.md'] }),
@@ -129,7 +133,7 @@ describe('jev routes, any state', () => {
 
 describe('jev routes, failure stops the batch', () => {
   it('asks no more after a failure, and refunds only what was never answered', async () => {
-    const { app, jev } = mount({ textsPerHour: 50 });
+    const { app, jev } = mount({ charsPerHour: 50 * ONE + 50 });
     let calls = 0;
     jev.mockImplementation(async () => { calls++; return calls === 1 ? new Response('bad', { status: 400 }) : jevReply(0.5); });
     const texts = Array.from({ length: 40 }, (_, i) => `t${i}`);

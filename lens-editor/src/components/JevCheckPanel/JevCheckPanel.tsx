@@ -1,7 +1,8 @@
 // Check workbench, shown above a Lens Edu/Checks/*.md file. Read top-down:
 //   the check's words (Field.tsx) are edited as a `draft:` block in the file's frontmatter
 //   (checkFile.ts, lib/jev-check.ts); Save makes the draft live, Discard drops it;
-//   the run bar picks a sample (useCorpus.ts, InputPicker.tsx) and asks jev via /api/jev/ask (server/jev-dev.ts);
+//   the run bar picks a sample (useCorpus.ts, InputPicker.tsx) and a presentation (presentation.ts, PresentationPicker.tsx)
+//   and asks jev via /api/jev/ask (server/jev/routes.ts);
 //   results (Results.tsx) compare the draft with the live check, or a run with the one before it.
 import { useMemo, useState } from 'react';
 import type * as Y from 'yjs';
@@ -43,7 +44,7 @@ async function filesFor(sample: Para[]): Promise<Record<string, string>> {
 async function ask(check: JevCheck, sample: Para[], pres: Presentation): Promise<Run & { first?: Request }> {
   const { units, requests } = buildRequests(check, sample, pres, isDefault(pres) ? {} : await filesFor(sample));
   const data = await post('/api/jev/ask', { model: check.model, requests });
-  return { check, pres: describe(pres), cached: data.cached, scored: units.map((u, i) => ({ ...u, p: data.ps[i] })), first: requests[0] };
+  return { check, pres: describe(pres), platform: isDefault(pres), cached: data.cached, scored: units.map((u, i) => ({ ...u, p: data.ps[i] })), first: requests[0] };
 }
 
 export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
@@ -114,7 +115,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           {live.enabled && nowProblems.length > 0 && (
             <div className="rounded-md bg-red-50 px-3 py-2 text-[13px] text-red-800">The platform cannot read this check as it is, so it is not running: {nowProblems.join('; ')}.</div>
           )}
-          {draft ? <DraftBar problems={saveProblems} onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
+          {draft ? <DraftBar problems={saveProblems} lastRun={latest?.platform === false ? 'Your last run was an experiment, not how the platform asks.' : undefined} onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
             : <div className="text-[12px] text-gray-400">Edits here make a draft beside the live check; the live check changes only when you Save.</div>}
           <Field label="Question" value={c.question} live={live.question} onCommit={set(['question'])} hint={keyHint(c.question)} />
           <Field label="Yes means" value={c.criteria?.true ?? ''} live={live.criteria?.true ?? ''} onCommit={set(['criteria', 'true'])} />
@@ -154,6 +155,10 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
       {latest && (
         <div className="px-4 pb-4 pt-3">
           {stale && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-amber-800">The check changed since this run. Run again to see the new phrasing.</div>}
+          {latest.platform === false && (
+            <div className="mb-2 rounded border border-violet-300 bg-violet-50 px-2 py-1 text-[13px] text-violet-900">
+              Experiment: the platform does not ask this way. It asks about each paragraph alone, so scores here can differ from what agents will see after Save.</div>
+          )}
           {latest.pres && <div className="mb-1 text-[12px] text-gray-500">{latest.pres}
             {result?.base?.run.pres && result.base.run.pres !== latest.pres && <> · compared with a run where {result.base.run.pres.replace(/^jev /, '')}</>}</div>}
           <Summary run={latest} base={result?.base} band={band} onBand={(b) => setBand(band === b ? null : b)} />
@@ -167,10 +172,12 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   );
 }
 
-function DraftBar({ problems, onSave, onDiscard }: { problems: string[]; onSave: () => void; onDiscard: () => void }) {
+function DraftBar({ problems, lastRun, onSave, onDiscard }: { problems: string[]; lastRun?: string; onSave: () => void; onDiscard: () => void }) {
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 px-3 py-2 text-[13px] text-amber-900">
-      <span className="flex-1">This file has a draft. Run tests it beside the live check; nothing else uses it until you Save.</span>
+      <span className="flex-1">This file has a draft. Run tests it beside the live check; nothing else uses it until you Save.
+        Save makes it what staging agents are told after the next content sync (about a minute); production follows a promote.
+        {lastRun && <b> {lastRun}</b>}</span>
       <button onClick={onDiscard} className="rounded border border-amber-300 px-3 py-1 hover:bg-amber-100">Discard draft</button>
       <button onClick={onSave} disabled={problems.length > 0}
         className="rounded bg-amber-700 px-3 py-1 font-medium text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50">Save as live</button>

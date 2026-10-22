@@ -9,8 +9,7 @@ import { roleAtLeast, shareTokenFromHeaders, verifyShareToken } from '../share-t
  * Jev for the check workbench (src/components/JevCheckPanel):
  *
  *   GET  /api/jev/corpus  → {meta, rows:[{id, path, line, kind, title, courses, text}]}
- *   POST /api/jev/ask     {model, question:{instructions, criteria?}, texts:[...]} → {ps:[...], cached:n}
- *                         or {model, requests:[{question, state}]}, for any state jev is shown
+ *   POST /api/jev/ask     {model, requests:[{question:{instructions, criteria?}, state}]} → {ps:[...], cached:n}
  *   POST /api/jev/files   {paths:[...]} → {files:{path: markdown}} (the corpus snapshot's files)
  *
  * Every answer is appended to <cacheDir>/answers.jsonl and reused when the same
@@ -24,8 +23,9 @@ export interface JevConfig {
   apiKey?: string;
   cacheDir: string;
   corpusPath: string;
-  /** New (uncached) texts one share link may send to jev per hour (cost guard). */
-  textsPerHour: number;
+  /** Characters of new (uncached) requests one share link may send to jev per hour (cost
+   *  guard). Counted in characters, since a whole-file request carries ~24x a paragraph's. */
+  charsPerHour: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -35,12 +35,13 @@ const WORKERS = 8;
 
 export function loadJevConfig(env: NodeJS.ProcessEnv = process.env): JevConfig {
   const cacheDir = env.JEV_CACHE_DIR || join(homedir(), '.cache', 'jev-workbench');
-  const limit = Number(env.JEV_TEXTS_PER_HOUR);
+  const limit = Number(env.JEV_CHARS_PER_HOUR);
   return {
     apiKey: env.JEV_API_KEY?.trim() || undefined,
     cacheDir,
     corpusPath: env.JEV_CORPUS_PATH || join(cacheDir, 'corpus.json'),
-    textsPerHour: Number.isFinite(limit) && limit > 0 ? limit : 20_000,
+    // About 20,000 paragraph requests an hour.
+    charsPerHour: Number.isFinite(limit) && limit > 0 ? limit : 5_000_000,
   };
 }
 
@@ -85,6 +86,9 @@ function answerCache(dir: string) {
 }
 
 type Req = { question: Question; state: Record<string, unknown> };
+/** What a request costs against the hourly budget: the characters jev is sent. */
+export const requestChars = (r: Req) =>
+  JSON.stringify(r.state).length + r.question.instructions.length + (r.question.criteria ? r.question.criteria.true.length + r.question.criteria.false.length : 0);
 // The cache key of what jev is shown: a lone paragraph keys by its text, as every cached
 // answer before other states existed did; any other state by its JSON (key order included,
 // since jev reads it).
@@ -150,10 +154,8 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     const { model } = body;
     const isQ = (q: unknown): q is Question => typeof (q as Question)?.instructions === 'string';
     const reqs: Req[] | null = Array.isArray(body.requests)
-      ? (body.requests.every((r: Req) => isQ(r?.question) && r.state && typeof r.state === 'object' && !Array.isArray(r.state)) ? body.requests : null)
-      : (isQ(body.question) && Array.isArray(body.texts) && body.texts.every((t: unknown) => typeof t === 'string'))
-        ? body.texts.map((t: string) => ({ question: body.question, state: { paragraph: t } })) : null;
-    if (typeof model !== 'string' || !reqs) return c.json({ error: 'need model, and question + texts[] or requests[{question, state}]' }, 400);
+      && body.requests.every((r: Req) => isQ(r?.question) && r.state && typeof r.state === 'object' && !Array.isArray(r.state)) ? body.requests : null;
+    if (typeof model !== 'string' || !reqs) return c.json({ error: 'need model and requests[{question, state}]' }, 400);
     if (reqs.length > MAX_TEXTS) return c.json({ error: `at most ${MAX_TEXTS} requests at once` }, 400);
     // Each distinct uncached request is asked once, however often it repeats.
     const hashes = reqs.map((r) => reqHash(model, r));
@@ -164,10 +166,12 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     const now = Date.now();
     let w = used.get(key);
     if (!w || now - w.start >= 3600_000) used.set(key, w = { start: now, n: 0 });
-    if (w.n + todo.size > config.textsPerHour) {
-      return c.json({ error: `this link has sent ${w.n} new texts to jev this hour; the limit is ${config.textsPerHour}` }, 429);
+    const cost = new Map([...todo].map(([h, r]) => [h, requestChars(r)]));
+    const total = [...cost.values()].reduce((a, b) => a + b, 0);
+    if (w.n + total > config.charsPerHour) {
+      return c.json({ error: `this link has sent ${w.n} characters to jev this hour; this run needs ${total} more, and the limit is ${config.charsPerHour}` }, 429);
     }
-    w.n += todo.size;
+    w.n += total;
 
     // On the first failure every worker stops taking new requests; once all have settled, the
     // requests never answered are refunded to the link's hour.
@@ -177,12 +181,12 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     await Promise.all(Array.from({ length: WORKERS }, async () => {
       for (let item = queue.shift(); item && !failure; item = queue.shift()) {
         const [h, r] = item;
-        try { cache.put(h, await askOne(model, r.question, r.state), model); answered++; }
+        try { cache.put(h, await askOne(model, r.question, r.state), model); answered += cost.get(h)!; }
         catch (e) { failure ??= e as Error; }
       }
     }));
     if (failure) {
-      w.n -= todo.size - answered;
+      w.n -= total - answered; // refund what was never answered
       return c.json({ error: (failure as Error).message }, 502);
     }
     return c.json({ ps: hashes.map((h) => cache.get(h)!), cached: hashes.filter((h) => !todo.has(h)).length });

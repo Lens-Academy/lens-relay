@@ -199,12 +199,16 @@ export const PLATFORM_MODEL = 'jev-1.14.0';
 // PyYAML's booleans (its YAML 1.1 resolver): unlike the `yaml` library's 1.1 schema, it leaves
 // y/n as text. Only unquoted scalars resolve; a key that resolves can never equal "true"/"false".
 const PY_BOOL = /^(?:yes|Yes|YES|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)$/;
+// PyYAML also resolves unquoted timestamps and base-60 numbers (1:30), which are not text.
+const PY_NOT_TEXT = /^(?:\d{4}-\d\d-\d\d|\d{4}-\d{1,2}-\d{1,2}(?:[Tt]|[ \t]+)\d{1,2}:\d\d:\d\d(?:\.\d*)?(?:[ \t]*(?:Z|[-+]\d{1,2}(?::\d\d)?))?|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?)$/;
 function pyyamlLoad(src: string): Record<string, unknown> {
   const doc = parseDocument(src);
   if (doc.errors.length) throw doc.errors[0];
   visit(doc, {
     Scalar(key, node) {
-      if (node.type !== 'PLAIN' || typeof node.source !== 'string' || !PY_BOOL.test(node.source)) return;
+      if (node.type !== 'PLAIN' || typeof node.source !== 'string') return;
+      if (PY_NOT_TEXT.test(node.source)) { node.value = key === 'key' ? `<PyYAML ${node.source}>` : { pyyaml: node.source }; return; }
+      if (!PY_BOOL.test(node.source)) return;
       const b = /^(?:yes|true|on)$/i.test(node.source);
       node.value = key === 'key' ? `<PyYAML boolean ${b}>` : b;
     },
@@ -220,7 +224,7 @@ export function platformProblems(text: string): string[] {
   try { fm = pyyamlLoad(m[1]); } catch (e) { return [`frontmatter is not valid YAML: ${(e as Error).message}`]; }
   const out: string[] = [];
   const text_ = (k: string) => typeof fm[k] === 'string' && (fm[k] as string).trim() !== '';
-  if (!text_('id')) out.push('id must be text');
+  if (fm.id === undefined || fm.id === null || fm.id === '') out.push('id is missing');
   if (fm.model !== PLATFORM_MODEL) out.push(`model must be ${PLATFORM_MODEL} (the platform pins it)`);
   if ('name' in fm && !text_('name')) out.push('name must be text');
   for (const k of ['question', 'fix']) if (!text_(k)) out.push(`${k} must be text`);

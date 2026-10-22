@@ -174,4 +174,10 @@ describe('platformProblems reads YAML as the platform does (1.1)', () => {
     expect(platformProblems(ok.replace('name: n', 'name: "no"'))).toEqual([]);
     expect(platformProblems(ok)).toEqual([]); // y/n stay text for PyYAML
   });
+  it('treats unquoted dates and base-60 numbers as not text, and any id as an id', () => {
+    expect(platformProblems(ok.replace('name: n', 'name: 2026-10-22'))).toEqual(['name must be text']);
+    expect(platformProblems(ok.replace('name: n', 'name: 1:30'))).toEqual(['name must be text']);
+    expect(platformProblems(ok.replace('name: n', 'name: "1:30"'))).toEqual([]);
+    expect(platformProblems(ok.replace('id: T9', 'id: 7'))).toEqual([]);
+  });
 });
