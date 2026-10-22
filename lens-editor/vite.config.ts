@@ -247,6 +247,22 @@ export default defineConfig(() => {
     };
   }
 
+  // Jev for the check workbench. In dev the key may also come from ~/.typesafe.ai-apikey.txt.
+  function jevPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'jev-api',
+      path: '/api/jev',
+      loadApp: async () => {
+        const { createJevRoutes, loadJevConfig } = await import('./server/jev/routes.ts');
+        const { existsSync, readFileSync } = await import('node:fs');
+        const keyFile = path.join(process.env.HOME ?? '', '.typesafe.ai-apikey.txt');
+        const config = loadJevConfig();
+        if (!config.apiKey && existsSync(keyFile)) config.apiKey = readFileSync(keyFile, 'utf8').trim();
+        return createJevRoutes(config);
+      },
+    });
+  }
+
   /** Dev /api/tts endpoints (read-aloud's Speechify proxy). */
   function ttsPlugin(): Plugin {
     return honoDevPlugin({
@@ -438,7 +454,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), jevPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,
@@ -451,18 +467,16 @@ export default defineConfig(() => {
           rewrite: (path) => path.replace(/^\/api\/relay/, ''),
           secure: !useLocalRelay,
           configure: (proxy) => {
+            // One handler, headers before body: writing the body sends the headers, so a
+            // second handler's setHeader threw ERR_HTTP_HEADERS_SENT and killed the dev server.
             proxy.on('proxyReq', (proxyReq, req) => {
+              if (relayServerToken) proxyReq.setHeader('Authorization', `Bearer ${relayServerToken}`);
               const rawBody = (req as any).relayProxyBody as Buffer | undefined;
               if (rawBody) {
                 proxyReq.setHeader('Content-Length', String(rawBody.length));
                 proxyReq.write(rawBody);
               }
             });
-            if (relayServerToken) {
-              proxy.on('proxyReq', (proxyReq) => {
-                proxyReq.setHeader('Authorization', `Bearer ${relayServerToken}`);
-              });
-            }
           },
         },
         // Proxy WebSocket connections to relay-server

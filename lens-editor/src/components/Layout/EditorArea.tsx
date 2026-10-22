@@ -25,6 +25,8 @@ import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
 import { ConceptRowsPanel, panelHostField, setPanelHost } from '../ConceptRowsPanel';
+import { JevCheckPanel } from '../JevCheckPanel/JevCheckPanel';
+import { isCheckPath } from '../../lib/jev-check';
 import { matchRule } from '../../lib/concept-rows';
 import { ConceptGraphPanel } from '../ConceptGraphPanel';
 import { isConceptPath } from '../../lib/concept-graph';
@@ -184,6 +186,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     status: PromotionStatusResponse | null;
   } | null>(null);
   const promotionRequestRef = useRef(0);
+  const promotionFailedRef = useRef(false);
 
   // Derive current file path from doc ID for wikilink resolution
   const currentFilePath = useMemo(() => {
@@ -209,14 +212,19 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     }
 
     if (showLoading) setPromotionLoading(true);
-    setPromotionError(null);
+    // A background refresh keeps the last error on screen until a request succeeds,
+    // so the label does not flicker; after a failure the interval stops asking.
+    if (showLoading) setPromotionError(null);
     getPromotionStatus(promotionFilePath)
       .then((nextStatus) => {
         if (promotionRequestRef.current !== requestId) return;
+        promotionFailedRef.current = false;
+        setPromotionError(null);
         setPromotionStatus(nextStatus);
       })
       .catch((error: unknown) => {
         if (promotionRequestRef.current !== requestId) return;
+        promotionFailedRef.current = true;
         setPromotionStatus(null);
         setPromotionError(error instanceof Error ? error.message : 'Unable to check production');
       })
@@ -231,6 +239,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     if (!promotionFilePath) return;
 
     const intervalId = window.setInterval(() => {
+      if (promotionFailedRef.current) return;
       refreshPromotionStatus({ showLoading: false });
     }, PROMOTION_STATUS_REFRESH_MS);
 
@@ -261,7 +270,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [conceptPanelHost] = useState(() => document.createElement('div'));
   const showConceptPanel = matchRule(currentFilePath) !== null;
   const showConceptGraph = isConceptPath(currentFilePath);
-  const showPanelHost = showConceptPanel || showConceptGraph;
+  const showJevCheck = isCheckPath(currentFilePath);
+  const showPanelHost = showConceptPanel || showConceptGraph || showJevCheck;
   useEffect(() => {
     if (!editorView) return;
     if (editorView.state.field(panelHostField, false) === undefined) {
@@ -542,6 +552,11 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <SyncedFileBanner />
           {showPanelHost && createPortal(
             <>
+              {showJevCheck && (
+                <PanelErrorBoundary name="Jev check workbench" resetKey={currentDocId}>
+                  <JevCheckPanel ytext={yText} />
+                </PanelErrorBoundary>
+              )}
               {showConceptGraph && (
                 <PanelErrorBoundary name="Concept graph" resetKey={currentDocId}>
                   <ConceptGraphPanel docId={currentDocId} path={currentFilePath} ytext={yText} />
