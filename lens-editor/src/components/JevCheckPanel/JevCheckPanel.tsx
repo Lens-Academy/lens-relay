@@ -139,8 +139,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           {live.enabled && !dropped.length && nowWords.length > 0 && (
             <div className="rounded-md bg-red-50 px-3 py-2 text-[13px] text-red-800">The platform runs this check, but its words name units jev is never shown, so its answers mean little: {nowWords.join('; ')}.</div>
           )}
-          {draft ? <DraftBar problems={saveProblems} lastRun={latest?.platform === false ? 'Your last run was an experiment, not how the platform asks.' : undefined} onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
-            : <div className="text-[12px] text-gray-400">Edits here make a draft beside the live check; the live check changes only when you Save.</div>}
+          <DraftBar draft={!!draft} problems={saveProblems} lastRun={latest?.platform === false ? 'Your last run was an experiment, not how the platform asks.' : undefined} onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
           <Field label="Question" value={c.question} live={live.question} onCommit={set(['question'])} hint={keyHint(c.question, pres)} shape={pres} />
           <Field label="Yes means" value={c.criteria?.true ?? ''} live={live.criteria?.true ?? ''} onCommit={set(['criteria', 'true'])} shape={pres} />
           <Field label="No means" value={c.criteria?.false ?? ''} live={live.criteria?.false ?? ''} onCommit={set(['criteria', 'false'])} shape={pres} />
@@ -203,16 +202,17 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   );
 }
 
-function DraftBar({ problems, lastRun, onSave, onDiscard }: { problems: string[]; lastRun?: string; onSave: () => void; onDiscard: () => void }) {
+// Always shown, the same size with or without a draft, so a draft appearing moves nothing.
+function DraftBar({ draft, problems, lastRun, onSave, onDiscard }: { draft: boolean; problems: string[]; lastRun?: string; onSave: () => void; onDiscard: () => void }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 px-3 py-2 text-[13px] text-amber-900">
-      <span className="flex-1">This file has a draft. Run tests it beside the live check; nothing else uses it until you Save.
-        Save makes it what staging agents are told after the next content sync (about a minute); production follows a promote.
-        {lastRun && <b> {lastRun}</b>}</span>
-      <button onClick={onDiscard} className="rounded border border-amber-300 px-3 py-1 hover:bg-amber-100">Discard draft</button>
-      <button onClick={onSave} disabled={problems.length > 0}
+    <div className={`flex flex-wrap items-center gap-3 rounded-md px-3 py-2 text-[13px] ${draft ? 'bg-amber-50 text-amber-900' : 'bg-gray-50 text-gray-500'}`}>
+      <span className="flex-1">{draft ? 'This file has a draft. Run tests it beside the live check; nothing else uses it until you Save.' : 'No draft. Edits here make one beside the live check, which changes only when you Save.'}
+        {' '}Save makes it what staging agents are told after the next content sync (about a minute); production follows a promote.
+        {draft && lastRun && <b> {lastRun}</b>}</span>
+      <button onClick={onDiscard} disabled={!draft} className="rounded border border-amber-300 px-3 py-1 hover:bg-amber-100 disabled:opacity-40">Discard draft</button>
+      <button onClick={onSave} disabled={!draft || problems.length > 0}
         className="rounded bg-amber-700 px-3 py-1 font-medium text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50">Save as live</button>
-      {problems.length > 0 && <div className="w-full text-red-800">Saving would stop the platform running this check: {problems.join('; ')}.</div>}
+      {draft && problems.length > 0 && <div className="w-full text-red-800">Saving would stop the platform running this check: {problems.join('; ')}.</div>}
     </div>
   );
 }
