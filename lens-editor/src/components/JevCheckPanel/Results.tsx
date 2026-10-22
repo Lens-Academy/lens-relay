@@ -1,6 +1,8 @@
 // A run's results: the band cards, the histogram, and either the percentile rows or one band's list.
 import { BANDS, bandOf, bandRule, histogram, percentileRows, shares, type Band } from '../../lib/jev-check';
 import { ParaText, ScoreChip } from './ParaText';
+
+const unitsOf = (run: Run) => (run.pres?.endsWith('sentence') ? 'sentences' : 'paragraphs');
 import type { Colormap, Run } from './types';
 
 const BINS = 20;
@@ -16,7 +18,7 @@ export function Summary({ run, base, band, onBand }: { run: Run; base?: { label:
     <div>
       <div className="flex flex-wrap gap-2">
         {BANDS.map((b) => (
-          <button key={b} onClick={() => onBand(b)} title={band === b ? 'show percentiles again' : `list the ${b} paragraphs`}
+          <button key={b} onClick={() => onBand(b)} title={band === b ? 'show percentiles again' : `list the ${b} ${unitsOf(run)}`}
             className={`min-w-[6.5rem] flex-1 rounded-md border px-2.5 py-2 text-left ${band === b ? 'border-gray-500 bg-gray-50' : 'border-gray-100 hover:border-gray-300'}`}>
             <div className="whitespace-nowrap text-[11px] uppercase tracking-wide text-gray-500">{b}</div>
             <div className="whitespace-nowrap font-mono text-[10px] text-gray-400">{bandRule(run.check, b)}</div>
@@ -25,7 +27,7 @@ export function Summary({ run, base, band, onBand }: { run: Run; base?: { label:
           </button>
         ))}
       </div>
-      <div className="mt-1 text-[11px] text-gray-400">{run.scored.length} paragraphs, {run.cached} from cache</div>
+      <div className="mt-1 text-[11px] text-gray-400">{run.scored.length} {unitsOf(run)}, {run.cached} from cache</div>
     </div>
   );
 }
@@ -78,7 +80,7 @@ export function BandList({ run, band, color, onClear }: { run: Run; band: Band; 
   return (
     <div className="mt-4 border-t border-gray-100">
       <div className="flex items-baseline justify-between py-2 text-[12px] text-gray-500">
-        <span>{items.length} {band} paragraphs ({bandRule(run.check, band)}), highest first</span>
+        <span>{items.length} {band} {unitsOf(run)} ({bandRule(run.check, band)}), highest first</span>
         <button onClick={onClear} className="text-gray-400 hover:text-gray-700">show percentiles</button>
       </div>
       <ol className="divide-y divide-gray-100">

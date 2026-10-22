@@ -90,3 +90,39 @@ describe('jev routes, review fixes', () => {
     expect((await askQ(app, ['d'])).status).toBe(200);
   });
 });
+
+describe('jev routes, any state', () => {
+  it('sends each request its own question and state, in key order', async () => {
+    const { app, jev } = mount();
+    const state = { __format_description: 'd', document: { paragraph_0: 'x' } };
+    const res = await app.request('/api/jev/ask', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+      body: JSON.stringify({ model: 'jev-1.14.0', requests: [{ question: { instructions: 'Is `paragraph_0` ok?' }, state }] }),
+    });
+    expect(await res.json()).toEqual({ ps: [0.7], cached: 0 });
+    const sent = JSON.parse(String(jev.mock.calls[0][1]!.body));
+    expect(Object.keys(sent.state)).toEqual(['__format_description', 'document']);
+    expect(sent.questions.q.instructions).toBe('Is `paragraph_0` ok?');
+  });
+  it('a lone-paragraph request shares the cache with the texts form', async () => {
+    const { app, jev } = mount();
+    await ask(app, ['a']);
+    await app.request('/api/jev/ask', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+      body: JSON.stringify({ model: 'jev-1.14.0', requests: [{ question: { instructions: 'Is `paragraph` bad?' }, state: { paragraph: 'a' } }] }),
+    });
+    expect(jev).toHaveBeenCalledTimes(1);
+  });
+  it('serves the snapshot files it has', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jev-'));
+    writeFileSync(join(dir, 'corpus.json'), '{}');
+    writeFileSync(join(dir, 'files.json'), JSON.stringify({ commit: 'c', files: { 'Lens Edu/a.md': '# A' } }));
+    const app = new Hono();
+    app.route('/api/jev', createJevRoutes({ apiKey: 'k', cacheDir: dir, corpusPath: join(dir, 'corpus.json'), textsPerHour: 10 }));
+    const res = await app.request('/api/jev/files', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+      body: JSON.stringify({ paths: ['Lens Edu/a.md', 'nope.md'] }),
+    });
+    expect(await res.json()).toEqual({ files: { 'Lens Edu/a.md': '# A' } });
+  });
+});

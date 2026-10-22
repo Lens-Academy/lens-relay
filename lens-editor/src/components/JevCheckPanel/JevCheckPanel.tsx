@@ -15,6 +15,8 @@ import { InputPicker } from './InputPicker';
 import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary } from './Results';
 import type { Para, Run } from './types';
+import { buildRequests, DEFAULT_PRESENTATION, describe, isDefault, type Presentation, type Request } from './presentation';
+import { PresentationPicker } from './PresentationPicker';
 import { relayHeaders } from '../../lib/relay-api';
 
 const DEFAULT_PCTS = '[0, 0.01, 0.03, 0.1, 0.3, 0.5, 0.7, 0.9, 0.97, 0.99, 1]';
@@ -23,14 +25,25 @@ function attempt<T>(f: () => T): { ok?: T; error?: string } {
   try { return { ok: f() }; } catch (e) { return { error: (e as Error).message }; }
 }
 
-async function ask(check: JevCheck, sample: Para[]): Promise<Run> {
-  const res = await fetch('/api/jev/ask', {
-    method: 'POST', headers: relayHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ model: check.model, question: { instructions: check.question, criteria: check.criteria }, texts: sample.map((s) => s.text) }),
-  });
+const post = async (url: string, body: unknown) => {
+  const res = await fetch(url, { method: 'POST', headers: relayHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error);
-  return { check, cached: data.cached, scored: sample.map((s, i) => ({ ...s, p: data.ps[i] })) };
+  return data;
+};
+
+// The raw files the document presentations need, fetched once each.
+const fileCache: Record<string, string> = {};
+async function filesFor(sample: Para[]): Promise<Record<string, string>> {
+  const need = [...new Set(sample.map((s) => s.path))].filter((p) => !(p in fileCache));
+  if (need.length) Object.assign(fileCache, (await post('/api/jev/files', { paths: need })).files);
+  return fileCache;
+}
+
+async function ask(check: JevCheck, sample: Para[], pres: Presentation): Promise<Run & { first?: Request }> {
+  const { units, requests } = buildRequests(check, sample, pres, isDefault(pres) ? {} : await filesFor(sample));
+  const data = await post('/api/jev/ask', { model: check.model, requests });
+  return { check, pres: describe(pres), cached: data.cached, scored: units.map((u, i) => ({ ...u, p: data.ps[i] })), first: requests[0] };
 }
 
 export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
@@ -46,6 +59,9 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   // The newest run, the run to compare it with, and what that comparison is called.
   const [result, setResult] = useState<{ run: Run; base?: { label: string; run: Run } } | null>(null);
   const [band, setBand] = useState<Band | null>(null);
+  const [pres, setPres] = useState<Presentation>(DEFAULT_PRESENTATION);
+  const [showSent, setShowSent] = useState(false);
+  const [sent, setSent] = useState<Request | undefined>();
 
   const live = parsed.ok?.live;
   const draft = parsed.ok?.draft ?? null;
@@ -56,7 +72,8 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
     setRunning(true); setErr(null);
     try {
       const sample = pool.slice(0, n);
-      const [r, l] = await Promise.all([ask(c, sample), draft ? ask(live, sample) : null]);
+      const [r, l] = await Promise.all([ask(c, sample, pres), draft ? ask(live, sample, pres) : null]);
+      setSent(r.first);
       setResult((old) => ({ run: r, base: l ? { label: 'live', run: l } : old ? { label: 'was', run: old.run } : undefined }));
     } catch (e) { setErr((e as Error).message); } finally { setRunning(false); }
   }
@@ -121,6 +138,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           className="rounded-md bg-gray-900 px-4 py-1.5 font-medium text-white hover:bg-gray-700 disabled:opacity-40">{running ? 'Asking jev…' : 'Run'}</button>
         <label>colours <select value={cmap} onChange={(e) => setCmap(e.target.value as ColormapName)} className="ml-1 rounded border border-gray-200">
           {Object.keys(COLORMAPS).map((k) => <option key={k}>{k}</option>)}</select></label>
+        <PresentationPicker value={pres} onChange={setPres} showSent={showSent} onShowSent={setShowSent} />
         {corpus.meta && pool && (
           <InputPicker meta={corpus.meta} pool={pool} n={n} courses={corpus.courses} kinds={corpus.kinds}
             onCourses={corpus.setCourses} onKinds={corpus.setKinds} />
@@ -128,9 +146,16 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
       </div>
 
       {err && <div className="px-4 py-2 text-red-700">{err}</div>}
+      {showSent && sent && (
+        <pre className="mx-4 my-2 max-h-96 overflow-auto rounded bg-gray-900 p-3 text-[11px] leading-snug text-gray-100">
+          {JSON.stringify({ model: c?.model, state: sent.state, questions: { q: { type: 'noul', ...sent.question } } }, null, 2)}
+        </pre>
+      )}
       {latest && (
         <div className="px-4 pb-4 pt-3">
           {stale && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-amber-800">The check changed since this run. Run again to see the new phrasing.</div>}
+          {latest.pres && <div className="mb-1 text-[12px] text-gray-500">{latest.pres}
+            {result?.base?.run.pres && result.base.run.pres !== latest.pres && <> · compared with a run where {result.base.run.pres.replace(/^jev /, '')}</>}</div>}
           <Summary run={latest} base={result?.base} band={band} onBand={(b) => setBand(band === b ? null : b)} />
           <Histogram run={latest} color={color} />
           {band

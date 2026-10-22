@@ -2,7 +2,7 @@ import { Hono, type MiddlewareHandler } from 'hono';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { roleAtLeast, shareTokenFromHeaders, verifyShareToken } from '../share-token.ts';
 
 /**
@@ -10,6 +10,8 @@ import { roleAtLeast, shareTokenFromHeaders, verifyShareToken } from '../share-t
  *
  *   GET  /api/jev/corpus  → {meta, rows:[{id, path, line, kind, title, courses, text}]}
  *   POST /api/jev/ask     {model, question:{instructions, criteria?}, texts:[...]} → {ps:[...], cached:n}
+ *                         or {model, requests:[{question, state}]}, for any state jev is shown
+ *   POST /api/jev/files   {paths:[...]} → {files:{path: markdown}} (the corpus snapshot's files)
  *
  * Every answer is appended to <cacheDir>/answers.jsonl and reused when the same
  * (model, question, text) comes again, so re-running a phrasing is free. Edit share
@@ -82,6 +84,15 @@ function answerCache(dir: string) {
   };
 }
 
+type Req = { question: Question; state: Record<string, unknown> };
+// The cache key of what jev is shown: a lone paragraph keys by its text, as every cached
+// answer before other states existed did; any other state by its JSON (key order included,
+// since jev reads it).
+const stateKey = (st: Record<string, unknown>) => {
+  const k = Object.keys(st);
+  return k.length === 1 && k[0] === 'paragraph' && typeof st.paragraph === 'string' ? st.paragraph : JSON.stringify(st);
+};
+const reqHash = (model: string, r: Req) => hashOf(model, r.question, stateKey(r.state));
 const hashOf = (model: string, q: Question, text: string) =>
   createHash('sha256').update(JSON.stringify([model, q.instructions, q.criteria ?? null, text])).digest('hex');
 
@@ -95,14 +106,14 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
   const cache = answerCache(config.cacheDir);
   const used = new Map<string, { start: number; n: number }>();
 
-  async function askOne(model: string, q: Question, text: string): Promise<number> {
+  async function askOne(model: string, q: Question, state: Record<string, unknown>): Promise<number> {
     const noul: Record<string, unknown> = { type: 'noul', instructions: q.instructions };
     if (q.criteria) noul.criteria = q.criteria;
     for (let attempt = 0; ; attempt++) {
       const res = await doFetch(JEV_URL, {
         method: 'POST',
         headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, state: { paragraph: text }, questions: { q: noul } }),
+        body: JSON.stringify({ model, state, questions: { q: noul } }),
       });
       if (res.ok) {
         const p = (await res.json()).answers?.q?.noul;
@@ -121,43 +132,58 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     return c.body(readFileSync(config.corpusPath, 'utf8'), 200, { 'Content-Type': 'application/json' });
   });
 
-  app.post('/ask', async c => {
-    const { model, question, texts } = await c.req.json().catch(() => ({}));
-    if (typeof model !== 'string' || typeof question?.instructions !== 'string' || !Array.isArray(texts) || !texts.every(t => typeof t === 'string')) {
-      return c.json({ error: 'need model, question.instructions, texts[]' }, 400);
+  // The corpus snapshot's raw files, for presentations that show jev the whole document.
+  const filesPath = join(dirname(config.corpusPath), 'files.json');
+  let files: Record<string, string> | null = null;
+  app.post('/files', async c => {
+    const { paths } = await c.req.json().catch(() => ({}));
+    if (!Array.isArray(paths)) return c.json({ error: 'need paths[]' }, 400);
+    if (!files) {
+      if (!existsSync(filesPath)) return c.json({ error: `no files at ${filesPath}` }, 404);
+      files = JSON.parse(readFileSync(filesPath, 'utf8')).files as Record<string, string>;
     }
-    if (texts.length > MAX_TEXTS) return c.json({ error: `at most ${MAX_TEXTS} texts per request` }, 400);
-    // Each distinct uncached text is asked once, however often it repeats in the request.
-    const ps: number[] = new Array(texts.length);
-    const todo: string[] = [];
-    for (const t of new Set(texts as string[])) if (cache.get(hashOf(model, question, t)) === undefined) todo.push(t);
+    return c.json({ files: Object.fromEntries(paths.filter((p: unknown) => typeof p === 'string' && files![p as string] !== undefined).map((p: string) => [p, files![p]])) });
+  });
+
+  app.post('/ask', async c => {
+    const body = await c.req.json().catch(() => ({}));
+    const { model } = body;
+    const isQ = (q: unknown): q is Question => typeof (q as Question)?.instructions === 'string';
+    const reqs: Req[] | null = Array.isArray(body.requests)
+      ? (body.requests.every((r: Req) => isQ(r?.question) && r.state && typeof r.state === 'object' && !Array.isArray(r.state)) ? body.requests : null)
+      : (isQ(body.question) && Array.isArray(body.texts) && body.texts.every((t: unknown) => typeof t === 'string'))
+        ? body.texts.map((t: string) => ({ question: body.question, state: { paragraph: t } })) : null;
+    if (typeof model !== 'string' || !reqs) return c.json({ error: 'need model, and question + texts[] or requests[{question, state}]' }, 400);
+    if (reqs.length > MAX_TEXTS) return c.json({ error: `at most ${MAX_TEXTS} requests at once` }, 400);
+    // Each distinct uncached request is asked once, however often it repeats.
+    const hashes = reqs.map((r) => reqHash(model, r));
+    const todo = new Map<string, Req>();
+    reqs.forEach((r, i) => { if (cache.get(hashes[i]) === undefined) todo.set(hashes[i], r); });
 
     const key = c.get('jevBudgetKey' as never) as string;
     const now = Date.now();
     let w = used.get(key);
     if (!w || now - w.start >= 3600_000) used.set(key, w = { start: now, n: 0 });
-    if (w.n + todo.length > config.textsPerHour) {
+    if (w.n + todo.size > config.textsPerHour) {
       return c.json({ error: `this link has sent ${w.n} new texts to jev this hour; the limit is ${config.textsPerHour}` }, 429);
     }
-    w.n += todo.length;
+    w.n += todo.size;
 
     let answered = 0;
     try {
-      let next = 0;
+      const queue = [...todo];
       await Promise.all(Array.from({ length: WORKERS }, async () => {
-        while (next < todo.length) {
-          const t = todo[next++];
-          cache.put(hashOf(model, question, t), await askOne(model, question, t), model);
+        for (let item = queue.shift(); item; item = queue.shift()) {
+          const [h, r] = item;
+          cache.put(h, await askOne(model, r.question, r.state), model);
           answered++;
         }
       }));
     } catch (e) {
-      w.n -= todo.length - answered; // only answered texts count against the link's hour
+      w.n -= todo.size - answered; // only answered requests count against the link's hour
       return c.json({ error: (e as Error).message }, 502);
     }
-    texts.forEach((t: string, i: number) => { ps[i] = cache.get(hashOf(model, question, t))!; });
-    const fresh = new Set(todo);
-    return c.json({ ps, cached: texts.filter((t: string) => !fresh.has(t)).length });
+    return c.json({ ps: hashes.map((h) => cache.get(h)!), cached: hashes.filter((h) => !todo.has(h)).length });
   });
   return app;
 }
