@@ -1,6 +1,7 @@
 // A result paragraph that opens, on click, as a live editor of its range in the source file:
 // edits and comments made here are edits and comments in that file. One paragraph is live at
-// a time across the tab (lib/embed-docs.ts); Escape or a click outside closes it.
+// a time across the tab (lib/embed-docs.ts); Escape or a click outside closes it, and so does
+// focus leaving it for nowhere, which is what Escape does under Vimium (it takes the key).
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
@@ -39,7 +40,7 @@ export function SourceParagraph({ para }: { para: Para }) {
   const [owner] = useState(() => ({}));
   const host = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
-  const live = useRef<{ view: EditorView; detach: () => void; onOutside: (e: MouseEvent) => void } | null>(null);
+  const live = useRef<{ view: EditorView; detach: () => void; stop: () => void } | null>(null);
   const unmounted = useRef(false);
   const docId = metadata?.['/' + para.path]?.id;
 
@@ -47,7 +48,7 @@ export function SourceParagraph({ para }: { para: Para }) {
     const cur = live.current;
     live.current = null;
     if (cur) {
-      document.removeEventListener('mousedown', cur.onOutside, true);
+      cur.stop();
       cur.detach();
       cur.view.destroy();
     }
@@ -87,9 +88,28 @@ export function SourceParagraph({ para }: { para: Para }) {
         ],
       }),
     });
-    const onOutside = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) closeLive(owner); };
-    document.addEventListener('mousedown', onOutside, true);
-    live.current = { view, detach, onOutside };
+    // A click in here may move focus to no element; it is not a close while the button is down.
+    let pressed = false;
+    const onDown = (e: MouseEvent) => {
+      if (box.current?.contains(e.target as Node)) pressed = true; else closeLive(owner);
+    };
+    const onUp = () => setTimeout(() => { pressed = false; }, 0);
+    // Focus gone to no element, while this window keeps it and no click is in progress.
+    const onFocusOut = () => setTimeout(() => {
+      if (pressed || !document.hasFocus()) return;
+      const to = document.activeElement;
+      if (!to || to === document.body) closeLive(owner);
+    }, 0);
+    const el = box.current!;
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('mouseup', onUp, true);
+    el.addEventListener('focusout', onFocusOut);
+    const stop = () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('mouseup', onUp, true);
+      el.removeEventListener('focusout', onFocusOut);
+    };
+    live.current = { view, detach, stop };
     setState('live');
     requestAnimationFrame(() => view.focus());
   }, [docId, canEdit, owner, ended, para]);
