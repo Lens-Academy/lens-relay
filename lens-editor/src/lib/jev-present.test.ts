@@ -58,7 +58,7 @@ describe('parseDoc and docJson: a document as nested, globally numbered keys', (
 describe('units and presentations', () => {
   const d = parseDoc(LAUREN);
   it('finds the paragraph a corpus row starts on (1-based file line)', () => {
-    expect(unitOf(d, 'paragraph', 5)).toEqual({ kind: 'paragraph', key: 'paragraph_1', text: "here's a second para, third sentence." });
+    expect(unitOf(d, 'paragraph', 5)).toEqual({ kind: 'paragraph', key: 'paragraph_1', text: "here's a second para, third sentence.", para: 1 });
   });
   it('templates the question onto the unit key', () => {
     expect(templateQuestion('Does `paragraph` use a term?', 'paragraph_1')).toBe('Does `paragraph_1` use a term?');
@@ -87,5 +87,32 @@ describe('finding a corpus row in a file that has changed since', () => {
     expect(unitOf(d, 'paragraph', 3, 'The METR result.')?.key).toBe('paragraph_2');
     expect(unitOf(d, 'paragraph', 7, 'The METR result.')?.key).toBe('paragraph_3');
     expect(unitOf(d, 'paragraph', 2, 'Gone now.')).toBeNull(); // no match, and line 2 is blank
+  });
+});
+
+describe('chunking a file that is too big for jev', () => {
+  const big = Array.from({ length: 12 }, (_, i) => (i % 4 === 0 ? `# Part ${i / 4}\n\n` : '') + `Paragraph ${i} says something long enough to count. `.repeat(3)).join('\n\n');
+  const d = parseDoc(big);
+  it('shows the chunk holding the unit, keeps global keys, and says which part it is', () => {
+    const u = unitOf(d, 'paragraph', 0, 'Paragraph 9 says')!;
+    const st = presentState('parsed', d, big, u, ['paragraph'], 600);
+    expect(Object.keys(st)).toEqual(['__format_description', '__excerpt', 'document']);
+    const keys = Object.keys(st.document as object);
+    expect(keys).toContain('paragraph_9');
+    expect(keys.length).toBeLessThan(12);
+    expect(JSON.stringify(st.document).length).toBeLessThanOrEqual(600);
+    expect(st.__excerpt).toMatch(/^paragraphs \d+ to \d+ of 0 to 11 \(part \d+ of \d+\)$/);
+  });
+  it('shows the whole file, with no excerpt note, when it fits or when there is no limit', () => {
+    const u = unitOf(d, 'paragraph', 0, 'Paragraph 9 says')!;
+    expect(Object.keys(presentState('parsed', d, big, u, ['paragraph'], null))).toEqual(['__format_description', 'document']);
+    expect(Object.keys(presentState('parsed', d, big, u, ['paragraph'], 1e9))).toEqual(['__format_description', 'document']);
+  });
+  it('cuts raw markdown to the same chunk', () => {
+    const u = unitOf(d, 'paragraph', 0, 'Paragraph 9 says')!;
+    const st = presentState('raw', d, big, u, ['paragraph'], 600);
+    expect(st.document).toContain('Paragraph 9 says');
+    expect(st.document).not.toContain('Paragraph 0 says');
+    expect(Object.keys(st)).toEqual(['__excerpt', 'document', 'paragraph']);
   });
 });

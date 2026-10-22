@@ -23,6 +23,10 @@ export function PresentationPicker({ value, onChange, showSent, onShowSent }: {
           ))}
         </span>
       )}
+      {value.mode !== 'isolated' && (
+        <label title="Shows jev the whole file in one request (up to ~262k tokens) instead of in chunks. TypeSafe: slower and less accurate.">
+          <input type="checkbox" checked={!!value.long} onChange={(e) => onChange({ ...value, long: e.target.checked })} className="mr-1" />long context (uncertified)</label>
+      )}
       <label><input type="checkbox" checked={showSent} onChange={(e) => onShowSent(e.target.checked)} className="mr-1" />show what jev gets</label>
     </span>
   );
