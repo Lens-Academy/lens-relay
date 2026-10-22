@@ -225,6 +225,23 @@ function pyyamlLoad(src: string): Record<string, unknown> {
   return (doc.toJS() ?? {}) as Record<string, unknown>;
 }
 
+/** Unit names in the question and criteria that the platform cannot resolve: it shows jev each
+ *  paragraph alone, as `paragraph`. The platform still runs such a check, asking about a key jev
+ *  is never shown. */
+function wordsProblems(fm: Record<string, unknown>): string[] {
+  const c = fm.criteria as Record<string, unknown> | undefined;
+  const texts: [string, unknown][] = [['the question', fm.question], ...(c && typeof c === 'object' ? [['the "true" criterion', c.true], ['the "false" criterion', c.false]] as [string, unknown][] : [])];
+  return texts.flatMap(([where, t]) => (typeof t !== 'string' ? [] : unitNames(t).flatMap((name) => {
+    const why = refProblem(name, PLATFORM_SHAPE);
+    return why ? [`\`${name}\` in ${where}: ${why}`] : [];
+  })));
+}
+/** The subset of platformProblems(text) that is about the words, not about loading the check. */
+export function platformWordProblems(text: string): string[] {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  try { return m ? wordsProblems(pyyamlLoad(m[1])) : []; } catch { return []; }
+}
+
 export function platformProblems(text: string): string[] {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return ['no frontmatter'];
@@ -244,12 +261,7 @@ export function platformProblems(text: string): string[] {
   const c = fm.criteria as Record<string, unknown> | undefined;
   if ('criteria' in fm && !(c && typeof c === 'object' && Object.keys(c).sort().join() === 'false,true' && Object.values(c).every((v) => typeof v === 'string')))
     out.push('criteria must have exactly "true" and "false" texts');
-  // The platform shows jev each paragraph alone, as `paragraph`: every unit the words name must resolve there.
-  const texts: [string, unknown][] = [['the question', fm.question], ...(c && typeof c === 'object' ? [['the "true" criterion', c.true], ['the "false" criterion', c.false]] as [string, unknown][] : [])];
-  for (const [where, t] of texts) if (typeof t === 'string') for (const name of unitNames(t)) {
-    const why = refProblem(name, PLATFORM_SHAPE);
-    if (why) out.push(`\`${name}\` in ${where}: ${why}`);
-  }
+  out.push(...wordsProblems(fm));
   const s = fm.skip_folders;
   if ('skip_folders' in fm && !(Array.isArray(s) && s.every((v) => typeof v === 'string'))) out.push('skip_folders must be a list of folder names');
   return out;

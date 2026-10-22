@@ -6,7 +6,7 @@
 //   results (Results.tsx) compare the draft with the live check, or a run with the one before it.
 import { useMemo, useState } from 'react';
 import type * as Y from 'yjs';
-import { discardDraft, parseCheckFile, parsePercentiles, platformProblems, saveDraft, setCheckFields, setDraftField, type Band, type JevCheck } from '../../lib/jev-check';
+import { discardDraft, parseCheckFile, parsePercentiles, platformProblems, platformWordProblems, saveDraft, setCheckFields, setDraftField, type Band, type JevCheck } from '../../lib/jev-check';
 import { COLORMAPS, type ColormapName } from '../../lib/colormaps';
 import { useLiveText, writeText } from './checkFile';
 import { useCorpus } from './useCorpus';
@@ -106,6 +106,9 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const setNum = (path: string[]) => (v: string) => { const x = Number(v); if (Number.isFinite(x)) writeText(ytext, (t) => setDraftField(t, path, x)); };
   // What the platform would make of the file now (and so after Enable), and after Save.
   const nowProblems = useMemo(() => platformProblems(text), [text]);
+  // Problems with the words leave the check running (badly); the rest drop it.
+  const nowWords = useMemo(() => platformWordProblems(text), [text]);
+  const dropped = nowProblems.filter((p) => !nowWords.includes(p));
   const saveProblems = useMemo(() => attempt(() => platformProblems(saveDraft(text))).ok ?? ['the draft cannot be saved'], [text]);
   const latest = result?.run;
   const stale = latest && c && JSON.stringify(latest.check) !== JSON.stringify(c);
@@ -130,8 +133,11 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
 
       {c && live && (
         <div className="space-y-3 px-4 py-3">
-          {live.enabled && nowProblems.length > 0 && (
-            <div className="rounded-md bg-red-50 px-3 py-2 text-[13px] text-red-800">The platform cannot read this check as it is, so it is not running: {nowProblems.join('; ')}.</div>
+          {live.enabled && dropped.length > 0 && (
+            <div className="rounded-md bg-red-50 px-3 py-2 text-[13px] text-red-800">The platform cannot read this check as it is, so it is not running: {dropped.join('; ')}.</div>
+          )}
+          {live.enabled && !dropped.length && nowWords.length > 0 && (
+            <div className="rounded-md bg-red-50 px-3 py-2 text-[13px] text-red-800">The platform runs this check, but its words name units jev is never shown, so its answers mean little: {nowWords.join('; ')}.</div>
           )}
           {draft ? <DraftBar problems={saveProblems} lastRun={latest?.platform === false ? 'Your last run was an experiment, not how the platform asks.' : undefined} onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
             : <div className="text-[12px] text-gray-400">Edits here make a draft beside the live check; the live check changes only when you Save.</div>}

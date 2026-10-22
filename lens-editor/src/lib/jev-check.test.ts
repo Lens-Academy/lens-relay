@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares , platformProblems } from './jev-check';
+import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, platformWordProblems, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares , platformProblems } from './jev-check';
 
 const T1 = `---
 id: T1
@@ -206,6 +206,11 @@ describe('platformProblems: the words must suit the platform, which shows each p
     expect(platformProblems(ok.replace('Is `paragraph` x?', 'Is `sentence` x?'))).toEqual(['`sentence` in the question: finer than the paragraph asked about, so no one sentence']);
     expect(platformProblems(ok.replace('`paragraph` is', '`section` is'))).toEqual(['`section` in the "true" criterion: jev sees only one paragraph, not the section around it']);
     expect(platformProblems(ok.replace('Is `paragraph` x?', 'Is `paragraph_3` x?'))[0]).toMatch(/^`paragraph_3` in the question: write `paragraph`/);
+  });
+  it('names the word problems apart, since the platform still runs such a check', () => {
+    const bad = ok.replace('Is `paragraph` x?', 'Is `sentence` x?').replace('model: jev-1.14.0', 'model: jev-9');
+    expect(platformWordProblems(bad)).toEqual(['`sentence` in the question: finer than the paragraph asked about, so no one sentence']);
+    expect(platformProblems(bad)).toHaveLength(2);
   });
   it('leaves other backticked words alone', () => {
     expect(platformProblems(ok.replace('Is `paragraph` x?', 'Is `paragraph` a `foo()`?'))).toEqual([]);
