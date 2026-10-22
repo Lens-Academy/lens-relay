@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { EditorView } from '@codemirror/view';
+import { EditorState } from '@codemirror/state';
 import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import {
   createTestEditor,
   moveCursor,
@@ -8,7 +10,7 @@ import {
   countClass,
   getTextWithClass,
 } from '../../../test/codemirror-helpers';
-import { toggleSourceMode, updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
+import { livePreview, toggleSourceMode, updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
 import { parseCalloutHeader } from './callouts';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
@@ -827,6 +829,54 @@ describe('livePreview - bullet lists', () => {
 
     expect(hasClass(view, 'cm-bullet')).toBe(false);
   });
+
+  it('draws •, ◦ and ▪ by nesting depth, as Notion does', () => {
+    const { view, cleanup: c } = createTestEditor('- a\n\t- b\n\t\t- c\n\t\t\t- d\n\nend', 26);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-bullet')).toEqual(['•', '◦', '▪', '•']);
+  });
+
+  it('draws a nested bullet after a blank line by its depth too', () => {
+    const { view, cleanup: c } = createTestEditor('- a\n\n\t- b\n\nend', 12);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-bullet')).toEqual(['•', '◦']);
+  });
+});
+
+describe('livePreview - strikethrough', () => {
+  let view: EditorView | null = null;
+
+  afterEach(() => {
+    view?.destroy();
+    view = null;
+  });
+
+  // GFM, as Editor.tsx parses: the test helper's CommonMark has no ~~
+  function create(content: string, cursorPos: number) {
+    view = new EditorView({
+      state: EditorState.create({
+        doc: content,
+        selection: { anchor: cursorPos },
+        extensions: [markdown({ base: markdownLanguage }), livePreview()],
+      }),
+      parent: document.body,
+    });
+    return view;
+  }
+
+  const content = 'a ~~gone~~ b\n\nend';
+
+  it('hides the ~~ marks while the cursor is elsewhere, as for * and _', () => {
+    create(content, content.length);
+    expect(getTextWithClass(view!, 'cm-hidden-syntax')).toEqual(['~~', '~~']);
+  });
+
+  it('shows them while the cursor is in the struck-through text', () => {
+    create(content, content.indexOf('gone'));
+    expect(getTextWithClass(view!, 'cm-hidden-syntax')).toEqual([]);
+  });
 });
 
 describe('livePreview - Obsidian bullet compatibility', () => {
@@ -955,6 +1005,16 @@ describe('livePreview - fenced code blocks', () => {
     cleanup = c;
 
     expect(hasClass(view, 'cm-code-block')).toBe(true);
+  });
+
+  it('marks the first and last lines, for the box\'s round corners', () => {
+    const content = 'before\n```\ncode line\n```\nafter';
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+
+    const lines = [...view.contentDOM.querySelectorAll('.cm-code-block')];
+    expect(lines.map((line) => [line.classList.contains('cm-code-block-first'), line.classList.contains('cm-code-block-last')]))
+      .toEqual([[true, false], [false, false], [false, true]]);
   });
 
   it('applies cm-code-block line class when cursor inside too', () => {

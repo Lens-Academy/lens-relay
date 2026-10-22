@@ -154,7 +154,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
           aria-label="Document name"
-          className="flex-1 min-w-0 resize-none overflow-hidden text-3xl font-bold leading-tight text-gray-900 bg-transparent
+          className="lens-doc-title flex-1 min-w-0 resize-none overflow-hidden bg-transparent
                      border-none outline-none placeholder-gray-400 caret-gray-900 [overflow-wrap:anywhere]"
           placeholder="Untitled"
           spellCheck={false}

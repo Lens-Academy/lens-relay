@@ -1,5 +1,31 @@
 @import "tailwindcss";
 
+/* Page typography, after Notion's (measured on a live Notion page, Oct 2026):
+   the system font stack (Segoe UI on Windows, SF on Mac), warm near-black
+   text, and colours from Notion's palette. Used by the editor theme
+   (editorTheme.ts), the document title and the rules below. */
+:root {
+  --lens-font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  --lens-font-mono: "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace;
+  --lens-text: #2c2c2b;
+  --lens-text-secondary: #7d7a75;
+  --lens-text-tertiary: #a19e99;
+  --lens-divider: rgba(28, 19, 1, 0.11);
+  --lens-link: #2563eb;
+}
+
+/* Document title above the editor (DocumentTitle.tsx): Notion's page title.
+   The 6px inset lines it up with the editor's text, which CodeMirror's line
+   padding insets by 6px. */
+.lens-doc-title {
+  font-family: var(--lens-font-sans);
+  font-size: 40px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--lens-text);
+  padding: 0 6px;
+}
+
 /* Live Preview Styles for CodeMirror */
 
 /* Hidden syntax markers - using font-size: 0 preserves cursor positions better than display: none */
@@ -30,38 +56,41 @@
   border-bottom: none !important;
 }
 
+/* Notion's heading sizes: 30, 24, 20 and 18px, semibold, line height 1.3.
+   H5 and H6 are body size; H6 is in the secondary text colour. */
 .cm-heading-1 {
-  font-size: 2em;
-  font-weight: 700;
-  line-height: 1.2;
+  font-size: 1.875em;
+  font-weight: 600;
+  line-height: 1.3;
 }
 
 .cm-heading-2 {
-  font-size: 1.6em;
-  font-weight: 700;
+  font-size: 1.5em;
+  font-weight: 600;
   line-height: 1.3;
 }
 
 .cm-heading-3 {
-  font-size: 1.37em;
+  font-size: 1.25em;
   font-weight: 600;
-  line-height: 1.4;
+  line-height: 1.3;
 }
 
 .cm-heading-4 {
-  font-size: 1.25em;
+  font-size: 1.125em;
   font-weight: 600;
+  line-height: 1.3;
 }
 
 .cm-heading-5 {
-  font-size: 1.12em;
+  font-size: 1em;
   font-weight: 600;
 }
 
 .cm-heading-6 {
-  font-size: 1.12em;
+  font-size: 1em;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--lens-text-secondary);
 }
 
 /* Heading line spacing — padding-top on .cm-line since headings are inline spans.
@@ -76,51 +105,56 @@
 /* Horizontal rule (---, ***, ___) — livePreview.ts marks the line and hides
    the characters. The rule is a background band across the line's text
    column, so the line keeps its height when the raw characters come back.
-   Its colour is the text colour at low alpha, so it follows the editor's
-   colours (light or dark) and never hides the selection behind it. */
+   Notion's divider: a 1px line in a translucent warm grey, which never hides
+   the selection behind it. */
 .cm-line.cm-hr-line {
-  --hr-color: color-mix(in srgb, currentColor 20%, transparent);
+  --hr-color: var(--lens-divider);
   background-image: linear-gradient(var(--hr-color), var(--hr-color));
   background-origin: content-box;
   background-position: center;
-  background-size: 100% 2px;
+  background-size: 100% 1px;
   background-repeat: no-repeat;
 }
 
-/* Blockquote — Obsidian-style left border; text keeps the normal color so it
-   doesn't read like a greyed-out %%comment%% */
+/* Blockquote — Notion's quote: a 3px bar in the text colour and the text at
+   normal size and colour, so it doesn't read like a greyed-out %%comment%%.
+   --quote-pad is the text's inset from the bar's left edge. */
 .cm-blockquote {
-  border-left: 3px solid #d1d5db;
-  padding-left: 12px !important;
+  --quote-pad: 22px;
+  border-left: 3px solid currentColor;
+  padding-left: var(--quote-pad) !important;
 }
 
 /* Obsidian callouts (> [!type] Title) — livePreview.ts marks every line of the
-   blockquote; colours are Obsidian's defaults, as "r, g, b". */
+   blockquote. Notion's callout box (10px corners, 12px padding) in colours
+   from Notion's palette: a translucent background, the title and icon in the
+   matching text colour. */
 .cm-line.cm-callout {
+  --quote-pad: 16px; /* list lines in the callout line up with its text */
   border-left: none;
-  background-color: rgba(var(--callout-color), 0.1);
-  padding-left: 16px !important;
+  background-color: var(--callout-bg);
+  padding-left: var(--quote-pad) !important;
   padding-right: 16px;
 }
 .cm-line.cm-callout-first {
-  border-top-left-radius: 4px;
-  border-top-right-radius: 4px;
-  padding-top: 10px;
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+  padding-top: 12px;
 }
 .cm-line.cm-callout-last {
-  border-bottom-left-radius: 4px;
-  border-bottom-right-radius: 4px;
-  padding-bottom: 10px;
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
+  padding-bottom: 12px;
 }
-.cm-callout { --callout-color: 8, 109, 221; } /* note, info, todo, unknown */
-.cm-callout-abstract, .cm-callout-tip { --callout-color: 0, 191, 188; }
-.cm-callout-success { --callout-color: 8, 185, 78; }
-.cm-callout-question, .cm-callout-warning { --callout-color: 236, 117, 0; }
-.cm-callout-failure, .cm-callout-danger, .cm-callout-bug { --callout-color: 233, 49, 71; }
-.cm-callout-example { --callout-color: 120, 82, 238; }
-.cm-callout-quote { --callout-color: 158, 158, 158; }
+.cm-callout { --callout-color: #387dc9; --callout-bg: rgba(0, 124, 215, 0.094); } /* note, info, todo, abstract, unknown: blue */
+.cm-callout-tip, .cm-callout-success { --callout-color: #50946e; --callout-bg: rgba(0, 100, 45, 0.09); } /* green */
+.cm-callout-question { --callout-color: #cb9434; --callout-bg: rgba(211, 168, 0, 0.137); } /* yellow */
+.cm-callout-warning { --callout-color: #d27b2d; --callout-bg: rgba(224, 101, 1, 0.129); } /* orange */
+.cm-callout-failure, .cm-callout-danger, .cm-callout-bug { --callout-color: #cf5148; --callout-bg: rgba(223, 22, 0, 0.094); } /* red */
+.cm-callout-example { --callout-color: #9a6bb4; --callout-bg: rgba(102, 0, 178, 0.078); } /* purple */
+.cm-callout-quote { --callout-color: #7d7a75; --callout-bg: rgba(42, 28, 0, 0.07); } /* grey */
 .cm-callout-title {
-  color: rgb(var(--callout-color));
+  color: var(--callout-color);
   font-weight: 600;
 }
 .cm-callout-icon {
@@ -128,7 +162,7 @@
   align-items: center;
   gap: 8px;
   margin-right: 8px;
-  color: rgb(var(--callout-color));
+  color: var(--callout-color);
   vertical-align: -2px;
 }
 
@@ -151,32 +185,42 @@
   font-weight: 500;
 }
 
-/* Link widget */
+/* Link widget — a blue link with Notion's thin, light underline, which gets
+   solid on hover */
 .cm-link-widget {
-  color: #2563eb;
+  color: var(--lens-link);
   text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: rgba(37, 99, 235, 0.4);
+  text-underline-offset: 10%;
   cursor: pointer;
 }
 .cm-link-widget:hover {
   color: #1d4ed8;
+  text-decoration-color: currentColor;
 }
 
-/* Wikilink widget - internal links with distinct styling */
+/* Wikilink widget — a link to another doc, in Notion's style for links to
+   pages: the text colour at medium weight with a light grey underline */
 .cm-wikilink-widget {
-  color: #6366f1; /* Indigo - distinct from blue external links */
-  text-decoration: none;
-  border-bottom: 1px dashed currentColor;
+  color: inherit;
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: rgba(55, 53, 47, 0.25);
+  text-underline-offset: 10%;
   cursor: pointer;
 }
 .cm-wikilink-widget:hover {
-  color: #4f46e5;
-  border-bottom-style: solid;
+  text-decoration-color: currentColor;
 }
 
-/* Unresolved wikilink (future use) */
+/* Wikilink to a doc that doesn't exist: grey, dashed */
 .cm-wikilink-widget.unresolved {
-  color: #9ca3af;
-  border-bottom-color: #9ca3af;
+  color: var(--lens-text-tertiary);
+  font-weight: 400;
+  text-decoration-style: dashed;
+  text-decoration-color: currentColor;
 }
 
 /* ![[file]] embed card (extensions/noteEmbed.ts): the embedded file, rendered
@@ -316,38 +360,58 @@
  * text selection highlight entirely. CM6's own line backgrounds (e.g.
  * .cm-activeLine) follow the same alpha pattern. */
 
-/* Inline code */
+/* Inline code — Notion's: red monospace at 85% on a faint warm grey */
 .cm-inline-code {
-  background-color: rgba(243, 244, 246, 0.7);
-  border-radius: 3px;
-  padding: 0.125em 0.25em;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.9em;
+  color: #cf5148;
+  background-color: rgba(33, 27, 23, 0.05);
+  border-radius: 4px;
+  padding: 0.2em 0.4em;
+  font-family: var(--lens-font-mono);
+  font-size: 85%;
 }
 
-/* Fenced code blocks */
-.cm-code-block {
-  background-color: rgba(243, 244, 246, 0.7);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.9em;
-  padding: 0 0.5em;
+/* Fenced code blocks — Notion's code box: monospace at 85% on a faint warm
+   grey with round corners. The (hidden) fence lines are its top and bottom
+   padding. .cm-content raises the rule above CodeMirror's own line padding. */
+.cm-content .cm-line.cm-code-block {
+  background-color: rgba(66, 35, 3, 0.03);
+  font-family: var(--lens-font-mono);
+  font-size: 85%;
+  padding: 0 16px;
+}
+.cm-content .cm-line.cm-code-block-first {
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+}
+.cm-content .cm-line.cm-code-block-last {
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
 }
 
-/* Bullet list dot */
+/* Bullet list dot — Notion's bullets: in the text colour, one and a half
+   times the text size, and •, ◦, ▪ by nesting depth (livePreview.ts). The
+   line height of 0 keeps the larger glyph from making the line taller. */
 .cm-bullet {
-  color: #6b7280;
+  color: var(--lens-text);
+  font-size: 1.5em;
+  line-height: 0;
+  vertical-align: -0.1em;
 }
 
 /* List hanging indent — wrapped rows of a list item start under the item's
    text, not under the bullet. --list-hang is the measured pixel width of the
    line's prefix (indent + marker), set per line by listHangingIndent.ts.
-   6px / 12px mirror CM's default .cm-line left padding and .cm-blockquote's. */
+   6px / --quote-pad mirror CM's default .cm-line left padding and
+   .cm-blockquote's. */
 .cm-content .cm-line.cm-list-line {
   padding-left: calc(6px + var(--list-hang));
   text-indent: calc(-1 * var(--list-hang));
+  /* Notion's 6px between list items */
+  padding-top: 3px;
+  padding-bottom: 3px;
 }
 .cm-content .cm-line.cm-blockquote.cm-list-line {
-  padding-left: calc(12px + var(--list-hang)) !important;
+  padding-left: calc(var(--quote-pad) + var(--list-hang)) !important;
 }
 /* A line's hanging indent (list lines here, frontmatter values in
    frontmatter.ts) is for its own first row, never for widgets inside it.
@@ -366,7 +430,8 @@
   white-space: pre;
 }
 
-/* Checklist checkbox */
+/* Checklist checkbox — Notion's: a 16px square with a dark 1.5px border,
+   filled blue with a white tick when checked */
 .cm-checkbox {
   appearance: none;
   -webkit-appearance: none;
@@ -374,28 +439,28 @@
   vertical-align: middle;
   position: relative;
   top: -1.5px;
-  margin: 0 4px 0 0;
-  width: 15px;
-  height: 15px;
-  border: 1px solid #9ca3af;
-  border-radius: 3px;
+  margin: 0 6px 0 0;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid #383836;
+  border-radius: 1.5px;
   background: transparent;
 }
 
 .cm-checkbox:checked {
-  background-color: #9873f7;
-  border-color: #9873f7;
+  background-color: #2783de;
+  border-color: #2783de;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
   background-size: 12px 12px;
   background-position: center;
   background-repeat: no-repeat;
 }
 
-/* Completed task strikethrough */
+/* Completed task — Notion's: struck through and faded */
 .cm-task-completed {
   text-decoration: line-through;
-  text-decoration-color: #5c5c5c;
-  color: #5c5c5c;
+  text-decoration-color: rgba(44, 44, 43, 0.5);
+  opacity: 0.7;
 }
 
 /* Frontmatter — bar (collapsed state + expanded header) */
