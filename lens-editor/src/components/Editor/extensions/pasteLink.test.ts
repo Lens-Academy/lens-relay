@@ -8,7 +8,8 @@ import { WikilinkExtension } from './wikilinkParser';
 import { frontmatterField } from './frontmatter';
 import { criticMarkupExtension, setCurrentAuthor, toggleSuggestionMode } from './criticmarkup';
 import { markdownTableExtension } from './markdownTable';
-import { pasteLink } from './pasteLink';
+import { livePreview } from './livePreview';
+import { pasteLink, pastedLinkField } from './pasteLink';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 
 const metadata: FolderMetadata = {
@@ -219,6 +220,75 @@ describe('pasting stays a normal paste', () => {
     const view = setup(doc, EditorSelection.create([EditorSelection.range(0, 3), EditorSelection.range(4, 7)]));
     paste(view, 'https://example.com/report');
     expect(view.state.doc.toString()).not.toContain('[');
+  });
+});
+
+describe('a pasted link in live preview', () => {
+  function setupPreview(doc: string, selection: SelectionRange) {
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection,
+        extensions: [
+          markdown({ base: markdownLanguage, extensions: [WikilinkExtension, Autolink, Table], pasteURLAsLink: false }),
+          livePreview(),
+          pasteLink({ getMetadata: () => metadata, getCurrentFilePath: () => CURRENT }),
+        ],
+      }),
+      parent: document.body,
+    });
+    views.push(view);
+    return view;
+  }
+
+  const linkText = (view: EditorView) => view.contentDOM.querySelector('.cm-link-widget')?.textContent ?? null;
+  const wikilinkText = (view: EditorView) => view.contentDOM.querySelector('.cm-wikilink-widget')?.textContent ?? null;
+
+  it('shows as a link at once, not as [text](url), with the cursor right after it', () => {
+    const view = setupPreview(DOC, selecting(DOC, '40%'));
+    paste(view, 'https://example.com/report');
+    expect(view.state.selection.main.head).toBe('Revenue grew [40%](https://example.com/report)'.length);
+    expect(linkText(view)).toBe('40%');
+  });
+
+  it('shows a pasted wikilink as a link at once', () => {
+    const view = setupPreview(DOC, selecting(DOC, '40%'));
+    paste(view, `${EDITOR}/a1b2c3d4`);
+    expect(wikilinkText(view)).toBe('40%');
+  });
+
+  it('keeps showing as a link after typing on', () => {
+    const view = setupPreview(DOC, selecting(DOC, '40%'));
+    paste(view, 'https://example.com/report');
+    const at = view.state.selection.main.head;
+    view.dispatch({ changes: { from: at, insert: ',' }, selection: { anchor: at + 1 }, userEvent: 'input.type' });
+    expect(view.state.field(pastedLinkField)).toBeNull();
+    expect(linkText(view)).toBe('40%');
+  });
+
+  it('shows its syntax again once the cursor moves onto it, as other links do', () => {
+    const view = setupPreview(DOC, selecting(DOC, '40%'));
+    paste(view, 'https://example.com/report');
+    view.dispatch({ selection: { anchor: DOC.indexOf('40%') + 2 }, userEvent: 'select' });
+    expect(linkText(view)).toBeNull();
+    expect(view.contentDOM.textContent).toContain('[40%](https://example.com/report)');
+  });
+
+  it('shows its syntax again when the cursor comes back to its end later', () => {
+    const view = setupPreview(DOC, selecting(DOC, '40%'));
+    paste(view, 'https://example.com/report');
+    const end = view.state.selection.main.head;
+    view.dispatch({ selection: { anchor: end + 3 }, userEvent: 'select' });
+    view.dispatch({ selection: { anchor: end }, userEvent: 'select' });
+    expect(linkText(view)).toBeNull();
+  });
+
+  it('stays a link while someone else edits elsewhere', () => {
+    const view = setupPreview(DOC, selecting(DOC, '40%'));
+    paste(view, 'https://example.com/report');
+    view.dispatch({ changes: { from: 0, insert: 'Q3: ' } }); // a remote change has no user event
+    expect(view.state.field(pastedLinkField)).toEqual({ from: 'Q3: Revenue grew '.length, to: view.state.selection.main.head });
+    expect(linkText(view)).toBe('40%');
   });
 });
 
