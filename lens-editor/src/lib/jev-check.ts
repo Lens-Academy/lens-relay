@@ -1,6 +1,6 @@
 // A jev check file (Lens Edu/Checks/*.md) and the arithmetic the check workbench shows.
 // The frontmatter fields mirror lens-platform core/course_checks/checks.py `Check`.
-import { parse as parseYaml, parseDocument } from 'yaml';
+import { parse as parseYaml, parseDocument, visit } from 'yaml';
 
 export interface JevCheck {
   id: string;
@@ -196,12 +196,28 @@ export const PLATFORM_MODEL = 'jev-1.14.0';
  *  it would load it). Save and Enable refuse while this is non-empty, so a live check is never
  *  dropped by an edit made here. Its frontmatter is cut with text.split("---", 2), so any
  *  "---" inside the frontmatter, even in a draft field, cuts it short. */
+// PyYAML's booleans (its YAML 1.1 resolver): unlike the `yaml` library's 1.1 schema, it leaves
+// y/n as text. Only unquoted scalars resolve; a key that resolves can never equal "true"/"false".
+const PY_BOOL = /^(?:yes|Yes|YES|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)$/;
+function pyyamlLoad(src: string): Record<string, unknown> {
+  const doc = parseDocument(src);
+  if (doc.errors.length) throw doc.errors[0];
+  visit(doc, {
+    Scalar(key, node) {
+      if (node.type !== 'PLAIN' || typeof node.source !== 'string' || !PY_BOOL.test(node.source)) return;
+      const b = /^(?:yes|true|on)$/i.test(node.source);
+      node.value = key === 'key' ? `<PyYAML boolean ${b}>` : b;
+    },
+  });
+  return (doc.toJS() ?? {}) as Record<string, unknown>;
+}
+
 export function platformProblems(text: string): string[] {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return ['no frontmatter'];
   if (text.split('---')[1] !== text.slice(3, m[0].length - 3)) return ['"---" inside the frontmatter cuts it short for the platform'];
   let fm: Record<string, unknown>;
-  try { fm = (parseYaml(m[1]) ?? {}) as Record<string, unknown>; } catch (e) { return [`frontmatter is not valid YAML: ${(e as Error).message}`]; }
+  try { fm = pyyamlLoad(m[1]); } catch (e) { return [`frontmatter is not valid YAML: ${(e as Error).message}`]; }
   const out: string[] = [];
   const text_ = (k: string) => typeof fm[k] === 'string' && (fm[k] as string).trim() !== '';
   if (!text_('id')) out.push('id must be text');

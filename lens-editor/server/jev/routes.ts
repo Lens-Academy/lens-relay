@@ -169,19 +169,21 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     }
     w.n += todo.size;
 
+    // On the first failure every worker stops taking new requests; once all have settled, the
+    // requests never answered are refunded to the link's hour.
     let answered = 0;
-    try {
-      const queue = [...todo];
-      await Promise.all(Array.from({ length: WORKERS }, async () => {
-        for (let item = queue.shift(); item; item = queue.shift()) {
-          const [h, r] = item;
-          cache.put(h, await askOne(model, r.question, r.state), model);
-          answered++;
-        }
-      }));
-    } catch (e) {
-      w.n -= todo.size - answered; // only answered requests count against the link's hour
-      return c.json({ error: (e as Error).message }, 502);
+    let failure: Error | null = null;
+    const queue = [...todo];
+    await Promise.all(Array.from({ length: WORKERS }, async () => {
+      for (let item = queue.shift(); item && !failure; item = queue.shift()) {
+        const [h, r] = item;
+        try { cache.put(h, await askOne(model, r.question, r.state), model); answered++; }
+        catch (e) { failure ??= e as Error; }
+      }
+    }));
+    if (failure) {
+      w.n -= todo.size - answered;
+      return c.json({ error: (failure as Error).message }, 502);
     }
     return c.json({ ps: hashes.map((h) => cache.get(h)!), cached: hashes.filter((h) => !todo.has(h)).length });
   });

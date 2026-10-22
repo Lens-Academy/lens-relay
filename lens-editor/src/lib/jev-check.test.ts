@@ -152,16 +152,26 @@ describe('newCheckText', () => {
 });
 
 describe('platformProblems: what would make the platform drop the check', () => {
-  const ok = `---\nid: T9\nname: n\nmodel: jev-1.14.0\nfail_at: 0.8\npass_below: 0.5\nquestion: Is \`paragraph\` bad?\ncriteria:\n  "true": yes\n  "false": no\nfix: Fix it.\n---\nnotes\n`;
+  const ok = `---\nid: T9\nname: n\nmodel: jev-1.14.0\nfail_at: 0.8\npass_below: 0.5\nquestion: Is \`paragraph\` bad?\ncriteria:\n  "true": it does\n  "false": it does not\nfix: Fix it.\n---\nnotes\n`;
   it('passes a well-formed check', () => expect(platformProblems(ok)).toEqual([]));
   it('names each rule broken', () => {
     expect(platformProblems(ok.replace('jev-1.14.0', 'jev-1.15.0'))).toEqual(['model must be jev-1.14.0 (the platform pins it)']);
     expect(platformProblems(ok.replace('fail_at: 0.8', 'fail_at: 80'))).toEqual(['fail_at must be a number from 0 to 1']);
     expect(platformProblems(ok.replace('fix: Fix it.\n', ''))).toEqual(['fix must be text']);
-    expect(platformProblems(ok.replace('  "false": no\n', ''))).toEqual(['criteria must have exactly "true" and "false" texts']);
+    expect(platformProblems(ok.replace('  "false": it does not\n', ''))).toEqual(['criteria must have exactly "true" and "false" texts']);
   });
   it('catches --- anywhere in the frontmatter, even in a draft', () => {
     const t = ok.replace('fix: Fix it.\n', 'fix: Fix it.\ndraft:\n  question: a --- b\n');
     expect(platformProblems(t)).toEqual(['"---" inside the frontmatter cuts it short for the platform']);
+  });
+});
+
+describe('platformProblems reads YAML as the platform does (1.1)', () => {
+  const ok = `---\nid: T9\nname: n\nmodel: jev-1.14.0\nquestion: q\ncriteria:\n  "true": it does\n  "false": it does not\nfix: f\n---\n`;
+  it('rejects unquoted true/false criteria keys and a yes/no name', () => {
+    expect(platformProblems(ok.replace('"true"', 'true').replace('"false"', 'false'))).toEqual(['criteria must have exactly "true" and "false" texts']);
+    expect(platformProblems(ok.replace('name: n', 'name: no'))).toEqual(['name must be text']);
+    expect(platformProblems(ok.replace('name: n', 'name: "no"'))).toEqual([]);
+    expect(platformProblems(ok)).toEqual([]); // y/n stay text for PyYAML
   });
 });

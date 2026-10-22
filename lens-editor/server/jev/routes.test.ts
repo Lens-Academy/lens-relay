@@ -126,3 +126,17 @@ describe('jev routes, any state', () => {
     expect(await res.json()).toEqual({ files: { 'Lens Edu/a.md': '# A' } });
   });
 });
+
+describe('jev routes, failure stops the batch', () => {
+  it('asks no more after a failure, and refunds only what was never answered', async () => {
+    const { app, jev } = mount({ textsPerHour: 50 });
+    let calls = 0;
+    jev.mockImplementation(async () => { calls++; return calls === 1 ? new Response('bad', { status: 400 }) : jevReply(0.5); });
+    const texts = Array.from({ length: 40 }, (_, i) => `t${i}`);
+    expect((await ask(app, texts)).status).toBe(502);
+    expect(calls).toBeLessThanOrEqual(8); // at most one in flight per worker
+    jev.mockImplementation(async () => jevReply(0.5));
+    // Everything not answered was refunded: 40 new texts still fit in the hour of 50.
+    expect((await ask(app, texts.map((t) => t + 'x'))).status).toBe(200);
+  });
+});
