@@ -467,18 +467,16 @@ export default defineConfig(() => {
           rewrite: (path) => path.replace(/^\/api\/relay/, ''),
           secure: !useLocalRelay,
           configure: (proxy) => {
+            // One handler, headers before body: writing the body sends the headers, so a
+            // second handler's setHeader threw ERR_HTTP_HEADERS_SENT and killed the dev server.
             proxy.on('proxyReq', (proxyReq, req) => {
+              if (relayServerToken) proxyReq.setHeader('Authorization', `Bearer ${relayServerToken}`);
               const rawBody = (req as any).relayProxyBody as Buffer | undefined;
               if (rawBody) {
                 proxyReq.setHeader('Content-Length', String(rawBody.length));
                 proxyReq.write(rawBody);
               }
             });
-            if (relayServerToken) {
-              proxy.on('proxyReq', (proxyReq) => {
-                proxyReq.setHeader('Authorization', `Bearer ${relayServerToken}`);
-              });
-            }
           },
         },
         // Proxy WebSocket connections to relay-server
