@@ -11,8 +11,8 @@ const token = (o: Partial<ShareTokenPayload> = {}) => signShareToken({
   purpose: 'share', role: 'edit', folder: EDU_FOLDER,
   expiry: Math.floor(Date.now() / 1000) + 3600, ...o,
 });
-// jev's reply to a call of up to 100 questions, every answer p.
-const jevReply = (p: number) => new Response(JSON.stringify({ answers: Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`q${i}`, { noul: p }])) }), { status: 200 });
+// jev's reply to a call of up to 1000 questions, every answer p.
+const jevReply = (p: number) => new Response(JSON.stringify({ answers: Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`q${i}`, { noul: p }])) }), { status: 200 });
 
 function mount(config: Partial<JevConfig> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'jev-'));
@@ -207,10 +207,10 @@ describe('jev routes, one call per shown text', () => {
     expect(await (await batch(app, [{ state, questions: [q(1), q(3)] }])).json()).toEqual({ ps: [0.7, 0.7], cached: 1 });
     expect(JSON.parse(String(jev.mock.calls[1][1]!.body)).questions).toEqual({ q0: { type: 'noul', ...q(3) } });
   });
-  it("splits a state's questions across calls past 100, and charges the state once per call", async () => {
+  it("splits a state's questions across calls past 1000, and charges the state once per call", async () => {
     const { app, jev } = mount({ charsPerHour: 1e9 });
     const state = { document: 'x'.repeat(1000) };
-    expect((await batch(app, [{ state, questions: Array.from({ length: 150 }, (_, i) => q(i)) }])).status).toBe(200);
+    expect((await batch(app, [{ state, questions: Array.from({ length: 1500 }, (_, i) => q(i)) }])).status).toBe(200);
     expect(jev).toHaveBeenCalledTimes(2);
     const { app: app2 } = mount({ charsPerHour: 3000 });
     // 20 questions about a 1000-character state fit an hour of 3000; asked one by one they would not.

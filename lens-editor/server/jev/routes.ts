@@ -40,11 +40,13 @@ const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
 const MAX_TEXTS = 5000;
 const WORKERS = 8;
 // One jev call holds one state and every question about it, up to jev's 64k tokens per call
-// (state plus all questions; ~2.65 characters a token, measured) and a bounded count.
+// (state plus all questions; ~2.65 characters a token, measured). Measured 2026-10-22: one call
+// of 400 questions took 0.5 s against 0.3-0.45 s for one question, and 100 single calls took
+// 4 s and ~70x the tokens, so the count cap is only a backstop.
 const CALL_MAX_CHARS = 150_000;
 // With long context on, ~262k tokens a call.
 const LONG_CALL_MAX_CHARS = 650_000;
-const CALL_MAX_QUESTIONS = 100;
+const CALL_MAX_QUESTIONS = 1000;
 // Relay reads per /files request: at most this many files, this many at a time.
 const MAX_FILES = 300;
 const FILE_WORKERS = 4;
