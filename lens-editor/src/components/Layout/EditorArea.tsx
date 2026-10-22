@@ -543,11 +543,13 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       <div id="editor-area" className="flex-1 flex min-h-0">
         {/* Editor fills remaining space */}
         <div id="editor" className="flex-1 flex flex-col min-w-0 bg-white" style={{ minWidth: 250 }}>
+          {/* The title's insets match the editor's content padding (24px, 16px
+              on phones, index.css), so title and text start in line */}
           <div className="max-w-[700px] mx-auto w-full">
-            <div className="px-6 pt-5 pb-1">
+            <div className="px-4 min-[500px]:px-6 pt-5 pb-1">
               <DocumentTitle currentDocId={currentDocId} />
             </div>
-            <div className="mx-6 border-b border-gray-200" />
+            <div className="mx-4 min-[500px]:mx-6 border-b border-gray-200" />
           </div>
           <SyncedFileBanner />
           {showPanelHost && createPortal(

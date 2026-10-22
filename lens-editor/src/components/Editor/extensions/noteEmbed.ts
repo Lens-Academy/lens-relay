@@ -11,7 +11,8 @@ import { EditorState, Prec, StateField, type Text } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { defaultHighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language';
+import { indentUnit, syntaxHighlighting } from '@codemirror/language';
+import { markdownHighlightStyle } from '../editorTheme';
 import { Autolink, Table, TaskList } from '@lezer/markdown';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
@@ -143,15 +144,12 @@ export function embedViewExtensions(canAcceptReject: boolean) {
   return [
     indentUnit.of('\t'),
     EditorState.tabSize.of(4),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    syntaxHighlighting(markdownHighlightStyle, { fallback: true }),
     markdown({ base: markdownLanguage, extensions: [WikilinkExtension, TaskList, Autolink, Table], addKeymap: false }),
     livePreview(undefined, { embeds: false }),
     markdownTableExtension(),
     criticMarkupExtension({ canAcceptReject }),
     EditorView.lineWrapping,
-    EditorView.theme({
-      '.tok-heading, .cm-line .tok-heading': { textDecoration: 'none !important' },
-    }),
   ];
 }
 

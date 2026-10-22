@@ -683,7 +683,8 @@ const tableTheme = EditorView.theme({
     maxWidth: 'calc(100cqi - 32px)',
     overflowX: 'auto',
     borderRadius: '6px',
-    border: '1px solid #e5e7eb',
+    // Notion's warm grey border and header colours (index.css :root)
+    border: '1px solid #e6e5e3',
   },
   '.cm-md-table': {
     borderCollapse: 'collapse',
@@ -706,8 +707,8 @@ const tableTheme = EditorView.theme({
   // pre-wrap/anywhere from .cm-content and .cm-lineWrapping.
   '.cm-md-table th, .cm-md-table td': {
     padding: '6px 12px',
-    borderRight: '1px solid #e5e7eb',
-    borderBottom: '1px solid #e5e7eb',
+    borderRight: '1px solid #e6e5e3',
+    borderBottom: '1px solid #e6e5e3',
     whiteSpace: 'normal',
     overflowWrap: 'break-word',
     verticalAlign: 'top',
@@ -732,19 +733,19 @@ const tableTheme = EditorView.theme({
     borderBottom: 'none',
   },
   '.cm-md-table thead tr': {
-    borderBottom: '2px solid #e5e7eb',
+    borderBottom: '1px solid #e6e5e3',
   },
   '.cm-md-table th': {
-    background: '#f9fafb',
-    fontWeight: '600',
-    color: '#374151',
+    background: '#f7f6f3',
+    fontWeight: '500',
+    color: 'var(--lens-text)',
   },
   '.cm-md-table td': {
-    color: '#4b5563',
+    color: 'var(--lens-text)',
     background: 'white',
   },
   '.cm-md-table tbody tr:hover td': {
-    background: '#f9fafb',
+    background: '#f9f8f7',
   },
   '.cm-md-table th:focus, .cm-md-table td:focus': {
     background: '#eff6ff',

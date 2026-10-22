@@ -8,6 +8,7 @@ import { livePreview } from '../../src/components/Editor/extensions/livePreview'
 import { markdownTableExtension } from '../../src/components/Editor/extensions/markdownTable';
 import { criticMarkupExtension } from '../../src/components/Editor/extensions/criticmarkup';
 import { pasteLink } from '../../src/components/Editor/extensions/pasteLink';
+import { editorTheme } from '../../src/components/Editor/editorTheme';
 import type { FolderMetadata } from '../../src/hooks/useFolderMetadata';
 
 const metadata: FolderMetadata = {
@@ -38,11 +39,7 @@ const state = EditorState.create({
     criticMarkupExtension(),
     pasteLink({ getMetadata: () => metadata, getCurrentFilePath: () => '/Lens/03-Product/Budget.md' }),
     EditorView.lineWrapping,
-    EditorView.theme({
-      '&': { height: '100%', fontSize: '16px', lineHeight: '1.5', color: '#222222' },
-      '.cm-scroller': { overflow: 'auto' },
-      '.cm-content': { maxWidth: '700px', margin: '0 auto', padding: '16px 24px 170px' },
-    }),
+    editorTheme,
   ],
 });
 

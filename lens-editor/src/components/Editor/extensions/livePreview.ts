@@ -34,6 +34,7 @@ import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontm
 import { listHangingIndent } from './listHangingIndent';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
+import type { SyntaxNode } from '@lezer/common';
 import { RangeSetBuilder, Compartment, EditorSelection, StateField } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { wikilinkMetadataChanged } from './wikilinkEffects';
@@ -368,20 +369,36 @@ class ImageEmbedWidget extends WidgetType {
   }
 }
 
+/** Bullet glyphs by nesting depth, as in Notion: disc, circle, square, repeating. */
+const BULLET_GLYPHS = ['\u2022', '\u25e6', '\u25aa'];
+
 /**
  * BulletWidget - Renders bullet list markers as a dot character
  */
 class BulletWidget extends WidgetType {
+  constructor(private readonly depth: number) {
+    super();
+  }
+
   toDOM(): HTMLElement {
     const span = document.createElement('span');
     span.className = 'cm-bullet';
-    span.textContent = '\u2022';
+    span.textContent = BULLET_GLYPHS[this.depth % BULLET_GLYPHS.length];
     return span;
   }
 
-  eq(_other: BulletWidget): boolean {
-    return true;
+  eq(other: BulletWidget): boolean {
+    return this.depth === other.depth;
   }
+}
+
+/** How many lists (bulleted or numbered) contain this list: 0 at the top level. */
+function listDepth(list: SyntaxNode): number {
+  let depth = 0;
+  for (let node = list.parent; node; node = node.parent) {
+    if (node.name === 'BulletList' || node.name === 'OrderedList') depth++;
+  }
+  return depth;
 }
 
 /**
@@ -643,6 +660,19 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               }
             }
 
+            // StrikethroughMark (~~): hide when cursor not on the struck-through
+            // text, as for * and _ (the highlighter draws the line itself)
+            if (node.name === 'StrikethroughMark') {
+              const parent = node.node.parent;
+              if (parent && !selectionIntersects(selection, parent.from, parent.to)) {
+                decorations.push({
+                  from: node.from,
+                  to: node.to,
+                  deco: Decoration.mark({ class: HIDDEN_CLASS }),
+                });
+              }
+            }
+
             // EmphasisMark (* or _ characters): hide when cursor not on element
             if (node.name === 'EmphasisMark') {
               // Get the parent node to check if cursor intersects the whole emphasis element
@@ -787,15 +817,19 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             if (node.name === 'FencedCode') {
               const cursorInside = selectionIntersects(selection, node.from, node.to);
 
-              // Add cm-code-block line class to every line in the fenced code range
+              // Add cm-code-block line class to every line in the fenced code
+              // range, and -first / -last for the box's round corners
               const startLine = view.state.doc.lineAt(node.from).number;
               const endLine = view.state.doc.lineAt(node.to).number;
               for (let ln = startLine; ln <= endLine; ln++) {
                 const line = view.state.doc.line(ln);
+                let cls = 'cm-code-block';
+                if (ln === startLine) cls += ' cm-code-block-first';
+                if (ln === endLine) cls += ' cm-code-block-last';
                 decorations.push({
                   from: line.from,
                   to: line.from,
-                  deco: Decoration.line({ class: 'cm-code-block' }),
+                  deco: Decoration.line({ class: cls }),
                 });
               }
 
@@ -870,7 +904,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                     from: node.from,
                     to: node.to,
                     deco: Decoration.replace({
-                      widget: new BulletWidget(),
+                      widget: new BulletWidget(listDepth(grandparent)),
                     }),
                   });
                 }
@@ -1038,7 +1072,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
           if (indent === 0) {
             if (!hasLezerBullet && !selectionIntersects(selection, line.from, line.from + 2)) {
               decorations.push({ from: line.from, to: line.from + 2,
-                deco: Decoration.replace({ widget: new BulletWidget() }) });
+                deco: Decoration.replace({ widget: new BulletWidget(0) }) });
             }
             continue;
           }
@@ -1059,8 +1093,9 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             if (!hasLezerBullet) {
               const dashFrom = line.from + indent;
               if (!selectionIntersects(selection, dashFrom, dashFrom + 2)) {
+                // Its depth is its indent: one tab per level
                 decorations.push({ from: dashFrom, to: dashFrom + 2,
-                  deco: Decoration.replace({ widget: new BulletWidget() }) });
+                  deco: Decoration.replace({ widget: new BulletWidget(indent) }) });
               }
             }
           } else if (hasLezerBullet) {
