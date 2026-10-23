@@ -263,6 +263,18 @@ export default defineConfig(() => {
     });
   }
 
+  /** Dev /api/history endpoints: a file's past versions, from HISTORY_REPO_DIR (a lens-edu-staging clone). */
+  function historyPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'history-api',
+      path: '/api/history',
+      loadApp: async () => {
+        const { createHistoryRoutes } = await import('./server/history/routes.ts');
+        return createHistoryRoutes();
+      },
+    });
+  }
+
   /** Dev /api/tts endpoints (read-aloud's Speechify proxy). */
   function ttsPlugin(): Plugin {
     return honoDevPlugin({
@@ -454,7 +466,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), jevPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), jevPlugin(), historyPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

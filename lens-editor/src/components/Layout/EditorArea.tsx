@@ -26,6 +26,8 @@ import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
 import { ConceptRowsPanel, panelHostField, setPanelHost } from '../ConceptRowsPanel';
 import { JevCheckPanel } from '../JevCheckPanel/JevCheckPanel';
+import { HistoryButton, HistoryPanel } from '../HistoryPanel/HistoryPanel';
+import { historyPath } from '../../lib/history-api';
 import { isCheckPath } from '../../lib/jev-check';
 import { matchRule } from '../../lib/concept-rows';
 import { ConceptGraphPanel } from '../ConceptGraphPanel';
@@ -272,6 +274,11 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const showConceptGraph = isConceptPath(currentFilePath);
   const showJevCheck = isCheckPath(currentFilePath);
   const showPanelHost = showConceptPanel || showConceptGraph || showJevCheck;
+  // Version history, for Lens Edu files only (server/history); closes when the file changes.
+  const filePathForHistory = historyPath(currentFilePath);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  useEffect(() => setHistoryOpen(false), [currentDocId]);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
   useEffect(() => {
     if (!editorView) return;
     if (editorView.state.field(panelHostField, false) === undefined) {
@@ -482,6 +489,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               <AuthorshipModeToggle view={editorView} />
               <SpellcheckToggle view={editorView} />
               <ListenButton engine={readAloudEngine} onStart={startReadAloud} />
+              {filePathForHistory && <HistoryButton open={historyOpen} onClick={() => setHistoryOpen(o => !o)} />}
               {promotionFilePath && (
                 <PromotionStatus
                   filePath={promotionFilePath}
@@ -506,6 +514,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               <AuthorshipModeToggle view={editorView} />
               <SpellcheckToggle view={editorView} iconOnly={headerStage !== 'full'} />
               <ListenButton engine={readAloudEngine} onStart={startReadAloud} />
+              {filePathForHistory && <HistoryButton open={historyOpen} onClick={() => setHistoryOpen(o => !o)} iconOnly={headerStage !== 'full'} />}
               {promotionFilePath && (
                 <PromotionStatus
                   filePath={promotionFilePath}
@@ -540,7 +549,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         discussionToggleTarget
       )}
       {/* Editor + Sidebars container — CSS flexbox with pixel widths */}
-      <div id="editor-area" className="flex-1 flex min-h-0">
+      <div id="editor-area" className="flex-1 flex min-h-0 relative">
+        {historyOpen && filePathForHistory && <HistoryPanel path={filePathForHistory} onClose={closeHistory} />}
         {/* Editor fills remaining space */}
         <div id="editor" className="flex-1 flex flex-col min-w-0 bg-white" style={{ minWidth: 250 }}>
           <div className="max-w-[700px] mx-auto w-full">
