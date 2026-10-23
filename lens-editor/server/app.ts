@@ -16,6 +16,7 @@ import { createPromotionRoutes, type PromotionRouteService } from './promotion/r
 import { createContentStatusRoutes } from './content-status/routes.ts';
 import { createTtsRoutes } from './tts/routes.ts';
 import { createJevRoutes } from './jev/routes.ts';
+import { createHistoryRoutes } from './history/routes.ts';
 import type {
   PromotionChangesResponse,
   PromotionPrResponse,
@@ -168,6 +169,9 @@ export function createApp(config: AppConfig): Hono {
 
   // Jev for the check workbench, for edit links (503 without JEV_API_KEY).
   app.route('/api/jev', createJevRoutes());
+
+  // A Lens Edu file's past versions, from the promote feature's git copy (503 without one).
+  app.route('/api/history', createHistoryRoutes());
 
   // The SPA shell (index.html) references content-hashed asset filenames that
   // change on every deploy, so it must never be cached hard. Serving it

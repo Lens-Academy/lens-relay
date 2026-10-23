@@ -28,6 +28,8 @@ import { TableOfContents, PageOutline } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
 import { ConceptRowsPanel, panelHostField, setPanelHost } from '../ConceptRowsPanel';
 import { JevCheckPanel } from '../JevCheckPanel/JevCheckPanel';
+import { HistoryMenuItem, HistoryPanel } from '../HistoryPanel/HistoryPanel';
+import { historyPath } from '../../lib/history-api';
 import { isCheckPath } from '../../lib/jev-check';
 import { matchRule } from '../../lib/concept-rows';
 import { ConceptGraphPanel } from '../ConceptGraphPanel';
@@ -308,6 +310,11 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const showConceptPanel = matchRule(currentFilePath) !== null;
   const showConceptGraph = isConceptPath(currentFilePath);
   const showJevCheck = isCheckPath(currentFilePath);
+  // Version history, for Lens Edu files only (server/history); closes when the file changes.
+  const filePathForHistory = historyPath(currentFilePath);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  useEffect(() => setHistoryOpen(false), [currentDocId]);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
   useEffect(() => {
     if (!editorView) return;
     if (editorView.state.field(panelHostField, false) === undefined) {
@@ -556,6 +563,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
           <SpellcheckToggle setting={spellcheck} disabled={!editorView} />
           <AuthorshipModeToggle settings={authorship} disabled={!editorView} />
+          {filePathForHistory && <HistoryMenuItem onOpen={() => setHistoryOpen(true)} />}
         </WorkflowMenu>,
         menuTarget
       )}
@@ -573,7 +581,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         discussionToggleTarget
       )}
       {/* Editor + Sidebars container — CSS flexbox with pixel widths */}
-      <div id="editor-area" className="flex-1 flex min-h-0">
+      <div id="editor-area" className="flex-1 flex min-h-0 relative">
+        {historyOpen && filePathForHistory && <HistoryPanel path={filePathForHistory} onClose={closeHistory} />}
         {/* Editor fills remaining space */}
         <div id="editor" className="flex-1 flex flex-col min-w-0 bg-white" style={{ minWidth: 250 }}>
           <SyncedFileBanner />
