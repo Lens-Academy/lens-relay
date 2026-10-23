@@ -19,7 +19,10 @@ export interface Label {
 
 const HEAD = '## Labels';
 const FENCE = /^## Labels(?:\r?\n)+```jsonl\r?\n([\s\S]*?)```/gm;
-const words = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+// The platform cuts a unit's text at 600 characters and adds "…" (present.batches), and a quote is
+// stored without it; both sides drop it, so two long units sharing those 600 characters (in one
+// file, at one level) would share labels (Assay, #195).
+const words = (s: string) => s.replace(/…\s*$/, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 export function parseLabels(text: string): Label[] {
   // Every block: two viewers making a file's first label at once each add one.

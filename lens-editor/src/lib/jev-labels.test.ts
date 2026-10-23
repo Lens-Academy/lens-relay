@@ -44,6 +44,11 @@ describe('labels in a check file (Lauren, 2026-10-23: a judgement about the text
     const ticks = addLabel(addLabel(CHECK, lab({ quote: 'Use ```code``` here.' })), lab({ quote: 'Next.' }));
     expect(parseLabels(ticks).map((l) => l.quote)).toEqual(['Use ```code``` here.', 'Next.']);
   });
+  it('finds a label on a long unit, whose text the platform cuts at 600 characters with "…"', () => {
+    const shown = 'x'.repeat(600) + '…';
+    const l = lab({ quote: shown.replace(/…$/, '') });
+    expect(labelFor([l], 'T1', { path: 'Lens Edu/a.md', text: shown })?.label).toBe('fail');
+  });
   it('ignores a broken line rather than losing every label', () => {
     const broken = addLabel(CHECK, lab({})).replace('```jsonl\n', '```jsonl\nnot json\n');
     expect(parseLabels(broken)).toEqual([lab({})]);
