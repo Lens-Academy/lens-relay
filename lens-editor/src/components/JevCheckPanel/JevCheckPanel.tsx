@@ -16,7 +16,9 @@ import { Field, Small } from './Field';
 import { keyHint, refSyntax, renameRef } from '../../lib/jev-keys';
 import { InputPicker } from './InputPicker';
 import { NewCheckButton } from './NewCheckButton';
-import { BandList, Histogram, Percentiles, Summary } from './Results';
+import { BandList, Histogram, Percentiles, Summary, type Labeler } from './Results';
+import { addLabel, parseLabels } from '../../lib/jev-labels';
+import { useDisplayName } from '../../contexts/DisplayNameContext';
 import type { Para, Run } from './types';
 import { DEFAULT_PRESENTATION, describe, isDefault, presentationBlock, type Presentation } from '../../lib/jev-presentation';
 import { PresentationPicker } from './PresentationPicker';
@@ -125,6 +127,15 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const dropped = nowProblems.filter((p) => !nowWords.includes(p));
   const saveProblems = useMemo(() => attempt(() => platformProblems(saveDraft(text))).ok ?? ['the draft cannot be saved'], [text]);
   const latest = result?.run;
+  // Labels live in the check file (lib/jev-labels.ts); a click appends one for the check run.
+  const { displayName } = useDisplayName();
+  const labeler: Labeler | undefined = latest && {
+    labels: parseLabels(text),
+    onLabel: (item, label) => writeText(ytext, (t) => addLabel(t, {
+      check: latest.check.id, path: item.path, line: item.line, quote: item.text.replace(/…$/, ''),
+      label, by: displayName || 'someone', at: new Date().toISOString(),
+    })),
+  };
   const stale = latest && c && JSON.stringify(latest.check) !== JSON.stringify(c);
   const color = COLORMAPS[cmap];
 
@@ -205,11 +216,11 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
             {latest.tooLong} left out: jev refused them as too long (the whole file is too big for jev here).</div>}
           {latest.pres && <div className="mb-1 text-[12px] text-gray-500">{latest.pres}
             {result?.base?.run.pres && result.base.run.pres !== latest.pres && <> · compared with a run where {result.base.run.pres.replace(/^jev /, '')}</>}</div>}
-          <Summary run={latest} base={result?.base} band={band} onBand={(b) => setBand(band === b ? null : b)} />
+          <Summary run={latest} base={result?.base} band={band} onBand={(b) => setBand(band === b ? null : b)} labels={labeler?.labels} />
           <Histogram run={latest} color={color} />
           {band
-            ? <BandList run={latest} band={band} color={color} onClear={() => setBand(null)} />
-            : <Percentiles run={latest} pcts={pcts.ok ?? []} color={color} />}
+            ? <BandList run={latest} band={band} color={color} onClear={() => setBand(null)} labeler={labeler} />
+            : <Percentiles run={latest} pcts={pcts.ok ?? []} color={color} labeler={labeler} />}
         </div>
       )}
     </section>
