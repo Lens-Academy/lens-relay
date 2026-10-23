@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares , platformProblems } from './jev-check';
+import { DEFAULT_PRESENTATION } from './jev-presentation';
+import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, platformWordProblems, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares , platformProblems, setDraftPresentation, readView, setView} from './jev-check';
 
 const T1 = `---
 id: T1
@@ -20,7 +21,7 @@ describe('parseCheck', () => {
     expect(c).toEqual({
       id: 'T1', name: 'term used before it is explained', model: 'jev-1.14.0', fail_at: 0.8, pass_below: 0.5,
       question: 'Does `paragraph` use a technical term without explaining it?',
-      criteria: { true: 'It uses one.', false: 'It does not.' }, enabled: true,
+      criteria: { true: 'It uses one.', false: 'It does not.' }, enabled: true, presentation: DEFAULT_PRESENTATION,
     });
   });
   it('says what is missing rather than guessing', () => {
@@ -42,24 +43,41 @@ describe('isCheckPath', () => {
   });
 });
 
-describe('parsePercentiles', () => {
-  it('reads a list', () => {
-    expect(parsePercentiles('[0, 0.01, 0.5, 1]')).toEqual([0, 0.01, 0.5, 1]);
+describe('parsePercentiles: the lower half, up to 0.5', () => {
+  it('reads a list, sorted, without repeats', () => {
+    expect(parsePercentiles('[0.3, 0, 0.01, 0.3]')).toEqual([0, 0.01, 0.3]);
   });
-  it('reads "N even" inclusive of both ends', () => {
-    expect(parsePercentiles('5 even')).toEqual([0, 0.25, 0.5, 0.75, 1]);
-  });
-  it('refuses nonsense', () => {
-    expect(() => parsePercentiles('[2]')).toThrow();
+  it('refuses nonsense and stops past the middle', () => {
+    expect(() => parsePercentiles('[0.7]')).toThrow(/0 to 0.5/);
     expect(() => parsePercentiles('banana')).toThrow();
-    expect(() => parsePercentiles('1 even')).toThrow();
+    expect(() => parsePercentiles('[]')).toThrow();
   });
 });
 
-describe('percentileRows', () => {
-  it('picks the item at each percentile of the sorted scores', () => {
-    const items = [0.9, 0.1, 0.5, 0.3, 0.7].map((p, i) => ({ id: String(i), p }));
-    expect(percentileRows(items, [0, 0.5, 1]).map((r) => r.item.p)).toEqual([0.1, 0.5, 0.9]);
+describe('percentileRows: stops up to 0.5, mirrored, each taking the next free index in from the ends', () => {
+  const idx = (n: number, half: number[]) => {
+    const items = Array.from({ length: n }, (_, i) => ({ id: String(i), p: i / n }));
+    return percentileRows(items, half).map((r) => Number(r.item.id));
+  };
+  it("Lauren's example: four tiny stops on ten items take the four from each end", () => {
+    expect(idx(10, [0.0001, 0.0002, 0.0003, 0.0004])).toEqual([0, 1, 2, 3, 6, 7, 8, 9]);
+  });
+  it('a big sample gives the true percentiles again', () => {
+    expect(idx(1_000_000, [0.0001, 0.0002]).map(String)).toEqual(['100', '200', '999799', '999899']);
+  });
+  it('a stop at the middle is shown once (odd length)', () => {
+    expect(idx(200, [0, 0.01, 0.03, 0.1, 0.3, 0.5])).toEqual([0, 2, 6, 20, 60, 100, 139, 179, 193, 197, 199]);
+    expect(idx(11, [0, 0.5])).toEqual([0, 5, 10]);
+  });
+  it('a sample smaller than the stops shows every item once', () => {
+    expect(idx(3, [0, 0.01, 0.03, 0.1, 0.3, 0.5])).toEqual([0, 1, 2]);
+    expect(idx(1, [0, 0.5])).toEqual([0]);
+    expect(idx(2, [0, 0.5])).toEqual([0, 1]);
+    expect(idx(10, [0.4, 0.5])).toEqual([4, 5]);
+  });
+  it('labels each row with its stop, mirrored ones as 1 minus it', () => {
+    const items = Array.from({ length: 200 }, (_, i) => ({ id: String(i), p: i }));
+    expect(percentileRows(items, [0.1, 0.5]).map((r) => r.at)).toEqual([0.1, 0.5, 0.9]);
   });
 });
 
@@ -179,5 +197,51 @@ describe('platformProblems reads YAML as the platform does (1.1)', () => {
     expect(platformProblems(ok.replace('name: n', 'name: 1:30'))).toEqual(['name must be text']);
     expect(platformProblems(ok.replace('name: n', 'name: "1:30"'))).toEqual([]);
     expect(platformProblems(ok.replace('id: T9', 'id: 7'))).toEqual([]);
+  });
+});
+
+describe('platformProblems: the words must suit the platform, which shows each paragraph alone', () => {
+  const ok = `---\nid: T9\nname: n\nmodel: jev-1.14.0\nquestion: Is \`paragraph\` x?\ncriteria:\n  "true": "\`paragraph\` is"\n  "false": it is not\nfix: f\n---\n`;
+  it('refuses a reference the platform cannot resolve, in the question or the criteria', () => {
+    expect(platformProblems(ok)).toEqual([]);
+    expect(platformProblems(ok.replace('Is `paragraph` x?', 'Is `sentence` x?'))).toEqual(['`sentence` in the question: finer than the paragraph asked about, so no one sentence']);
+    expect(platformProblems(ok.replace('`paragraph` is', '`section` is'))).toEqual(['`section` in the "true" criterion: jev sees only one paragraph, not the section around it']);
+    expect(platformProblems(ok.replace('Is `paragraph` x?', 'Is `paragraph_3` x?'))[0]).toMatch(/^`paragraph_3` in the question: write `paragraph`/);
+  });
+  it('names the word problems apart, since the platform still runs such a check', () => {
+    const bad = ok.replace('Is `paragraph` x?', 'Is `sentence` x?').replace('model: jev-1.14.0', 'model: jev-9');
+    expect(platformWordProblems(bad)).toEqual(['`sentence` in the question: finer than the paragraph asked about, so no one sentence']);
+    expect(platformProblems(bad)).toHaveLength(2);
+  });
+  it('leaves other backticked words alone', () => {
+    expect(platformProblems(ok.replace('Is `paragraph` x?', 'Is `paragraph` a `foo()`?'))).toEqual([]);
+  });
+});
+
+describe('a check file\'s presentation and view', () => {
+  const T = `---\nid: T9\nmodel: jev-1.14.0\nquestion: Is \`paragraph\` x?\nfix: f\n---\n`;
+  it('drafts a presentation, and drops the draft when it is the live one again', () => {
+    const lens = { context: 'lens', question: 'sentence', nest: ['section'] } as const;
+    const drafted = setDraftPresentation(T, { ...lens, nest: [...lens.nest] });
+    expect(parseCheckFile(drafted).draft?.presentation).toEqual({ context: 'lens', question: 'sentence', nest: ['section'] });
+    expect(parseCheckFile(drafted).live.presentation).toEqual(DEFAULT_PRESENTATION);
+    expect(setDraftPresentation(drafted, DEFAULT_PRESENTATION)).toBe(T);
+  });
+  it('drafts a presentation over an unreadable live block', () => {
+    const bad = T.replace('fix: f', 'fix: f\npresentation: {context: page}');
+    expect(setDraftPresentation(bad, DEFAULT_PRESENTATION)).toContain('draft:');
+  });
+  it('refuses to save a presentation the platform cannot run yet, and checks words against it', () => {
+    const saved = saveDraft(setDraftPresentation(T, { context: 'document', question: 'sentence', nest: [] }));
+    const problems = platformProblems(saved);
+    expect(problems.some((p) => /cannot run a check with this presentation yet/.test(p))).toBe(true);
+    expect(problems.some((p) => /`paragraph` in the question: nesting by paragraph is off/.test(p))).toBe(true);
+  });
+  it('keeps a shared view block the check ignores', () => {
+    const v = setView(setView(T, 'sample', 10), 'courses', ['a', 'b']);
+    expect(readView(v)).toEqual({ sample: 10, courses: ['a', 'b'] });
+    expect(parseCheck(v).question).toBe('Is `paragraph` x?');
+    expect(platformProblems(v)).toEqual([]);
+    expect(setView(v, 'sample', 10)).toBe(v);
   });
 });

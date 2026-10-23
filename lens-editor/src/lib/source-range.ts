@@ -28,14 +28,23 @@ function blockFrom(text: string, starts: number[], i: number): { from: number; t
   return { from: starts[i], to: lineEnd(k) };
 }
 
-/** The source range of the paragraph that starts on `line` and reads `words`; if that line
- *  no longer starts it, the first block whose text starts with the same words; else null. */
+/** The source range of the block that `words` (a paragraph or a sentence of one) sit in: the
+ *  block at `line` if it starts with them, then the first block that starts with them, then
+ *  the block at `line` holding them, then the first block holding them; else null. A sentence
+ *  can start mid-line, so starting with them is not required, only preferred. */
 export function paragraphRange(text: string, line: number, words: string): { from: number; to: number } | null {
   const starts = lineStarts(text);
   const probe = norm(words).slice(0, PROBE);
   if (!probe) return null;
-  const fits = (i: number) => norm(text.slice(starts[i], blockFrom(text, starts, i).to)).startsWith(probe);
-  if (line >= 1 && line - 1 < starts.length && fits(line - 1)) return blockFrom(text, starts, line - 1);
-  for (let i = 0; i < starts.length; i++) if (fits(i)) return blockFrom(text, starts, i);
+  const block = (i: number) => norm(text.slice(starts[i], blockFrom(text, starts, i).to));
+  const at = line - 1;
+  const ok = at >= 0 && at < starts.length;
+  // A block that merely holds them is searched only from block starts, so it is a whole block.
+  const blockStart = (i: number) => i === 0 || !text.slice(starts[i - 1], starts[i]).trim() || /^#{1,6}\s/.test(text.slice(starts[i - 1], starts[i]));
+  const passes: [(b: string) => boolean, (i: number) => boolean][] = [[(b) => b.startsWith(probe), () => true], [(b) => b.includes(probe), blockStart]];
+  for (const [test, from] of passes) {
+    if (ok && test(block(at))) return blockFrom(text, starts, at);
+    for (let i = 0; i < starts.length; i++) if (from(i) && test(block(i))) return blockFrom(text, starts, i);
+  }
   return null;
 }

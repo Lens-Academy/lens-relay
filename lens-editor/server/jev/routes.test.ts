@@ -11,7 +11,8 @@ const token = (o: Partial<ShareTokenPayload> = {}) => signShareToken({
   purpose: 'share', role: 'edit', folder: EDU_FOLDER,
   expiry: Math.floor(Date.now() / 1000) + 3600, ...o,
 });
-const jevReply = (p: number) => new Response(JSON.stringify({ answers: { q: { noul: p } } }), { status: 200 });
+// jev's reply to a call of up to 1000 questions, every answer p.
+const jevReply = (p: number) => new Response(JSON.stringify({ answers: Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`q${i}`, { noul: p }])) }), { status: 200 });
 
 function mount(config: Partial<JevConfig> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'jev-'));
@@ -45,7 +46,7 @@ describe('jev routes', () => {
     expect(await (await ask(app, ['a', 'b'])).json()).toEqual({ ps: [0.7, 0.7], cached: 2 });
     expect(jev).toHaveBeenCalledTimes(2);
     const sent = JSON.parse(String(jev.mock.calls[0][1]!.body));
-    expect(sent).toEqual({ model: 'jev-1.14.0', state: { paragraph: 'a' }, questions: { q: { type: 'noul', instructions: 'Is `paragraph` bad?' } } });
+    expect(sent).toEqual({ model: 'jev-1.14.0', state: { paragraph: 'a' }, questions: { q0: { type: 'noul', instructions: 'Is `paragraph` bad?' } } });
   });
   it('refuses a request that would pass the hourly budget of new texts', async () => {
     const { app, jev } = mount({ charsPerHour: 3 * ONE });
@@ -106,7 +107,7 @@ describe('jev routes, any state', () => {
     expect(await res.json()).toEqual({ ps: [0.7], cached: 0 });
     const sent = JSON.parse(String(jev.mock.calls[0][1]!.body));
     expect(Object.keys(sent.state)).toEqual(['__format_description', 'document']);
-    expect(sent.questions.q.instructions).toBe('Is `paragraph_0` ok?');
+    expect(sent.questions.q0.instructions).toBe('Is `paragraph_0` ok?');
   });
   it('counts characters sent, so a whole-file request uses more of the hour', async () => {
     const { app } = mount({ charsPerHour: 1000 });
@@ -118,15 +119,21 @@ describe('jev routes, any state', () => {
     expect(res.status).toBe(429);
     expect((await ask(app, ['a'])).status).toBe(200);
   });
-  it('reads files live, once a minute per path', async () => {
+  it('has the platform build the calls, reading each file live once a minute', async () => {
     const readFile = vi.fn(async (p: string) => (p === 'Lens Edu/a.md' ? '# A' : null));
-    const { app } = mount({ readFile });
-    const files = (paths: string[]) => app.request('/api/jev/files', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() }, body: JSON.stringify({ paths }),
-    }).then((r) => r.json());
-    expect(await files(['Lens Edu/a.md', 'Lens Edu/nope.md'])).toEqual({ files: { 'Lens Edu/a.md': '# A' } });
-    await files(['Lens Edu/a.md']);
-    expect(readFile).toHaveBeenCalledTimes(2);
+    const { app, jev } = mount({ readFile, platformUrl: 'https://platform.test/', platformKey: 'k' });
+    jev.mockImplementation(async () => new Response(JSON.stringify({ batches: [], asked: [] }), { status: 200 }));
+    const requests = (presentation: unknown) => app.request('/api/jev/requests', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+      body: JSON.stringify({ question: { instructions: 'q' }, presentation, units: [{ id: 'a', path: 'Lens Edu/a.md', line: 1, text: 'A' }] }),
+    });
+    expect((await requests({ context: 'document', question: 'sentence' })).status).toBe(200);
+    await requests({ context: 'document', question: 'sentence' });
+    expect(readFile).toHaveBeenCalledTimes(1);
+    const [url, init] = jev.mock.calls[0];
+    expect(url).toBe('https://platform.test/api/content/course-checks/requests');
+    expect((init!.headers as Record<string, string>)['X-Validation-Key']).toBe('k');
+    expect(JSON.parse(String(init!.body)).files).toEqual({ 'Lens Edu/a.md': '# A' });
   });
 });
 
@@ -155,12 +162,13 @@ describe('jev routes, too long', () => {
 });
 
 describe('jev routes, folder scope', () => {
-  const files = (app: Hono, paths: string[], tok = token()) => app.request('/api/jev/files', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': tok }, body: JSON.stringify({ paths }),
+  const files = (app: Hono, paths: string[], tok = token()) => app.request('/api/jev/requests', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': tok },
+    body: JSON.stringify({ question: { instructions: 'q' }, presentation: { context: 'document' }, units: paths.map((path) => ({ id: path, path, line: 1, text: 'x' })) }),
   });
   it('refuses a link for another folder on every route', async () => {
     const readFile = vi.fn(async () => 'secret');
-    const { app } = mount({ readFile });
+    const { app } = mount({ readFile, platformUrl: 'https://platform.test', platformKey: 'k' });
     const other = token({ folder: 'b0000001-0000-4000-8000-000000000001' });
     expect((await files(app, ['Lens Edu/a.md'], other)).status).toBe(403);
     expect((await ask(app, ['a'], { 'X-Share-Token': other })).status).toBe(403);
@@ -168,7 +176,7 @@ describe('jev routes, folder scope', () => {
   });
   it('never reads outside Lens Edu, even for an all-folders link', async () => {
     const readFile = vi.fn(async () => 'secret');
-    const { app } = mount({ readFile });
+    const { app } = mount({ readFile, platformUrl: 'https://platform.test', platformKey: 'k' });
     for (const tok of [token(), token({ folder: '00000000-0000-0000-0000-000000000000' })]) {
       const res = await files(app, ['Lens/08-Legal/contract.md', 'Lens Edu/../Lens/x.md'], tok);
       expect(res.status).toBe(400);
@@ -188,5 +196,60 @@ describe('jev routes, long context', () => {
     expect(jev).toHaveBeenCalledTimes(2);
     const headers = jev.mock.calls.map((c) => (c[1]!.headers as Record<string, string>)['TypeSafe-Danger-Zone-Long-Context']);
     expect(headers).toEqual([undefined, 'true']);
+  });
+});
+
+describe('jev routes, one call per shown text', () => {
+  const batch = (app: Hono, requests: unknown[]) => app.request('/api/jev/ask', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+    body: JSON.stringify({ model: 'jev-1.14.0', requests }),
+  });
+  const q = (i: number) => ({ instructions: `Is \`sentence_${i}\` bad?` });
+  it('asks every question about one state in one call, and caches each answer', async () => {
+    const { app, jev } = mount();
+    const state = { document: { sentence_0: 'a', sentence_1: 'b', sentence_2: 'c' } };
+    expect(await (await batch(app, [{ state, questions: [q(0), q(1)] }, { state, question: q(2) }])).json()).toEqual({ ps: [0.7, 0.7, 0.7], cached: 0 });
+    expect(jev).toHaveBeenCalledTimes(1);
+    expect(Object.keys(JSON.parse(String(jev.mock.calls[0][1]!.body)).questions)).toEqual(['q0', 'q1', 'q2']);
+    expect(await (await batch(app, [{ state, questions: [q(1), q(3)] }])).json()).toEqual({ ps: [0.7, 0.7], cached: 1 });
+    expect(JSON.parse(String(jev.mock.calls[1][1]!.body)).questions).toEqual({ q0: { type: 'noul', ...q(3) } });
+  });
+  it("splits a state's questions across calls past 1000, and charges the state once per call", async () => {
+    const { app, jev } = mount({ charsPerHour: 1e9 });
+    const state = { document: 'x'.repeat(1000) };
+    expect((await batch(app, [{ state, questions: Array.from({ length: 1500 }, (_, i) => q(i)) }])).status).toBe(200);
+    expect(jev).toHaveBeenCalledTimes(2);
+    const { app: app2 } = mount({ charsPerHour: 3000 });
+    // 20 questions about a 1000-character state fit an hour of 3000; asked one by one they would not.
+    expect((await batch(app2, [{ state, questions: Array.from({ length: 20 }, (_, i) => q(i)) }])).status).toBe(200);
+  });
+  it('refuses a malformed batch', async () => {
+    const { app } = mount();
+    expect((await batch(app, [{ state: { a: 'x' }, questions: [{ nope: 1 }] }])).status).toBe(400);
+  });
+});
+
+describe('jev routes, review round on #195', () => {
+  const batch = (app: Hono, requests: unknown[], longContext = false) => app.request('/api/jev/ask', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+    body: JSON.stringify({ model: 'jev-1.14.0', requests, ...(longContext ? { longContext } : {}) }),
+  });
+  const q = (i: number) => ({ instructions: `Is \`s_${i}\` bad?` });
+  it('with long context, a state over the normal call size still takes one call', async () => {
+    const { app, jev } = mount({ charsPerHour: 1e9 });
+    const state = { document: 'x'.repeat(200_000) };
+    expect((await batch(app, [{ state, questions: Array.from({ length: 40 }, (_, i) => q(i)) }], true)).status).toBe(200);
+    expect(jev).toHaveBeenCalledTimes(1);
+  });
+  it('refunds exactly the calls that failed', async () => {
+    const a = { state: { d: 'a'.repeat(100) }, question: q(0) }, b = { state: { d: 'b'.repeat(100) }, question: q(0) };
+    const one = requestChars(a);
+    const { app, jev } = mount({ charsPerHour: 2 * one });
+    jev.mockImplementation(async (_u, init) => (String(init!.body).includes('bbbb') ? new Response('bad', { status: 400 }) : jevReply(0.5)));
+    expect((await batch(app, [a, b])).status).toBe(502);
+    jev.mockImplementation(async () => jevReply(0.5));
+    const c = { state: { d: 'c'.repeat(100) }, question: q(0) }, d = { state: { d: 'd'.repeat(100) }, question: q(0) };
+    expect((await batch(app, [c, d])).status).toBe(429); // a's cost was kept
+    expect((await batch(app, [c])).status).toBe(200); // b's was refunded
   });
 });

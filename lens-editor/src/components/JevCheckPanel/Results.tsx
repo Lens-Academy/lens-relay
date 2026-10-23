@@ -1,9 +1,29 @@
 // A run's results: the band cards, the histogram, and either the percentile rows or one band's list.
 import { BANDS, bandOf, bandRule, histogram, percentileRows, shares, type Band } from '../../lib/jev-check';
 import { ParaText, ScoreChip } from './ParaText';
+import { agreement, labelFor, type Label } from '../../lib/jev-labels';
 
-const unitsOf = (run: Run) => (run.pres?.endsWith('sentence') ? 'sentences' : 'paragraphs');
-import type { Colormap, Run } from './types';
+const unitsOf = (run: Run) => `${run.unit ?? 'paragraph'}s`;
+import type { Colormap, Para, Run } from './types';
+
+/** The labels of the check run, and how to add one (JevCheckPanel). */
+export interface Labeler { labels: Label[]; onLabel: (item: Para, label: Label['label']) => void }
+
+const MARK: [Label['label'], string, string][] = [['fail', 'problem', 'bg-red-100 text-red-800 ring-red-300'], ['pass', 'fine', 'bg-emerald-100 text-emerald-800 ring-emerald-300'], ['cant_tell', '?', 'bg-gray-200 text-gray-700 ring-gray-300']];
+
+/** Your judgement of one unit: does it have the problem? The newest label shows pressed. */
+function LabelButtons({ run, item, labeler }: { run: Run; item: Para; labeler?: Labeler }) {
+  if (!labeler) return null;
+  const now = labelFor(labeler.labels, run.check.id, { path: item.path, unit: run.unit, text: item.text })?.label;
+  return (
+    <span className="flex flex-col gap-0.5 self-start">
+      {MARK.map(([v, word, on]) => (
+        <button key={v} onClick={() => labeler.onLabel(item, v)} title={`label: ${v === 'cant_tell' ? "can't tell" : v === 'fail' ? 'has the problem' : 'does not have it'}`}
+          className={`rounded px-1.5 text-[10px] ring-1 ${now === v ? on : 'text-gray-400 ring-gray-200 hover:text-gray-700'}`}>{word}</button>
+      ))}
+    </span>
+  );
+}
 
 const BINS = 20;
 const TONE: Record<Band, string> = { fail: 'text-gray-900', unsure: 'text-gray-600', pass: 'text-gray-400' };
@@ -11,7 +31,8 @@ const pct = (x: number) => `${Math.round(100 * x)}%`;
 
 /** fail / unsure / pass as cards: this run's share, the rule, and the share in `base` (the live check
  *  when a draft ran, else the previous run). Click a card to list that band. */
-export function Summary({ run, base, band, onBand }: { run: Run; base?: { label: string; run: Run }; band: Band | null; onBand: (b: Band) => void }) {
+export function Summary({ run, base, band, onBand, labels }: { run: Run; base?: { label: string; run: Run }; band: Band | null; onBand: (b: Band) => void; labels?: Label[] }) {
+  const agree = labels && agreement(labels, run.check.id, run.scored.map((u) => ({ path: u.path, unit: run.unit, text: u.text, band: bandOf(run.check, u.p) })));
   const now = shares(run.check, run.scored.map((s) => s.p));
   const before = base && base.run.scored.length === run.scored.length ? shares(base.run.check, base.run.scored.map((s) => s.p)) : null;
   return (
@@ -27,7 +48,8 @@ export function Summary({ run, base, band, onBand }: { run: Run; base?: { label:
           </button>
         ))}
       </div>
-      <div className="mt-1 text-[11px] text-gray-400">{run.scored.length} {unitsOf(run)}, {run.cached} from cache</div>
+      <div className="mt-1 text-[11px] text-gray-400">{run.scored.length} {unitsOf(run)}, {run.cached} from cache
+        {agree && agree.labelled > 0 && <span className="ml-2 text-gray-600">· your labels: {agree.agree} agree, {agree.disagree} disagree, {agree.unsure} unsure, of {agree.labelled} labelled here</span>}</div>
     </div>
   );
 }
@@ -60,14 +82,15 @@ export function Histogram({ run, color }: { run: Run; color: Colormap }) {
 }
 
 /** The paragraph at each chosen percentile of the scores. */
-export function Percentiles({ run, pcts, color }: { run: Run; pcts: number[]; color: Colormap }) {
+export function Percentiles({ run, pcts, color, labeler }: { run: Run; pcts: number[]; color: Colormap; labeler?: Labeler }) {
   return (
     <ol className="mt-4 divide-y divide-gray-100 border-t border-gray-100">
       {percentileRows(run.scored, pcts).map(({ at, item }) => (
-        <li key={`${at}-${item.id}`} className="grid grid-cols-[3.5rem_3.5rem_1fr] gap-3 py-2">
+        <li key={`${at}-${item.id}`} className="grid grid-cols-[3.5rem_3.5rem_1fr_auto] gap-3 py-2">
           <span className="font-mono text-[11px] text-gray-400">{at}</span>
           <ScoreChip p={item.p} color={color} />
           <ParaText para={item} />
+          <LabelButtons run={run} item={item} labeler={labeler} />
         </li>
       ))}
     </ol>
@@ -75,7 +98,7 @@ export function Percentiles({ run, pcts, color }: { run: Run; pcts: number[]; co
 }
 
 /** Every paragraph in one band, highest score first. */
-export function BandList({ run, band, color, onClear }: { run: Run; band: Band; color: Colormap; onClear: () => void }) {
+export function BandList({ run, band, color, onClear, labeler }: { run: Run; band: Band; color: Colormap; onClear: () => void; labeler?: Labeler }) {
   const items = run.scored.filter((s) => bandOf(run.check, s.p) === band).sort((a, b) => b.p - a.p);
   return (
     <div className="mt-4 border-t border-gray-100">
@@ -85,9 +108,10 @@ export function BandList({ run, band, color, onClear }: { run: Run; band: Band; 
       </div>
       <ol className="divide-y divide-gray-100">
         {items.map((item) => (
-          <li key={item.id} className="grid grid-cols-[3.5rem_1fr] gap-3 py-2">
+          <li key={item.id} className="grid grid-cols-[3.5rem_1fr_auto] gap-3 py-2">
             <ScoreChip p={item.p} color={color} />
             <ParaText para={item} />
+            <LabelButtons run={run} item={item} labeler={labeler} />
           </li>
         ))}
       </ol>
