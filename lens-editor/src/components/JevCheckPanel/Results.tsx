@@ -14,7 +14,7 @@ const MARK: [Label['label'], string, string][] = [['fail', 'problem', 'bg-red-10
 /** Your judgement of one unit: does it have the problem? The newest label shows pressed. */
 function LabelButtons({ run, item, labeler }: { run: Run; item: Para; labeler?: Labeler }) {
   if (!labeler) return null;
-  const now = labelFor(labeler.labels, run.check.id, item.text)?.label;
+  const now = labelFor(labeler.labels, run.check.id, { path: item.path, unit: run.unit, text: item.text })?.label;
   return (
     <span className="flex flex-col gap-0.5 self-start">
       {MARK.map(([v, word, on]) => (
@@ -32,7 +32,7 @@ const pct = (x: number) => `${Math.round(100 * x)}%`;
 /** fail / unsure / pass as cards: this run's share, the rule, and the share in `base` (the live check
  *  when a draft ran, else the previous run). Click a card to list that band. */
 export function Summary({ run, base, band, onBand, labels }: { run: Run; base?: { label: string; run: Run }; band: Band | null; onBand: (b: Band) => void; labels?: Label[] }) {
-  const agree = labels && agreement(labels, run.check.id, run.scored.map((u) => ({ text: u.text, band: bandOf(run.check, u.p) })));
+  const agree = labels && agreement(labels, run.check.id, run.scored.map((u) => ({ path: u.path, unit: run.unit, text: u.text, band: bandOf(run.check, u.p) })));
   const now = shares(run.check, run.scored.map((s) => s.p));
   const before = base && base.run.scored.length === run.scored.length ? shares(base.run.check, base.run.scored.map((s) => s.p)) : null;
   return (

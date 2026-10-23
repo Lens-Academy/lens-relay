@@ -132,7 +132,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const labeler: Labeler | undefined = latest && {
     labels: parseLabels(text),
     onLabel: (item, label) => writeText(ytext, (t) => addLabel(t, {
-      check: latest.check.id, path: item.path, line: item.line, quote: item.text.replace(/…$/, ''),
+      check: latest.check.id, path: item.path, unit: latest.unit ?? 'paragraph', line: item.line, quote: item.text.replace(/…$/, ''),
       label, by: displayName || 'someone', at: new Date().toISOString(),
     })),
   };
