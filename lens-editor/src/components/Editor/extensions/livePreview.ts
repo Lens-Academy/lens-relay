@@ -129,7 +129,7 @@ class WikilinkWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
-    return createWikilinkElement(this.pageName, this.displayText, this.resolved, linksCreate(view));
+    return createWikilinkElement(this.pageName, this.displayText, this.resolved, () => linksCreate(view));
   }
 
   eq(other: WikilinkWidget): boolean {

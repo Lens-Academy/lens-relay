@@ -31,7 +31,9 @@ interface TableWidgetData {
 // them with a backslash when writing user input to the doc; reverse the
 // escape when displaying. Without this, typing or pasting `|` would split
 // the row into a new column on the next reparse. A wikilink is left as it is:
-// the table parser keeps the `|` of [[note|alias]] in the cell, as Obsidian does.
+// our table parser keeps the `|` of [[note|alias]] in the cell, and the relay's
+// link index and the platform read that form but not Obsidian's [[note\|alias]]
+// (which GitHub needs, and which the editor reads too).
 function escapeForCell(s: string): string {
   let out = '';
   for (let i = 0; i < s.length; i++) {
@@ -144,6 +146,7 @@ function renderInlineNode(target: Node, source: string, node: SyntaxNode): void 
       // [[note|alias]] shows the alias; a blank alias falls back to the note
       const { target: page, alias } = splitWikilink(source.slice(contentNode.from, contentNode.to));
       const resolved = getWikilinkContext()?.isResolved(page) ?? true;
+      // Asked on the click: the cell is drawn before it is in the editor
       const link = createWikilinkElement(page, alias.trim() ? alias : page, resolved, () => {
         const editor = link.closest<HTMLElement>('.cm-editor');
         const view = editor && EditorView.findFromDOM(editor);

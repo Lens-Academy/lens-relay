@@ -2,15 +2,22 @@
  * GFM tables whose cells may hold aliased wikilinks.
  *
  * Lezer's Table extension splits a row at every unescaped `|`, so the alias pipe
- * in `| [[Some note|alias]] | 7/10 |` became a column separator. Obsidian keeps a
- * `|` inside `[[...]]` part of the link; this is Lezer's table parser with that
- * one change. It defines the same nodes (Table, TableHeader, TableRow, TableCell,
- * TableDelimiter) and replaces Lezer's "Table" block parser, so add it after
- * `markdownLanguage` / GFM and in place of `Table`.
+ * in `| [[Some note|alias]] | 7/10 |` became a column separator. This is Lezer's
+ * table parser with one change: a `|` inside `[[...]]` stays in the cell. The
+ * escaped form Obsidian writes in tables, `[[note\|alias]]`, still works (the
+ * `\|` never split a cell). It defines the same nodes (Table, TableHeader,
+ * TableRow, TableCell, TableDelimiter) as Lezer's Table.
+ *
+ * Use it through `lensMarkdownExtensions` on `commonmarkLanguage`, not next to
+ * GFM: Lezer keeps a replaced parser's `endLeaf`, and GFM's would still split a
+ * table at a body row that looks like a delimiter row.
  */
 
+import { foldNodeProp } from '@codemirror/language';
+import { Autolink, Emoji, Strikethrough, Subscript, Superscript, TaskList } from '@lezer/markdown';
 import type { BlockContext, Element, LeafBlock, LeafBlockParser, Line, MarkdownConfig } from '@lezer/markdown';
 import { tags as t } from '@lezer/highlight';
+import { WikilinkExtension } from './wikilinkParser';
 
 const PIPE = 124;
 const BACKSLASH = 92;
@@ -130,3 +137,26 @@ export const WikilinkTable: MarkdownConfig = {
     before: 'SetextHeading',
   }],
 };
+
+/**
+ * The editor's Markdown: `markdownLanguage`'s extensions (GFM, sub/superscript,
+ * emoji, table folding) with WikilinkTable in place of GFM's Table, plus
+ * wikilinks. Pass with `base: commonmarkLanguage`.
+ */
+export const lensMarkdownExtensions: MarkdownConfig[] = [
+  WikilinkExtension,
+  WikilinkTable,
+  TaskList,
+  Strikethrough,
+  Autolink,
+  Subscript,
+  Superscript,
+  Emoji,
+  {
+    props: [
+      foldNodeProp.add({
+        Table: (tree, state) => ({ from: state.doc.lineAt(tree.from).to, to: tree.to }),
+      }),
+    ],
+  },
+];

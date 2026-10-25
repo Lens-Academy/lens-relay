@@ -1,16 +1,15 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { commonmarkLanguage, markdown } from '@codemirror/lang-markdown';
 import { cursorLineUp } from '@codemirror/commands';
 import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
 import { livePreview, toggleSourceMode } from './livePreview';
 import { markdownTableCompartment, markdownTableExtension, tableEscapeKeymap } from './markdownTable';
-import { WikilinkExtension } from './wikilinkParser';
-import { WikilinkTable } from './wikilinkTable';
+import { lensMarkdownExtensions } from './wikilinkTable';
 
-// The Markdown language as Editor.tsx configures it, for tables
-const tableMarkdown = () => markdown({ base: markdownLanguage, extensions: [WikilinkExtension, WikilinkTable] });
+// The Markdown language as Editor.tsx configures it
+const tableMarkdown = () => markdown({ base: commonmarkLanguage, extensions: lensMarkdownExtensions });
 
 function createEditor(content: string, cursorPos: number) {
   const state = EditorState.create({
@@ -736,6 +735,14 @@ describe('markdownTable - wikilinks in cells', () => {
     view = createEditor(content, content.indexOf('end'));
 
     expect(cellTexts(view)).toEqual([['x', '[[y', 'z']]);
+  });
+
+  it('keeps a body row that looks like a delimiter row in the same table', () => {
+    const content = '| a | b |\n|---|---|\n| 1 | 2 |\n|---|---|\n| 3 | 4 |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
+    expect(cellTexts(view)).toEqual([['1', '2'], ['---', '---'], ['3', '4']]);
   });
 
   it('editing a cell leaves the alias pipe of a wikilink unescaped', () => {

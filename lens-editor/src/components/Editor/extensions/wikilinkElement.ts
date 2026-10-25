@@ -38,7 +38,7 @@ export function linksCreate(view: EditorView): boolean {
 
 /**
  * The target and alias of a wikilink's content (between `[[` and `]]`).
- * In a table, Obsidian writes the alias pipe escaped (`[[note\|alias]]`), so a
+ * In a table Obsidian writes the alias pipe escaped (`[[note\|alias]]`), so a
  * backslash before the first `|` belongs to the pipe, not to the target.
  */
 export function splitWikilink(raw: string): { target: string; alias: string } {
@@ -48,14 +48,10 @@ export function splitWikilink(raw: string): { target: string; alias: string } {
   return { target: raw.substring(0, targetEnd), alias: raw.substring(pipe + 1) };
 }
 
-/**
- * A clickable internal link; `create` lets an unresolved link create its file
- * (a function: asked on the click, for links drawn before they are in an editor).
- */
+/** A clickable internal link; `mayCreate()` says whether an unresolved link may create its file. */
 export function createWikilinkElement(
-  pageName: string, displayText: string, resolved: boolean, create: boolean | (() => boolean),
+  pageName: string, displayText: string, resolved: boolean, mayCreate: () => boolean,
 ): HTMLElement {
-  const mayCreate = () => (typeof create === 'function' ? create() : create);
   const span = document.createElement('span');
   span.className = 'cm-wikilink-widget';
 
