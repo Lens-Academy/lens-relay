@@ -173,7 +173,14 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   // The title shrinks to one small line once the document is scrolled away from its top, so it
   // stops taking a fifth of a phone screen (Lauren, 2026-10-25).
   const [scrolledDown, setScrolledDown] = useState(false);
-  useEffect(() => scrollSource.subscribe(() => setScrolledDown(scrollSource.getScrollTop() > 8)), [scrollSource]);
+  // Compact only when the document scrolls further than the title would give back, and expand
+  // only at the very top: compacting grows the scroller, so without both a short document
+  // flipped between the two at its end (Assay, #195).
+  useEffect(() => scrollSource.subscribe(() => {
+    const top = scrollSource.getScrollTop();
+    const range = scrollSource.getScrollHeight() - scrollSource.getClientHeight();
+    setScrolledDown((was) => (top > 8 && range > 80 ? true : top <= 0 ? false : was));
+  }), [scrollSource]);
 
   const [synced, setSynced] = useState(false);
   const [isSourceMode, setIsSourceMode] = useState(false);
