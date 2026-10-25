@@ -56,9 +56,9 @@ pub async fn execute_blocks(
                     .unwrap_or(2000) as usize;
                 let text = String::from_utf8(data)
                     .map_err(|_| format!("Error: {} is not valid UTF-8", file_path))?;
-                return Ok(vec![
-                    json!({ "type": "text", "text": format_cat_n(&text, offset, limit) }),
-                ]);
+                let mut output = format_cat_n(&text, offset, limit);
+                push_range_notice(&mut output, &text, offset, limit);
+                return Ok(vec![json!({ "type": "text", "text": output })]);
             }
             return Ok(image_blocks(file_path, &data));
         }
@@ -136,7 +136,9 @@ pub async fn execute(
             session.read_docs.insert(doc_info.doc_id.clone());
         }
 
-        return Ok(format_cat_n(&content, offset, limit));
+        let mut output = format_cat_n(&content, offset, limit);
+        push_range_notice(&mut output, &content, offset, limit);
+        return Ok(output);
     }
 
     // Reload from storage if GC evicted the doc
@@ -185,6 +187,7 @@ pub async fn execute(
             output.push_str("\n\n");
             output.push_str(&listing);
         }
+        push_range_notice(&mut output, &content, offset, limit);
         return Ok(output);
     }
 
@@ -236,8 +239,55 @@ pub async fn execute(
         output.push_str("\n\n");
         output.push_str(&footer_text);
     }
+    push_range_notice(&mut output, &accepted, offset, limit);
 
     Ok(output)
+}
+
+/// Says, at the very end of a read, when the returned lines are not the
+/// whole file: lines past the shown range (the 2000-line default `limit`
+/// makes a long transcript look complete otherwise), or an `offset` past the
+/// end. Lines are never cut, so this is the only way a read omits text.
+fn range_notice(content: &str, offset: usize, limit: usize) -> Option<String> {
+    let total = content.lines().count();
+    let first = offset.max(1);
+    if total == 0 || first > total {
+        return (offset > 1).then(|| {
+            format!(
+                "[offset={} is past the end: the document has {} lines.]",
+                offset, total
+            )
+        });
+    }
+    let last = (first - 1).saturating_add(limit).min(total);
+    if last >= total {
+        return None;
+    }
+    if last < first {
+        return Some(format!(
+            "[limit=0: no lines shown of {}. Call read with a positive limit.]",
+            total
+        ));
+    }
+    let more = total - last;
+    Some(format!(
+        "[Showing lines {}-{} of {}. {} more line{} not shown. Call read again with offset={} to continue.]",
+        first,
+        last,
+        total,
+        more,
+        if more == 1 { "" } else { "s" },
+        last + 1
+    ))
+}
+
+fn push_range_notice(output: &mut String, content: &str, offset: usize, limit: usize) {
+    if let Some(notice) = range_notice(content, offset, limit) {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(&notice);
+    }
 }
 
 /// Format content as cat -n output with 6-char right-aligned line numbers.
@@ -312,6 +362,37 @@ mod accepted_view_tests {
             "Should have pending suggestions footer: {}",
             result
         );
+    }
+
+    #[tokio::test]
+    async fn read_of_long_doc_ends_with_continue_notice() {
+        // A 2,000-line page of a longer transcript looked complete; the
+        // notice must be the last thing, after the pending-suggestions footer.
+        let mut body: String = (1..=2500).map(|i| format!("line {}\n", i)).collect();
+        body.push_str("{++added++}");
+        let server = build_test_server(&[("/Long.md", "uuid-long", &body)]).await;
+        let sid = setup_session_with_read(&server, &format!("{}-uuid-long", RELAY_ID));
+        let result = execute(
+            &server,
+            &sid,
+            &json!({ "file_path": "Lens/Long.md", "session_id": sid }),
+        )
+        .await
+        .unwrap();
+        assert!(result.contains("[Pending suggestions]"), "{}", result);
+        assert!(
+            result.ends_with("[Showing lines 1-2000 of 2501. 501 more lines not shown. Call read again with offset=2001 to continue.]"),
+            "{}",
+            &result[result.len() - 300..]
+        );
+        let rest = execute(
+            &server,
+            &sid,
+            &json!({ "file_path": "Lens/Long.md", "session_id": sid, "offset": 2001 }),
+        )
+        .await
+        .unwrap();
+        assert!(!rest.contains("[Showing lines"), "{}", rest);
     }
 
     #[tokio::test]
@@ -427,6 +508,42 @@ mod tests {
         let result = format_cat_n("", 0, 2000);
         // Empty string has no lines
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn range_notice_when_lines_remain() {
+        let content: String = (1..=3412).map(|i| format!("l{}\n", i)).collect();
+        assert_eq!(
+            range_notice(&content, 0, 2000).as_deref(),
+            Some("[Showing lines 1-2000 of 3412. 1412 more lines not shown. Call read again with offset=2001 to continue.]")
+        );
+        // The offset it names continues right after the last shown line.
+        let page = format_cat_n(&content, 2001, 2000);
+        assert!(page.starts_with("  2001\tl2001"), "{}", &page[..20]);
+        assert_eq!(range_notice(&content, 2001, 2000), None);
+        assert_eq!(
+            range_notice(&content, 3000, 412).as_deref(),
+            Some("[Showing lines 3000-3411 of 3412. 1 more line not shown. Call read again with offset=3412 to continue.]")
+        );
+    }
+
+    #[test]
+    fn range_notice_absent_for_whole_file() {
+        assert_eq!(range_notice("a\nb\nc", 0, 2000), None);
+        assert_eq!(range_notice("a\nb\nc", 1, 3), None);
+        assert_eq!(range_notice("", 0, 2000), None);
+    }
+
+    #[test]
+    fn range_notice_offset_past_end_and_zero_limit() {
+        assert_eq!(
+            range_notice("a\nb\nc", 10, 2000).as_deref(),
+            Some("[offset=10 is past the end: the document has 3 lines.]")
+        );
+        assert_eq!(
+            range_notice("a\nb\nc", 0, 0).as_deref(),
+            Some("[limit=0: no lines shown of 3. Call read with a positive limit.]")
+        );
     }
 
     #[test]
