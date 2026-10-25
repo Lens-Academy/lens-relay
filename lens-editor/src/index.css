@@ -154,8 +154,11 @@
    row, and 24px above the text, or 8px above properties. */
 .lens-page-header {
   padding-bottom: 24px;
-  /* Normal text flow inside the editor, which keeps white space */
+  /* Normal text flow inside the editor, which keeps white space; and the
+     title box's own width (its default columns) must not widen the editor
+     past a phone's screen, as for the Concepts panel */
   white-space: normal;
+  contain: inline-size;
 }
 .cm-has-properties .lens-page-header {
   padding-bottom: 8px;
