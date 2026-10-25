@@ -139,8 +139,11 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const stale = latest && c && JSON.stringify(latest.check) !== JSON.stringify(c);
   const color = COLORMAPS[cmap];
 
+  // contain:inline-size: the panel takes the editor's width and never sets it. Its one-line texts
+  // (truncated hints, the can't-save line) would otherwise widen CodeMirror's content to their
+  // full length, 700 px on a phone (Lauren, 2026-10-25).
   return (
-    <section className="mx-6 my-4 rounded-lg border border-gray-200 bg-white text-sm shadow-sm" data-testid="jev-check-panel"
+    <section className="mx-0 my-4 rounded-lg sm:mx-6 border border-gray-200 bg-white text-sm shadow-sm [contain:inline-size]" data-testid="jev-check-panel"
       onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); run(); } }}>
       <header className="flex items-baseline justify-between border-b border-gray-100 px-4 py-2.5">
         <span className="text-[13px] font-semibold text-gray-800">Jev check {c && <span className="font-normal text-gray-500">· {c.id}</span>}</span>
@@ -235,8 +238,9 @@ function DraftBar({ draft, problems, lastRun, onSave, onDiscard }: { draft: bool
       <div>{draft ? 'This file has a draft: Run tests it beside the live check.' : 'No draft: edits here make one beside the live check.'}
         {' '}Save makes it live: staging agents after the next content sync (about a minute), production after a promote.
         {draft && lastRun && <b> {lastRun}</b>}</div>
-      <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-red-800" title={problems.join('\n')}>
+      {/* On a phone the reason takes its own line above the buttons (always there, so nothing moves). */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="min-h-[1.25rem] w-full min-w-0 truncate text-red-800 sm:w-auto sm:flex-1" title={problems.join('\n')}>
           {draft && problems.length > 0 ? `can't save: ${problems[0]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}` : ''}</span>
         <button onClick={onDiscard} disabled={!draft} className="shrink-0 rounded border border-amber-300 px-3 py-1 hover:bg-amber-100 disabled:opacity-40">Discard draft</button>
         <button onClick={onSave} disabled={!draft || problems.length > 0}

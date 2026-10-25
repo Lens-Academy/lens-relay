@@ -18,7 +18,20 @@ interface SwipeOptions {
  * - strongly horizontal movement only (|dx| > 2.5|dy|), so scrolling wins
  * - ignored while text is selected (selection-handle drags stay intact)
  * - ignored when starting on the nav bar, edit toolbar, or an open dialog
+ * - ignored when the touch starts inside something that can still scroll sideways in the swipe's
+ *   direction (a wide table, a code block): that scroll wins (Lauren, 2026-10-25)
  */
+/** Whether `el` or an ancestor can scroll horizontally in the direction a finger moving `dx` drags. */
+export function scrollsSideways(el: Element | null, dx: number): boolean {
+  for (let x = el; x && x !== document.documentElement; x = x.parentElement) {
+    const ox = getComputedStyle(x).overflowX;
+    if ((ox !== 'auto' && ox !== 'scroll') || x.scrollWidth <= x.clientWidth + 1) continue;
+    // A finger moving left (dx < 0) reveals the right: room left to scroll right?
+    if (dx < 0 ? x.scrollLeft + x.clientWidth < x.scrollWidth - 1 : x.scrollLeft > 0) return true;
+  }
+  return false;
+}
+
 export function useEdgeSwipe({
   enabled,
   threshold = 60,
@@ -32,6 +45,7 @@ export function useEdgeSwipe({
     let startX = 0;
     let startY = 0;
     let fired = false;
+    let startTarget: Element | null = null;
 
     const onStart = (e: TouchEvent) => {
       fired = false;
@@ -41,6 +55,7 @@ export function useEdgeSwipe({
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed) return;
       tracking = true;
+      startTarget = target;
       startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;
     };
@@ -50,6 +65,7 @@ export function useEdgeSwipe({
       const dx = e.touches[0].clientX - startX;
       const dy = e.touches[0].clientY - startY;
       if (Math.abs(dx) < threshold || Math.abs(dx) < 2.5 * Math.abs(dy)) return;
+      if (scrollsSideways(startTarget, dx)) return;
       fired = true;
       if (dx > 0) onSwipeRight?.();
       else onSwipeLeft?.();

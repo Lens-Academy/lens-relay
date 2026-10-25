@@ -28,11 +28,12 @@ export function Field({ label, value, live, onCommit, hint, shape }: { label: st
   };
   return (
     <label className="block">
-      <span className="flex items-baseline justify-between text-[11px] font-medium uppercase tracking-wide text-gray-500">
-        <span>{label}{live !== undefined && live !== value && <span className="ml-2 rounded bg-amber-100 px-1 normal-case tracking-normal text-amber-800">draft</span>}</span>
+      {/* On a phone the warning takes its own line under the label. */}
+      <span className="flex flex-wrap items-baseline justify-between gap-x-3 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+        <span className="shrink-0">{label}{live !== undefined && live !== value && <span className="ml-2 rounded bg-amber-100 px-1 normal-case tracking-normal text-amber-800">draft</span>}</span>
         {/* Problems sit in this one line (full text on hover), so typing never moves the page. */}
         {(problems.length > 0 || hint) && (
-          <span className="ml-3 min-w-0 truncate normal-case tracking-normal text-amber-700" title={[...problems.map(([t, why]) => `${t}: ${why}`), ...(hint ? [hint] : [])].join('\n')}>
+          <span className="min-w-0 max-w-full truncate normal-case tracking-normal text-amber-700" title={[...problems.map(([t, why]) => `${t}: ${why}`), ...(hint ? [hint] : [])].join('\n')}>
             {problems.length ? `${problems[0][0]} ${problems[0][1]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}` : hint}</span>
         )}
       </span>

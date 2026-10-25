@@ -16,7 +16,7 @@ function LabelButtons({ run, item, labeler }: { run: Run; item: Para; labeler?: 
   if (!labeler) return null;
   const now = labelFor(labeler.labels, run.check.id, { path: item.path, unit: run.unit, text: item.text })?.label;
   return (
-    <span className="flex flex-col gap-0.5 self-start">
+    <span className="mt-1 flex gap-1">
       {MARK.map(([v, word, on]) => (
         <button key={v} onClick={() => labeler.onLabel(item, v)} title={`label: ${v === 'cant_tell' ? "can't tell" : v === 'fail' ? 'has the problem' : 'does not have it'}`}
           className={`rounded px-1.5 text-[10px] ring-1 ${now === v ? on : 'text-gray-400 ring-gray-200 hover:text-gray-700'}`}>{word}</button>
@@ -86,11 +86,10 @@ export function Percentiles({ run, pcts, color, labeler }: { run: Run; pcts: num
   return (
     <ol className="mt-4 divide-y divide-gray-100 border-t border-gray-100">
       {percentileRows(run.scored, pcts).map(({ at, item }) => (
-        <li key={`${at}-${item.id}`} className="grid grid-cols-[3.5rem_3.5rem_1fr_auto] gap-3 py-2">
-          <span className="font-mono text-[11px] text-gray-400">{at}</span>
-          <ScoreChip p={item.p} color={color} />
-          <ParaText para={item} />
-          <LabelButtons run={run} item={item} labeler={labeler} />
+        // Narrow first column (percentile over score), so the text gets the width on a phone.
+        <li key={`${at}-${item.id}`} className="grid grid-cols-[3.5rem_1fr] gap-3 py-2">
+          <span className="flex flex-col items-start gap-1"><ScoreChip p={item.p} color={color} /><span className="font-mono text-[10px] text-gray-400">at {at}</span></span>
+          <div className="min-w-0"><ParaText para={item} /><LabelButtons run={run} item={item} labeler={labeler} /></div>
         </li>
       ))}
     </ol>
@@ -108,10 +107,9 @@ export function BandList({ run, band, color, onClear, labeler }: { run: Run; ban
       </div>
       <ol className="divide-y divide-gray-100">
         {items.map((item) => (
-          <li key={item.id} className="grid grid-cols-[3.5rem_1fr_auto] gap-3 py-2">
+          <li key={item.id} className="grid grid-cols-[3.5rem_1fr] gap-3 py-2">
             <ScoreChip p={item.p} color={color} />
-            <ParaText para={item} />
-            <LabelButtons run={run} item={item} labeler={labeler} />
+            <div className="min-w-0"><ParaText para={item} /><LabelButtons run={run} item={item} labeler={labeler} /></div>
           </li>
         ))}
       </ol>
