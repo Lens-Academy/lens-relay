@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { StateEffect } from '@codemirror/state';
 import { createTestEditor } from '../../test/codemirror-helpers';
-import { revealFrontmatterPos } from '../Editor/extensions/frontmatter';
+import { setFrontmatterCollapsed } from '../Editor/extensions/frontmatter';
 import { panelHostField, setPanelHost } from './panelHost';
 
 describe('Concepts panel host widget', () => {
@@ -20,19 +20,19 @@ describe('Concepts panel host widget', () => {
   const before = (a: Node, b: Node) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
   const content = '---\ntitle: X\ntldr: Y\n---\n\nBody text';
 
-  it('sits above the collapsed frontmatter bar', () => {
+  it('sits above the hidden properties bar', () => {
     const { view, host } = editorWithPanel(content);
+    view.dispatch({ effects: setFrontmatterCollapsed.of(true) });
     const bar = view.contentDOM.querySelector('.cm-frontmatter-bar')!;
     expect(view.contentDOM.contains(host)).toBe(true);
     expect(before(host, bar)).toBe(true);
   });
 
-  it('sits above the expanded frontmatter header, not between it and the fields', () => {
+  it('sits above the properties, not between their lines', () => {
     const { view, host } = editorWithPanel(content);
-    revealFrontmatterPos(view, content.indexOf('title:'));
-    const header = view.contentDOM.querySelector('.cm-frontmatter-header')!;
-    expect(header).not.toBeNull();
-    expect(before(host, header)).toBe(true);
+    const first = view.contentDOM.querySelector('.cm-frontmatter-open')!;
+    expect(first).not.toBeNull();
+    expect(before(host, first)).toBe(true);
   });
 
   it('goes away when the host is cleared', () => {

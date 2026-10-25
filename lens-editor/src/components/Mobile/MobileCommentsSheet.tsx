@@ -98,7 +98,7 @@ export function MobileCommentsSheet(props: MobileCommentsSheetProps) {
               setAddFormKey(null);
               onAddCancel?.();
             }}
-            placeholder="Add a comment..."
+            placeholder="Add a comment…"
             submitLabel="Add"
             autoFocus
           />

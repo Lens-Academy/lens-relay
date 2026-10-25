@@ -85,6 +85,47 @@ test.describe('Typography', () => {
     expect(Math.abs(titleLeft - textLeft)).toBeLessThan(1);
   });
 
+  test('the page header is in the document, so it scrolls with it', async ({ page }) => {
+    expect(await page.evaluate(() => document.querySelector('.lens-doc-title')!.closest('.cm-content') !== null)).toBe(true);
+  });
+
+  test('properties are rows 38px apart: a 14px grey label, the value 168px after its icon', async ({ page }) => {
+    await expect(page.locator('.cm-frontmatter-row')).toHaveCount(4);
+    await expect(page.locator('.cm-frontmatter-key').first()).toHaveCSS('font-size', '14px');
+    await expect(page.locator('.cm-frontmatter-key').first()).toHaveCSS('color', 'rgb(125, 122, 117)');
+    const { gap, valueOffset } = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.cm-frontmatter-row')];
+      const icon = rows[0].querySelector('.cm-frontmatter-icon')!.getBoundingClientRect().left;
+      // The first value's first letter ("Draft")
+      const walker = document.createTreeWalker(rows[0], NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node && !node.textContent!.includes('Draft')) node = walker.nextNode();
+      const range = document.createRange();
+      const at = node!.textContent!.indexOf('Draft');
+      range.setStart(node!, at);
+      range.setEnd(node!, at + 1);
+      return {
+        gap: rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top,
+        valueOffset: range.getBoundingClientRect().left - icon,
+      };
+    });
+    expect(gap).toBe(38);
+    expect(Math.abs(valueOffset - 168)).toBeLessThan(1);
+  });
+
+  test("text a comment is on is marked in Notion's yellow", async ({ page }) => {
+    const target = page.locator('.cm-comment-target');
+    await expect(target).toHaveText('raises our chances the most');
+    await expect(target).toHaveCSS('background-color', 'rgba(255, 203, 0, 0.12)');
+    await expect(target).toHaveCSS('border-bottom', '2px solid rgba(255, 203, 0, 0.35)');
+  });
+
+  test("dark mode is Notion's dark page and text", async ({ page }) => {
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+    expect((await styleOf(page, 'We make quarterly priorities')).color).toBe('rgb(240, 239, 237)');
+    expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(25, 25, 25)');
+  });
+
   test('bullets are •, ◦, ▪ by depth, in the text colour', async ({ page }) => {
     await expect(page.locator('.cm-bullet')).toHaveText(['•', '•', '◦', '▪']);
     await expect(page.locator('.cm-bullet').first()).toHaveCSS('color', 'rgb(44, 44, 43)');

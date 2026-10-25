@@ -116,7 +116,8 @@ export function createSectionEditorView(opts: {
     ? [
         criticMarkupExtension({ canAcceptReject: true, commentBadgeMap }),
         commentOffsetTranslator.of((localPos) => offsetBase + localPos),
-        ...(onCommentClick ? [commentClickCallback.of(onCommentClick)] : []),
+        // Badge clicks only: the course editor's comments don't highlight text
+        ...(onCommentClick ? [commentClickCallback.of((absFrom, opts) => { if (!opts?.fromText) onCommentClick(absFrom); })] : []),
         keymap.of(criticMarkupKeymap),
       ]
     : [];

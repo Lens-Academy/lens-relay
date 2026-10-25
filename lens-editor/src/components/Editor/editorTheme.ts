@@ -25,9 +25,11 @@ export const editorTheme = EditorView.theme({
     overflow: 'auto',
     lineHeight: '1.5',
   },
+  // Notion's text column: 704px of text (760 minus the padding and
+  // CodeMirror's line insets)
   '.cm-content': {
     padding: '16px 24px 170px',
-    maxWidth: '700px',
+    maxWidth: '760px',
     marginLeft: 'auto',
     marginRight: 'auto',
   },
@@ -43,18 +45,37 @@ export const editorTheme = EditorView.theme({
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
     background: 'rgba(35, 131, 226, 0.28)',
   },
+  // The rest of CodeMirror's own colours as tokens, which dark mode sets
+  // (index.css): the selection while the editor isn't focused, the cursor
+  // and tooltips
+  '.cm-selectionBackground': {
+    background: 'var(--lens-selection-unfocused)',
+  },
+  '.cm-cursor, .cm-dropCursor': {
+    borderLeftColor: 'var(--lens-text)',
+  },
+  '.cm-tooltip': {
+    color: 'var(--lens-text)',
+    backgroundColor: 'var(--lens-popover-bg)',
+    borderColor: 'var(--lens-border)',
+  },
 });
+
+/** A default syntax colour, as a token that dark mode lightens (index.css) */
+const syntaxColor = (color: string) => `var(--lens-syntax-${color.slice(1)}, ${color})`;
 
 /**
  * Syntax styles for markdown pages: CodeMirror's defaults, but headings and
  * bold at Notion's semibold (600), and headings not underlined. With the
  * defaults, bold went from 600 to 700 while the cursor was in it (live
  * preview's .cm-strong is 600), and headings were 700 inside their 600 class.
+ * Colours are tokens with the defaults as fallbacks, for dark mode.
  */
 export const markdownHighlightStyle = HighlightStyle.define(
   defaultHighlightStyle.specs.map((spec) => {
-    if (spec.tag === tags.heading) return { ...spec, fontWeight: '600', textDecoration: 'none' };
-    if (spec.tag === tags.strong) return { ...spec, fontWeight: '600' };
-    return spec;
+    const themed = spec.color ? { ...spec, color: syntaxColor(spec.color) } : spec;
+    if (spec.tag === tags.heading) return { ...themed, fontWeight: '600', textDecoration: 'none' };
+    if (spec.tag === tags.strong) return { ...themed, fontWeight: '600' };
+    return themed;
   }),
 );

@@ -369,6 +369,40 @@ class ImageEmbedWidget extends WidgetType {
   }
 }
 
+/** Display names for common code fence languages; others show as written. */
+const CODE_LANGUAGE_NAMES: Record<string, string> = {
+  ts: 'TypeScript', typescript: 'TypeScript', tsx: 'TSX', js: 'JavaScript', javascript: 'JavaScript', jsx: 'JSX',
+  py: 'Python', python: 'Python', rs: 'Rust', rust: 'Rust', go: 'Go', java: 'Java', rb: 'Ruby', ruby: 'Ruby',
+  sh: 'Shell', bash: 'Bash', shell: 'Shell', zsh: 'Shell', ps1: 'PowerShell', powershell: 'PowerShell',
+  json: 'JSON', yaml: 'YAML', yml: 'YAML', toml: 'TOML', xml: 'XML', html: 'HTML', css: 'CSS', scss: 'SCSS',
+  sql: 'SQL', md: 'Markdown', markdown: 'Markdown', c: 'C', cpp: 'C++', cs: 'C#', csharp: 'C#',
+  kotlin: 'Kotlin', swift: 'Swift', php: 'PHP', r: 'R', diff: 'Diff', text: 'Plain text', txt: 'Plain text',
+};
+
+function codeLanguageName(info: string): string | null {
+  const lang = info.trim().split(/\s+/)[0];
+  if (!lang) return null;
+  return CODE_LANGUAGE_NAMES[lang.toLowerCase()] ?? lang;
+}
+
+/** The language label at the top of a code box (on its hidden opening fence line). */
+class CodeLanguageWidget extends WidgetType {
+  constructor(private readonly name: string) {
+    super();
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-code-language';
+    span.textContent = this.name;
+    return span;
+  }
+
+  eq(other: CodeLanguageWidget): boolean {
+    return this.name === other.name;
+  }
+}
+
 /** Bullet glyphs by nesting depth, as in Notion: disc, circle, square, repeating. */
 const BULLET_GLYPHS = ['\u2022', '\u25e6', '\u25aa'];
 
@@ -483,6 +517,13 @@ const obsidianCommentRangesField = StateField.define<readonly TextRange[]>({
   },
 });
 
+/** Markdown blocks that YAML in the frontmatter can look like, left unstyled there */
+const FRONTMATTER_SKIPPED_NODES = new Set([
+  'ATXHeading1', 'ATXHeading2', 'ATXHeading3', 'ATXHeading4', 'ATXHeading5', 'ATXHeading6',
+  'SetextHeading1', 'SetextHeading2', 'HeaderMark', 'HorizontalRule', 'Blockquote', 'QuoteMark',
+  'BulletList', 'OrderedList', 'ListItem', 'ListMark', 'Task', 'TaskMarker',
+]);
+
 /**
  * Check if pos is inside the leading --- frontmatter block (rendered by frontmatter.ts)
  */
@@ -560,6 +601,11 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       const obsidianCommentRanges = view.state.field(obsidianCommentRangesField);
       // Line numbers of horizontal rules, which the bullet validation below skips
       const hrLines = new Set<number>();
+      // Line numbers inside fenced code, whose blank lines keep their height
+      const codeLines = new Set<number>();
+      const doc = view.state.doc;
+      /** Whether line `n` exists and has text: a block boundary without a blank line. */
+      const hasText = (n: number) => n >= 1 && n <= doc.lines && doc.line(n).text.trim() !== '';
 
       // Iterate syntax tree within visible ranges only (performance)
       for (const { from, to } of view.visibleRanges) {
@@ -584,6 +630,11 @@ const livePreviewPlugin = ViewPlugin.fromClass(
           from,
           to,
           enter(node) {
+            // The frontmatter is the page's properties (frontmatter.ts): its
+            // YAML lines are not markdown headings, lists, rules or quotes,
+            // though links in them still render
+            if (FRONTMATTER_SKIPPED_NODES.has(node.name) && inFrontmatter(view, node.from)) return;
+
             // Headings: ALWAYS apply heading class for font sizing
             // # markers are hidden separately based on cursor position (HeaderMark below)
             if (node.name in HEADING_CLASSES) {
@@ -595,12 +646,17 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 // mark and renders at body size.
                 deco: Decoration.mark({ class: HEADING_CLASSES[node.name], inclusiveEnd: true }),
               });
-              // Add line decoration for heading top spacing (margin-top doesn't work on inline spans)
+              // Add line decoration for heading top spacing (margin-top doesn't work on inline spans).
+              // Notion keeps 16px between blocks, which a blank line gives; where a
+              // heading touches text above or below, its own padding gives it (index.css)
               const headingLine = view.state.doc.lineAt(node.from);
+              let headingCls = `cm-heading-line ${HEADING_CLASSES[node.name]}-line`;
+              if (hasText(headingLine.number - 1)) headingCls += ' cm-heading-after-text';
+              if (hasText(headingLine.number + 1)) headingCls += ' cm-heading-before-text';
               decorations.push({
                 from: headingLine.from,
                 to: headingLine.from,
-                deco: Decoration.line({ class: `cm-heading-line ${HEADING_CLASSES[node.name]}-line` }),
+                deco: Decoration.line({ class: headingCls }),
               });
             }
 
@@ -823,6 +879,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               const endLine = view.state.doc.lineAt(node.to).number;
               for (let ln = startLine; ln <= endLine; ln++) {
                 const line = view.state.doc.line(ln);
+                codeLines.add(ln);
                 let cls = 'cm-code-block';
                 if (ln === startLine) cls += ' cm-code-block-first';
                 if (ln === endLine) cls += ' cm-code-block-last';
@@ -842,6 +899,16 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                     from: openLine.from,
                     to: openLine.to,
                     deco: Decoration.mark({ class: HIDDEN_CLASS }),
+                  });
+                }
+                // The language, as Notion labels its code boxes
+                const info = node.node.getChild('CodeInfo');
+                const language = info ? codeLanguageName(view.state.doc.sliceString(info.from, info.to)) : null;
+                if (language) {
+                  decorations.push({
+                    from: openLine.from,
+                    to: openLine.from,
+                    deco: Decoration.widget({ widget: new CodeLanguageWidget(language), side: -1 }),
                   });
                 }
 
@@ -883,6 +950,25 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   });
                 }
               }
+            }
+
+            // A top-level list right after or before text (no blank line between):
+            // Notion's 16px between blocks comes from the list's own padding
+            if ((node.name === 'BulletList' || node.name === 'OrderedList') && node.node.parent?.name === 'Document') {
+              const first = doc.lineAt(node.from);
+              const last = doc.lineAt(node.to);
+              if (hasText(first.number - 1)) {
+                decorations.push({ from: first.from, to: first.from, deco: Decoration.line({ class: 'cm-list-after-text' }) });
+              }
+              if (hasText(last.number + 1)) {
+                decorations.push({ from: last.from, to: last.from, deco: Decoration.line({ class: 'cm-list-before-text' }) });
+              }
+            }
+
+            // Numbers of numbered lists sit in a column, as Notion's do, so their
+            // text lines up with bulleted lists' (index.css)
+            if (node.name === 'ListMark' && node.node.parent?.parent?.name === 'OrderedList') {
+              decorations.push({ from: node.from, to: node.to, deco: Decoration.mark({ class: 'cm-list-number' }) });
             }
 
             // ListMark in bullet lists: replace with dot widget when cursor not touching
@@ -1031,6 +1117,18 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         });
       }
 
+      // Blank lines between blocks draw at Notion's 16px gap between paragraphs
+      // rather than as a full row (index.css), except inside code and frontmatter
+      for (const { from, to } of view.visibleRanges) {
+        for (let pos = from; pos <= to; ) {
+          const line = doc.lineAt(pos);
+          pos = line.to + 1;
+          if (line.text.trim() === '' && !codeLines.has(line.number) && !inFrontmatter(view, line.from)) {
+            decorations.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'cm-blank-line' }) });
+          }
+        }
+      }
+
       // Obsidian-compatible bullet validation.
       // Lezer's list parser doesn't match Obsidian's rules: it may render bullets
       // that Obsidian wouldn't (e.g. indented `- ` after blank line + non-bullet text)
@@ -1048,7 +1146,6 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         }
       });
 
-      const doc = view.state.doc;
       const removeDeco = new Set<number>();
 
       for (const { from, to } of view.visibleRanges) {
@@ -1059,8 +1156,9 @@ const livePreviewPlugin = ViewPlugin.fromClass(
           const match = line.text.match(/^(\t*)- /);
           if (!match) continue;
 
-          // Skip horizontal rules such as `- - -` (handled above)
-          if (hrLines.has(line.number)) continue;
+          // Skip horizontal rules such as `- - -` (handled above), and YAML
+          // list items in the frontmatter
+          if (hrLines.has(line.number) || inFrontmatter(view, line.from)) continue;
 
           // Skip task list items (handled by checklist code)
           if (/^(\t*)- \[[ x]\] /i.test(line.text)) continue;

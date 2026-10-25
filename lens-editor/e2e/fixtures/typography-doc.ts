@@ -1,7 +1,16 @@
 /** A page with every element the editor styles, for typography screenshots. */
-export const typographyDoc = `# Q4 operating plan
+export const typographyDoc = `---
+status: Draft
+owner: Mark
+review: 2026-10-30
+tags:
+  - okrs
+  - planning
+---
 
-We make quarterly priorities based on the **main risks** we see at each stage of our org's development. Solving the main reasons we might fail raises our chances the most, so we keep them *in view* and ~~guess~~ check them every week. Read the [OKR source](https://example.com/okrs) or the [[Pitch]] doc, and run \`npm run dev\` to try it.
+# Q4 operating plan
+
+We make quarterly priorities based on the **main risks** we see at each stage of our org's development. Solving the main reasons we might fail {==raises our chances the most==}{>>{"author":"Mark","timestamp":1792700000000}@@Is this true for growth too?<<}, so we keep them *in view* and ~~guess~~ check them every week. Read the [OKR source](https://example.com/okrs) or the [[Pitch]] doc, and run \`npm run dev\` to try it.
 
 ## Key results
 

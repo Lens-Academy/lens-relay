@@ -946,5 +946,35 @@ describe('CriticMarkup Extension', () => {
       badge.click();
       expect(receivedFrom).toBe(6); // thread.from
     });
+
+    it('marks the text a comment follows as what it is on, which opens the thread when clicked', () => {
+      const calls: Array<[number, unknown]> = [];
+      const doc = 'see {==this part==}{>>a comment<<} end';
+      const state = EditorState.create({
+        doc,
+        selection: { anchor: 0 },
+        extensions: [
+          markdown(),
+          criticMarkupExtension(),
+          commentClickCallback.of((absFrom, opts) => { calls.push([absFrom, opts]); }),
+        ],
+      });
+      const view = new EditorView({ state, parent: document.body });
+      cleanup = () => view.destroy();
+
+      const target = view.contentDOM.querySelector('.cm-comment-target') as HTMLElement;
+      expect(target.textContent).toBe('this part');
+      expect(target.dataset.commentFrom).toBe(String(doc.indexOf('{>>')));
+      target.click();
+      expect(calls).toEqual([[doc.indexOf('{>>'), { fromText: true }]]);
+    });
+
+    it('leaves a highlight without a comment a plain highlight', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor('see {==this part==} end', 0);
+      cleanup = c;
+
+      expect(view.contentDOM.querySelector('.cm-highlight')?.textContent).toBe('this part');
+      expect(view.contentDOM.querySelector('.cm-comment-target')).toBeNull();
+    });
   });
 });

@@ -1,17 +1,138 @@
 @import "tailwindcss";
 
-/* Page typography, after Notion's (measured on a live Notion page, Oct 2026):
-   the system font stack (Segoe UI on Windows, SF on Mac), warm near-black
-   text, and colours from Notion's palette. Used by the editor theme
-   (editorTheme.ts), the document title and the rules below. */
+/* Tailwind's dark: variant follows the app's appearance setting (lib/theme.ts
+   sets data-theme on <html>), not only the computer's */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* Page typography and colours, after Notion's (measured on live Notion
+   pages, Oct 2026): the system font stack (Segoe UI on Windows, SF on Mac),
+   warm near-black text, and Notion's palette, light and dark. Used by the
+   editor theme (editorTheme.ts), the page header and the rules below. */
 :root {
+  --lens-page-bg: #fff;
   --lens-font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
   --lens-font-mono: "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace;
   --lens-text: #2c2c2b;
   --lens-text-secondary: #7d7a75;
   --lens-text-tertiary: #a19e99;
+  --lens-placeholder: rgba(21, 14, 0, 0.286);
+  --lens-icon: #383836;
+  --lens-icon-secondary: #8e8b86;
   --lens-divider: rgba(28, 19, 1, 0.11);
-  --lens-link: #2563eb;
+  --lens-properties-divider: rgba(55, 53, 47, 0.09);
+  --lens-link-underline: rgba(55, 53, 47, 0.4);
+  --lens-mention-underline: rgba(55, 53, 47, 0.25);
+  --lens-hover-bg: rgba(33, 27, 23, 0.05);
+  --lens-pressed-bg: rgba(33, 27, 23, 0.1);
+  --lens-pill-bg: rgba(42, 28, 0, 0.07);
+  --lens-border: #e6e5e3;
+  --lens-border-secondary: #f0efed;
+  --lens-border-strong: #d4d3cf;
+  --lens-blue: #2783de;
+  --lens-selection-unfocused: #d9d9d9;
+  --lens-inline-code-bg: rgba(33, 27, 23, 0.05);
+  --lens-code-block-bg: rgba(66, 35, 3, 0.03);
+  --lens-checkbox-border: #383836;
+  --lens-table-border: #e6e5e3;
+  --lens-table-header-bg: #f7f6f3;
+  --lens-table-row-hover: #f9f8f7;
+  /* Notion's background colours (callouts, tags) */
+  --lens-bg-gray: rgba(42, 28, 0, 0.07);
+  --lens-bg-brown: rgba(139, 46, 0, 0.086);
+  --lens-bg-orange: rgba(224, 101, 1, 0.129);
+  --lens-bg-yellow: rgba(211, 168, 0, 0.137);
+  --lens-bg-green: rgba(0, 100, 45, 0.09);
+  --lens-bg-blue: rgba(0, 124, 215, 0.094);
+  --lens-bg-purple: rgba(102, 0, 178, 0.078);
+  --lens-bg-pink: rgba(197, 0, 93, 0.086);
+  --lens-bg-red: rgba(223, 22, 0, 0.094);
+  /* Suggested additions and deletions */
+  --lens-addition-text: #15803d;
+  --lens-deletion-text: #b91c1c;
+  /* Comment cards (components/Comments) */
+  --lens-card-border: rgba(42, 28, 0, 0.07);
+  --lens-card-hover-bg: #f9f9f8;
+  --lens-card-open-bg: #fff;
+  --lens-card-shadow: 0 0 0 1px rgba(15, 15, 15, 0.04), 0 3px 6px rgba(15, 15, 15, 0.04), 0 9px 24px rgba(15, 15, 15, 0.08);
+  /* Notion's comment icon, a speech bubble, as a mask for icons in CSS */
+  --lens-comment-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.3' stroke-linejoin='round'%3E%3Cpath d='M3.5 2.75h9a1.75 1.75 0 0 1 1.75 1.75v5.5A1.75 1.75 0 0 1 12.5 11.75H8.5l-3 2.5v-2.5h-2A1.75 1.75 0 0 1 1.75 10V4.5A1.75 1.75 0 0 1 3.5 2.75Z'/%3E%3C/svg%3E");
+  --lens-popover-bg: #fff;
+  --lens-popover-shadow: 0 0 0 1px rgba(15, 15, 15, 0.05), 0 3px 6px rgba(15, 15, 15, 0.1), 0 9px 24px rgba(15, 15, 15, 0.2);
+  --lens-input-bg: rgba(242, 241, 238, 0.6);
+  --lens-input-border: rgba(15, 15, 15, 0.1);
+  /* The app around the page: Notion's sidebar and top bar */
+  --lens-sidebar-bg: #f9f8f7;
+  --lens-sidebar-edge: #f0efed;
+  --lens-sidebar-text: #5f5e59;
+  --lens-sidebar-icon: #91918e;
+  --lens-topbar-bg: #fff;
+}
+
+/* Notion's dark theme: the same tokens in its dark values (and the syntax
+   colours of code, which editorTheme.ts reads from --lens-syntax-*) */
+:root[data-theme=dark] {
+  --lens-page-bg: #191919;
+  --lens-text: #f0efed;
+  --lens-text-secondary: #ada9a3;
+  --lens-text-tertiary: #7d7a75;
+  --lens-placeholder: rgba(255, 252, 235, 0.306);
+  --lens-icon: #e6e5e3;
+  --lens-icon-secondary: #ada9a3;
+  --lens-divider: rgba(255, 255, 235, 0.1);
+  --lens-properties-divider: rgba(255, 255, 255, 0.094);
+  --lens-link-underline: rgba(255, 255, 255, 0.282);
+  --lens-mention-underline: rgba(255, 255, 255, 0.2);
+  --lens-hover-bg: rgba(255, 255, 255, 0.055);
+  --lens-pressed-bg: rgba(255, 255, 255, 0.11);
+  --lens-pill-bg: rgba(255, 255, 235, 0.1);
+  --lens-border: #383836;
+  --lens-border-secondary: #2c2c2b;
+  --lens-border-strong: #5f5e59;
+  --lens-selection-unfocused: rgba(255, 255, 255, 0.12);
+  --lens-inline-code-bg: rgba(255, 255, 255, 0.055);
+  --lens-code-block-bg: rgba(252, 252, 252, 0.03);
+  --lens-checkbox-border: #e6e5e3;
+  --lens-table-border: #383836;
+  --lens-table-header-bg: rgba(255, 255, 255, 0.03);
+  --lens-table-row-hover: rgba(255, 255, 255, 0.03);
+  --lens-bg-gray: rgba(255, 255, 235, 0.1);
+  --lens-bg-brown: rgba(255, 177, 129, 0.192);
+  --lens-bg-orange: rgba(255, 147, 75, 0.278);
+  --lens-bg-yellow: rgba(255, 205, 75, 0.239);
+  --lens-bg-green: rgba(108, 255, 172, 0.157);
+  --lens-bg-blue: rgba(67, 155, 255, 0.239);
+  --lens-bg-purple: rgba(200, 125, 255, 0.2);
+  --lens-bg-pink: rgba(255, 103, 177, 0.231);
+  --lens-bg-red: rgba(255, 104, 92, 0.239);
+  --lens-addition-text: #6fd396;
+  --lens-deletion-text: #ff8a80;
+  --lens-card-border: rgba(255, 255, 243, 0.082);
+  --lens-card-hover-bg: #202020;
+  --lens-card-open-bg: #252525;
+  --lens-card-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 3px 6px rgba(0, 0, 0, 0.25), 0 9px 24px rgba(0, 0, 0, 0.4);
+  --lens-popover-bg: #252525;
+  --lens-popover-shadow: 0 0 0 1px rgba(255, 255, 255, 0.094), 0 3px 6px rgba(0, 0, 0, 0.25), 0 9px 24px rgba(0, 0, 0, 0.45);
+  --lens-input-bg: rgba(255, 255, 255, 0.055);
+  --lens-input-border: rgba(255, 255, 255, 0.094);
+  --lens-sidebar-bg: #202020;
+  --lens-sidebar-edge: #2c2c2b;
+  --lens-sidebar-text: #bcbab6;
+  --lens-sidebar-icon: #9b9b9b;
+  --lens-topbar-bg: #191919;
+  --lens-syntax-708: #c792ea;
+  --lens-syntax-219: #7fb4ff;
+  --lens-syntax-164: #9ece6a;
+  --lens-syntax-a11: #f28b82;
+  --lens-syntax-e40: #f6a35c;
+  --lens-syntax-00f: #82aaff;
+  --lens-syntax-30a: #b4a7ff;
+  --lens-syntax-085: #4ec9b0;
+  --lens-syntax-167: #56b6c2;
+  --lens-syntax-256: #7fb8d8;
+  --lens-syntax-00c: #82aaff;
+  --lens-syntax-940: #a8a29a;
+  --lens-syntax-f00: #ff6b6b;
+  --lens-syntax-404740: #9ba39b;
 }
 
 /* Document title above the editor (DocumentTitle.tsx): Notion's page title.
@@ -26,11 +147,191 @@
   padding: 0 6px;
 }
 
+/* Page header (DocumentTitle.tsx) at the top of the document, which it
+   scrolls with: Notion's page without a cover. The icon is 96px down, or
+   without one the row where "Add icon" shows is 80px down (each less the
+   editor's 16px top padding); the title is 12px under an icon, 4px under the
+   row, and 24px above the text, or 8px above properties. */
+.lens-page-header {
+  padding-bottom: 24px;
+  /* Normal text flow inside the editor, which keeps white space */
+  white-space: normal;
+}
+.cm-has-properties .lens-page-header {
+  padding-bottom: 8px;
+}
+
+/* Page icon: Notion's 78px emoji, which people who can edit click to change */
+.lens-page-icon {
+  display: block;
+  margin: 80px 0 12px 2px;
+  padding: 0 4px;
+  font-size: 78px;
+  line-height: 1.1;
+  border-radius: 6px;
+}
+.lens-page-icon:not(:disabled):hover {
+  background: var(--lens-hover-bg);
+  cursor: pointer;
+}
+/* "Add icon", shown while the pointer is over the header, as in Notion; its
+   row's space is always kept */
+.lens-page-controls {
+  display: flex;
+  height: 28px;
+  margin: 64px 0 4px -2px;
+  opacity: 0;
+  transition: opacity 100ms;
+}
+.lens-page-header:hover .lens-page-controls,
+.lens-page-controls:focus-within {
+  opacity: 1;
+}
+@media (hover: none) {
+  .lens-page-controls { opacity: 1; }
+}
+.lens-page-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 14px;
+  color: var(--lens-text-tertiary);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lens-page-control:hover {
+  background: var(--lens-hover-bg);
+}
+/* Phones: Notion's smaller header */
+@media not all and (min-width: 500px) {
+  .lens-page-icon { margin-top: 24px; font-size: 64px; }
+  .lens-page-controls { margin-top: 12px; }
+}
+
+/* "Show on Lensacademy.org" and "Open in Course Editor" beside the title */
+.lens-page-link {
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  color: var(--lens-text-tertiary);
+}
+.lens-page-link:hover {
+  color: var(--lens-text-secondary);
+  text-decoration: underline;
+}
+
+/* Notion-style UI pieces: a popover menu, its buttons, labels and search
+   input (the emoji picker; menus can share them) */
+@layer components {
+  .lens-popover {
+    background: var(--lens-popover-bg);
+    color: var(--lens-text);
+    border-radius: 10px;
+    box-shadow: var(--lens-popover-shadow);
+  }
+  .lens-menu-button {
+    border-radius: 6px;
+    color: var(--lens-text);
+    cursor: pointer;
+  }
+  .lens-menu-button:hover {
+    background: var(--lens-hover-bg);
+  }
+  .lens-menu-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--lens-text-secondary);
+  }
+  /* A menu item: icon, label and an optional grey description */
+  .lens-menu-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    width: 100%;
+    padding: 6px 8px;
+    text-align: left;
+    color: var(--lens-text);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .lens-menu-item:hover,
+  .lens-menu-item.is-active {
+    background: var(--lens-hover-bg);
+  }
+  .lens-menu-item-compact {
+    align-items: center;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  .lens-menu-item-icon {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    color: var(--lens-icon);
+  }
+  .lens-menu-item-description {
+    display: block;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--lens-text-secondary);
+  }
+  .lens-menu-divider {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--lens-divider);
+  }
+  /* Notion's icon button: 28px, no border, a grey background on hover */
+  .lens-icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    color: var(--lens-icon);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .lens-icon-button:hover {
+    background: var(--lens-hover-bg);
+  }
+  .lens-input {
+    padding: 4px 8px;
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--lens-text);
+    background: var(--lens-input-bg);
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 1px var(--lens-input-border);
+    outline: none;
+  }
+  .lens-input:focus {
+    box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.57), 0 0 0 2px rgba(35, 131, 226, 0.2);
+  }
+  .lens-emoji-button {
+    width: 32px;
+    height: 32px;
+    font-size: 24px;
+    line-height: 32px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .lens-emoji-button:hover {
+    background: var(--lens-hover-bg);
+  }
+}
+
 /* Live Preview Styles for CodeMirror */
 
 /* Hidden syntax markers - using font-size: 0 preserves cursor positions better than display: none */
 .cm-hidden-syntax {
   font-size: 0;
+  /* No height either, in lines with a fixed line height (dividers) */
+  line-height: 0;
 }
 
 /* Heading styles - progressively smaller sizes matching Obsidian */
@@ -94,13 +395,28 @@
 }
 
 /* Heading line spacing — padding-top on .cm-line since headings are inline spans.
-   Needs .cm-line prefix to beat CodeMirror's .ͼ1 .cm-line specificity. */
-.cm-line.cm-heading-1-line { padding-top: 1.25rem; }
-.cm-line.cm-heading-2-line { padding-top: 1rem; }
-.cm-line.cm-heading-3-line { padding-top: 0.75rem; }
-.cm-line.cm-heading-4-line { padding-top: 0.5rem; }
-.cm-line.cm-heading-5-line { padding-top: 0.5rem; }
-.cm-line.cm-heading-6-line { padding-top: 0.5rem; }
+   Needs .cm-line prefix to beat CodeMirror's .ͼ1 .cm-line specificity.
+   Notion's space above a heading: 40, 36, 32, 28px from the text before it
+   (H1-H4); a blank line before it (16px, below) gives part of that. Below a
+   heading Notion leaves 16px, which a blank line after it gives, or else the
+   heading's own padding. livePreview.ts marks headings that touch text. */
+.cm-line.cm-heading-1-line { padding-top: 24px; }
+.cm-line.cm-heading-2-line { padding-top: 20px; }
+.cm-line.cm-heading-3-line { padding-top: 16px; }
+.cm-line.cm-heading-4-line,
+.cm-line.cm-heading-5-line,
+.cm-line.cm-heading-6-line { padding-top: 12px; }
+.cm-line.cm-heading-1-line.cm-heading-after-text { padding-top: 40px; }
+.cm-line.cm-heading-2-line.cm-heading-after-text { padding-top: 36px; }
+.cm-line.cm-heading-3-line.cm-heading-after-text { padding-top: 32px; }
+.cm-line.cm-heading-4-line.cm-heading-after-text,
+.cm-line.cm-heading-5-line.cm-heading-after-text,
+.cm-line.cm-heading-6-line.cm-heading-after-text { padding-top: 28px; }
+.cm-line.cm-heading-line.cm-heading-before-text { padding-bottom: 16px; }
+
+/* A blank line between blocks is Notion's 16px gap between paragraphs, not a
+   full 24px row (livePreview.ts marks them; not in code or frontmatter) */
+.cm-content .cm-line.cm-blank-line { line-height: 16px; }
 
 /* Horizontal rule (---, ***, ___) — livePreview.ts marks the line and hides
    the characters. The rule is a background band across the line's text
@@ -115,6 +431,8 @@
   background-size: 100% 1px;
   background-repeat: no-repeat;
 }
+/* Notion's divider block is 13px tall (the line only, not a row of text) */
+.cm-content .cm-line.cm-hr-line { line-height: 13px; }
 
 /* Blockquote — Notion's quote: a 3px bar in the text colour and the text at
    normal size and colour, so it doesn't read like a greyed-out %%comment%%.
@@ -146,13 +464,13 @@
   border-bottom-right-radius: 10px;
   padding-bottom: 12px;
 }
-.cm-callout { --callout-color: #387dc9; --callout-bg: rgba(0, 124, 215, 0.094); } /* note, info, todo, abstract, unknown: blue */
-.cm-callout-tip, .cm-callout-success { --callout-color: #50946e; --callout-bg: rgba(0, 100, 45, 0.09); } /* green */
-.cm-callout-question { --callout-color: #cb9434; --callout-bg: rgba(211, 168, 0, 0.137); } /* yellow */
-.cm-callout-warning { --callout-color: #d27b2d; --callout-bg: rgba(224, 101, 1, 0.129); } /* orange */
-.cm-callout-failure, .cm-callout-danger, .cm-callout-bug { --callout-color: #cf5148; --callout-bg: rgba(223, 22, 0, 0.094); } /* red */
-.cm-callout-example { --callout-color: #9a6bb4; --callout-bg: rgba(102, 0, 178, 0.078); } /* purple */
-.cm-callout-quote { --callout-color: #7d7a75; --callout-bg: rgba(42, 28, 0, 0.07); } /* grey */
+.cm-callout { --callout-color: #387dc9; --callout-bg: var(--lens-bg-blue); } /* note, info, todo, abstract, unknown: blue */
+.cm-callout-tip, .cm-callout-success { --callout-color: #50946e; --callout-bg: var(--lens-bg-green); } /* green */
+.cm-callout-question { --callout-color: #cb9434; --callout-bg: var(--lens-bg-yellow); } /* yellow */
+.cm-callout-warning { --callout-color: #d27b2d; --callout-bg: var(--lens-bg-orange); } /* orange */
+.cm-callout-failure, .cm-callout-danger, .cm-callout-bug { --callout-color: #cf5148; --callout-bg: var(--lens-bg-red); } /* red */
+.cm-callout-example { --callout-color: #9a6bb4; --callout-bg: var(--lens-bg-purple); } /* purple */
+.cm-callout-quote { --callout-color: #7d7a75; --callout-bg: var(--lens-bg-gray); } /* grey */
 .cm-callout-title {
   color: var(--callout-color);
   font-weight: 600;
@@ -178,26 +496,24 @@
 
 /* Hashtags are styled pills only; they have no click or hover behavior. */
 .cm-hashtag {
-  color: #7c3aed;
-  background-color: #f3e8ff;
+  /* Notion's purple */
+  color: #9a6bb4;
+  background-color: var(--lens-bg-purple);
   padding: 0.05em 0.35em;
   border-radius: 0.35em;
   font-weight: 500;
 }
 
-/* Link widget — a blue link with Notion's thin, light underline, which gets
-   solid on hover */
+/* Link widget — Notion's link: the text colour at 70%, with a thin, light
+   underline */
 .cm-link-widget {
-  color: var(--lens-link);
+  color: inherit;
+  opacity: 0.7;
   text-decoration: underline;
   text-decoration-thickness: 1px;
-  text-decoration-color: rgba(37, 99, 235, 0.4);
+  text-decoration-color: var(--lens-link-underline);
   text-underline-offset: 10%;
   cursor: pointer;
-}
-.cm-link-widget:hover {
-  color: #1d4ed8;
-  text-decoration-color: currentColor;
 }
 
 /* Wikilink widget — a link to another doc, in Notion's style for links to
@@ -207,7 +523,7 @@
   font-weight: 500;
   text-decoration: underline;
   text-decoration-thickness: 1px;
-  text-decoration-color: rgba(55, 53, 47, 0.25);
+  text-decoration-color: var(--lens-mention-underline);
   text-underline-offset: 10%;
   cursor: pointer;
 }
@@ -243,7 +559,7 @@
   gap: 8px;
   font-size: 12px;
   line-height: 1.6;
-  color: #9ca3af;
+  color: var(--lens-text-tertiary);
 }
 .cm-note-embed-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cm-note-embed-hint { margin-left: auto; white-space: nowrap; opacity: 0; transition: opacity 0.15s; }
@@ -303,7 +619,7 @@
 .cm-image-loading {
   display: inline-block;
   padding: 0.5em 1em;
-  color: #9ca3af;
+  color: var(--lens-text-tertiary);
   font-style: italic;
   font-size: 0.875em;
   line-height: normal;
@@ -320,10 +636,11 @@
 
 /* Wikilink autocomplete popup */
 .cm-tooltip-autocomplete {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  color: var(--lens-text);
+  background: var(--lens-popover-bg);
+  border: none;
+  border-radius: 10px;
+  box-shadow: var(--lens-popover-shadow);
   overflow: hidden;
 }
 
@@ -339,8 +656,8 @@
 }
 
 .cm-tooltip-autocomplete li[aria-selected="true"] {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: var(--lens-hover-bg);
+  color: var(--lens-text);
 }
 
 .cm-tooltip-autocomplete .cm-completionLabel {
@@ -363,7 +680,7 @@
 /* Inline code — Notion's: red monospace at 85% on a faint warm grey */
 .cm-inline-code {
   color: #cf5148;
-  background-color: rgba(33, 27, 23, 0.05);
+  background-color: var(--lens-inline-code-bg);
   border-radius: 4px;
   padding: 0.2em 0.4em;
   font-family: var(--lens-font-mono);
@@ -374,7 +691,7 @@
    grey with round corners. The (hidden) fence lines are its top and bottom
    padding. .cm-content raises the rule above CodeMirror's own line padding. */
 .cm-content .cm-line.cm-code-block {
-  background-color: rgba(66, 35, 3, 0.03);
+  background-color: var(--lens-code-block-bg);
   font-family: var(--lens-font-mono);
   font-size: 85%;
   padding: 0 16px;
@@ -387,15 +704,33 @@
   border-bottom-left-radius: 10px;
   border-bottom-right-radius: 10px;
 }
+/* The language label at the top left of the box, as Notion has */
+.cm-code-language {
+  font-family: var(--lens-font-sans);
+  font-size: 12px;
+  color: var(--lens-text-secondary);
+  user-select: none;
+}
 
 /* Bullet list dot — Notion's bullets: in the text colour, one and a half
-   times the text size, and •, ◦, ▪ by nesting depth (livePreview.ts). The
-   line height of 0 keeps the larger glyph from making the line taller. */
+   times the text size, and •, ◦, ▪ by nesting depth (livePreview.ts), centred
+   in a 24px column. The line height of 0 keeps the larger glyph from making
+   the line taller. */
 .cm-bullet {
+  display: inline-block;
+  width: 1em;
+  text-align: center;
   color: var(--lens-text);
   font-size: 1.5em;
   line-height: 0;
   vertical-align: -0.1em;
+}
+
+/* Number of a numbered list item: in the same 24px column, so numbered and
+   bulleted items' text lines up, as in Notion */
+.cm-list-number {
+  display: inline-block;
+  min-width: 24px;
 }
 
 /* List hanging indent — wrapped rows of a list item start under the item's
@@ -410,6 +745,10 @@
   padding-top: 3px;
   padding-bottom: 3px;
 }
+/* A list touching text above or below it (no blank line between): Notion's
+   16px between blocks (livePreview.ts marks these lines) */
+.cm-content .cm-line.cm-list-line.cm-list-after-text { padding-top: 16px; }
+.cm-content .cm-line.cm-list-line.cm-list-before-text { padding-bottom: 16px; }
 .cm-content .cm-line.cm-blockquote.cm-list-line {
   padding-left: calc(var(--quote-pad) + var(--list-hang)) !important;
 }
@@ -428,6 +767,9 @@
 .cm-list-indent {
   display: inline-block;
   white-space: pre;
+  /* Each level indents 30px, so a nested item starts under its parent's
+     text, as in Notion */
+  tab-size: 30px;
 }
 
 /* Checklist checkbox — Notion's: a 16px square with a dark 1.5px border,
@@ -439,10 +781,11 @@
   vertical-align: middle;
   position: relative;
   top: -1.5px;
-  margin: 0 6px 0 0;
+  /* In Notion's 24px marker column, with the text 6px after it */
+  margin: 0 10px 0 4px;
   width: 16px;
   height: 16px;
-  border: 1.5px solid #383836;
+  border: 1.5px solid var(--lens-checkbox-border);
   border-radius: 1.5px;
   background: transparent;
 }
@@ -459,67 +802,18 @@
 /* Completed task — Notion's: struck through and faded */
 .cm-task-completed {
   text-decoration: line-through;
-  text-decoration-color: rgba(44, 44, 43, 0.5);
+  text-decoration-color: color-mix(in srgb, var(--lens-text) 50%, transparent);
   opacity: 0.7;
 }
 
-/* Frontmatter — bar (collapsed state + expanded header) */
-.cm-frontmatter-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  background-color: #f9fafb;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.cm-frontmatter-bar:hover {
-  background-color: #f3f4f6;
-}
-
-.cm-frontmatter-chevron {
-  color: #9ca3af;
-  font-size: 11px;
-  line-height: 1;
-  transition: transform 0.15s ease;
-}
-
-.cm-frontmatter-chevron-open {
-  transform: rotate(90deg);
-}
-
-.cm-frontmatter-label {
-  color: #9ca3af;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-/* Frontmatter — pending-suggestions badge on the collapsed bar */
-.cm-frontmatter-suggestions-badge {
-  color: #92400e;
-  background-color: #fef3c7;
-  border-radius: 9999px;
-  padding: 1px 8px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-/* Frontmatter — expanded header (widget above raw text) */
-.cm-frontmatter-header {
-  border-radius: 6px 6px 0 0;
-  border-bottom: none;
-}
-
-/* Frontmatter — expanded line decorations on raw text */
+/* Frontmatter as Notion's page properties (extensions/frontmatter.ts): a
+   34px row per key, 4px apart, the key in grey after its icon in Notion's
+   160px label column and the value after it, at 14px. The opening --- is a
+   sliver above the rows and the closing --- is the divider under them.
+   .cm-content .cm-line beats CodeMirror's own line padding. */
 .cm-frontmatter-line {
-  background-color: rgba(249, 250, 251, 0.85);
-  font-size: 13px;
-  /* Reset CM's default .cm-line left padding so all frontmatter lines
-     align at 0; key-value lines override with inline padding for wrapping */
-  padding-left: 0 !important;
+  font-size: 14px;
+  line-height: 21px;
   /* Override any markdown styling within frontmatter */
   font-weight: normal !important;
   font-style: normal !important;
@@ -527,41 +821,76 @@
 }
 
 /* Kill bold/italic/underline on all children within frontmatter lines */
-.cm-frontmatter-line span {
+.cm-frontmatter-line span:not(.cm-frontmatter-bad-indent) {
   font-weight: normal !important;
   font-style: normal !important;
   text-decoration: none !important;
 }
 
-.cm-frontmatter-line-first {
-  border-top: 1px solid #e5e7eb;
+/* font-size 0: no room kept for text, whose baseline is lower than 2px */
+.cm-content .cm-line.cm-frontmatter-open { font-size: 0; line-height: 2px; }
+.cm-content .cm-line.cm-frontmatter-row { padding-top: 9px; padding-bottom: 8px; }
+/* A key whose value is the list under it, and the list's lines */
+.cm-content .cm-line.cm-frontmatter-row-items { padding-bottom: 2px; }
+.cm-content .cm-line.cm-frontmatter-more { padding-top: 2px; padding-bottom: 2px; }
+.cm-content .cm-line.cm-frontmatter-more-last { padding-bottom: 8px; }
+
+/* The divider under the properties: 12px from the last row and from the
+   text after it (with the blank line that usually follows, Notion's 28px) */
+.cm-content .cm-line.cm-frontmatter-close {
+  position: relative;
+  line-height: 25px;
+  background-image: linear-gradient(var(--lens-properties-divider), var(--lens-properties-divider));
+  background-origin: content-box;
+  background-position: center;
+  background-size: 100% 1px;
+  background-repeat: no-repeat;
 }
 
-.cm-frontmatter-line-last {
-  border-bottom: 1px solid #e5e7eb;
-  border-radius: 0 0 6px 6px;
-}
-
-/* Hide --- delimiters */
-.cm-frontmatter-delimiter {
+/* Hide --- delimiters, and a row's ": ", quotes and list dashes while the
+   cursor is not on it */
+.cm-frontmatter-delimiter,
+.cm-frontmatter-hidden {
   font-size: 0;
+  line-height: 0;
 }
 
-
-/* Key name and incomplete key (no colon yet) */
+/* Label: the key in Notion's secondary grey, after its 16px icon at
+   Notion's 1.2 scale */
 .cm-frontmatter-key,
 .cm-frontmatter-key-incomplete {
-  color: #6b7280;
+  color: var(--lens-text-secondary);
 }
+.cm-frontmatter-icon {
+  display: inline-block;
+  width: 19.2px;
+  height: 19.2px;
+  margin-right: 6px;
+  vertical-align: -4.5px;
+  color: var(--lens-icon-secondary);
+}
+.cm-frontmatter-icon svg { display: block; }
 
-/* Colon + space */
+/* The raw ": " and list dashes on the row being edited */
 .cm-frontmatter-colon {
-  color: #d1d5db;
+  color: var(--lens-text-tertiary);
 }
 
-/* Continuation lines (YAML lists, multi-line values) */
+/* Notion's "Empty" in a property without a value */
+.cm-frontmatter-empty {
+  color: var(--lens-text-tertiary);
+}
+
+/* A list item under a key: Notion's multi-select pill */
+.cm-frontmatter-pill {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: var(--lens-pill-bg);
+}
+
+/* Continuation lines (multi-line values) */
 .cm-frontmatter-value-continuation {
-  color: #374151;
+  color: var(--lens-text);
 }
 
 /* List item with wrong indentation (must be exactly 2 spaces before dash) */
@@ -569,6 +898,73 @@
   color: #dc2626;
   text-decoration: wavy underline #dc2626;
   text-underline-offset: 3px;
+}
+
+/* "Hide properties", on the divider while the pointer is over the
+   properties (always on touch screens) */
+.cm-frontmatter-hide {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  transform: translateY(-50%);
+  height: 22px;
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 22px;
+  color: var(--lens-text-tertiary);
+  background-color: var(--lens-page-bg);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 100ms;
+}
+.cm-frontmatter-hide:hover {
+  background-image: linear-gradient(var(--lens-hover-bg), var(--lens-hover-bg));
+}
+.cm-frontmatter-line:hover ~ .cm-frontmatter-close .cm-frontmatter-hide,
+.cm-frontmatter-close:hover .cm-frontmatter-hide {
+  opacity: 1;
+}
+@media (hover: none) {
+  .cm-frontmatter-hide { opacity: 1; }
+}
+
+/* Hidden properties: Notion's "N more properties" row, which shows them */
+.cm-frontmatter-bar-row {
+  padding: 2px 0 10px;
+}
+.cm-frontmatter-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px 0 6px;
+  font-size: 14px;
+  color: var(--lens-text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.cm-frontmatter-bar:hover {
+  background-color: var(--lens-hover-bg);
+}
+.cm-frontmatter-chevron {
+  display: inline-flex;
+  justify-content: center;
+  width: 19.2px;
+  color: var(--lens-icon-secondary);
+}
+
+/* Pending suggestions in the hidden properties: Notion's orange tag */
+.cm-frontmatter-suggestions-badge {
+  height: 20px;
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 20px;
+  color: #d27b2d;
+  background-color: rgba(224, 101, 1, 0.129);
+  border-radius: 4px;
 }
 
 /* Frontmatter error tooltip */
@@ -583,7 +979,7 @@
 
 /* Obsidian %%comment%% styling */
 .cm-obsidian-comment {
-  color: #9ca3af;
+  color: var(--lens-text-tertiary);
 }
 
 /* Table of Contents panel */
@@ -600,12 +996,12 @@
 /* CriticMarkup styles */
 .cm-addition {
   background-color: rgba(34, 197, 94, 0.2); /* green-500 with opacity */
-  color: #15803d; /* green-700 */
+  color: var(--lens-addition-text);
 }
 
 .cm-deletion {
   background-color: rgba(239, 68, 68, 0.2); /* red-500 with opacity */
-  color: #b91c1c; /* red-700 */
+  color: var(--lens-deletion-text);
   text-decoration: line-through;
 }
 
@@ -701,7 +1097,7 @@
    box by the same amount so the text column keeps its width. */
 .cm-editor[data-authorship-mode='expanded'] .cm-content,
 .cm-editor[data-authorship-mode='inline'] .cm-content {
-  max-width: 768px;
+  max-width: 828px;
   padding-left: 92px;
 }
 
@@ -722,11 +1118,11 @@
   white-space: nowrap;
   font-size: 11px;
   line-height: 1.6;
-  color: #374151;
-  background-color: white;
+  color: var(--lens-text);
+  background-color: var(--lens-popover-bg);
   background-size: 3px 100%;
   background-repeat: no-repeat;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--lens-border);
   border-radius: 4px;
   padding: 0 8px 0 10px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
@@ -771,9 +1167,9 @@
   padding: 3px 8px;
   font-size: 12px;
   line-height: 1.5;
-  color: #374151;
-  background-color: white;
-  border: 1px solid #e5e7eb;
+  color: var(--lens-text);
+  background-color: var(--lens-popover-bg);
+  border: 1px solid var(--lens-border);
   border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   pointer-events: none;
@@ -853,8 +1249,24 @@
   color: #1d4ed8; /* blue-700 */
 }
 
+/* {==highlight==}: Notion's yellow text background */
 .cm-highlight {
-  background-color: rgba(250, 204, 21, 0.4); /* yellow-400 with opacity */
+  background-color: rgba(211, 168, 0, 0.137);
+}
+
+/* Text a comment is on ({==text==}{>>comment<<}, criticmarkup.ts): Notion's
+   comment marking, yellow with a stronger yellow underline, stronger still
+   while hovered or while its thread is open */
+.cm-highlight.cm-comment-target {
+  background-color: rgba(255, 203, 0, 0.12);
+  border-bottom: 2px solid rgba(255, 203, 0, 0.35);
+  padding-bottom: 1px;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+.cm-highlight.cm-comment-target:hover,
+.cm-highlight.cm-comment-target[data-comment-focused] {
+  background-color: rgba(255, 203, 0, 0.24);
+  border-bottom-color: rgb(255, 203, 0);
 }
 
 /* Collapse ghost lines within legacy multi-line comments */
@@ -867,44 +1279,307 @@
   overflow: hidden;
 }
 
-/* Comment badge - numbered superscript pill for comment threads */
+/* A comment's marker in the text: Notion's comment indicator, a speech
+   bubble and, in grey, the comment's number (its card shows the same) */
 .cm-comment-badge {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
-  margin: 0 1px;
-  background-color: rgba(59, 130, 246, 0.15);
-  color: #2563eb;
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  border-radius: 8px;
-  font-size: 11px;
+  gap: 2px;
+  height: 20px;
+  padding: 0 4px 0 3px;
+  margin: 0 1px 0 2px;
+  border-radius: 6px;
+  font-size: 12px;
   font-weight: 600;
-  line-height: 1;
+  line-height: 16px;
+  color: var(--lens-text-tertiary);
+  vertical-align: -3px;
   cursor: pointer;
-  vertical-align: text-top;
   font-variant-numeric: tabular-nums;
-  transition: background-color 0.15s;
+  transition: background-color 0.15s, color 0.15s;
+}
+.cm-comment-badge::before {
+  content: '';
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background-color: var(--lens-icon-secondary);
+  -webkit-mask: var(--lens-comment-icon) center / contain no-repeat;
+  mask: var(--lens-comment-icon) center / contain no-repeat;
 }
 
 .cm-comment-badge:hover {
-  background-color: rgba(59, 130, 246, 0.3);
+  background-color: var(--lens-hover-bg);
 }
 
 /* Focused state is toggled by CommentsLayer via [data-comment-focused] on the
    marker element (both edit-mode badges and read-mode anchors). Per-form
    selectors so each can keep its own base styling source (CSS / Tailwind). */
 .cm-comment-badge[data-comment-focused] {
-  background-color: #2563eb;
-  color: #ffffff;
-  border-color: #2563eb;
+  background-color: var(--lens-pressed-bg);
+  color: var(--lens-text);
 }
 
 .cm-comment-anchor[data-comment-focused] {
   background-color: #2563eb;
   color: #ffffff;
+}
+
+/* Comment cards in the margin (components/Comments): Notion's discussion
+   cards. At rest a faint border; hovered, a grey background and a nudge
+   left; open (the focused thread), no border, a shadow and a bigger nudge */
+.lens-comment-card {
+  position: relative;
+  overflow: hidden;
+  color: var(--lens-text);
+  background-color: var(--lens-page-bg);
+  border: 1px solid var(--lens-card-border);
+  border-radius: 10px;
+  transition: transform 200ms, background-color 200ms, box-shadow 200ms, border-color 200ms;
+}
+.lens-comment-card:hover {
+  background-color: var(--lens-card-hover-bg);
+  transform: translateX(-4px);
+}
+.lens-comment-card.is-open {
+  background-color: var(--lens-card-open-bg);
+  border-color: transparent;
+  box-shadow: var(--lens-card-shadow);
+  transform: translateX(-12px);
+}
+.lens-comment-card.is-resolved {
+  opacity: 0.75;
+}
+.lens-comment-card-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+.lens-comment-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px 0 4px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lens-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.lens-comment-card.is-open .lens-comment-number {
+  background-color: var(--lens-pressed-bg);
+  color: var(--lens-text);
+}
+.lens-comment-resolved {
+  height: 20px;
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 20px;
+  color: #50946e;
+  background-color: rgba(0, 100, 45, 0.09);
+  border-radius: 4px;
+}
+
+/* A message: avatar, name and time on one line, the text under the name;
+   a thread line joins the avatars */
+.lens-comment-thread {
+  padding-top: 4px;
+}
+.lens-comment-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  column-gap: 8px;
+  padding: 8px 12px;
+}
+.lens-comment-row:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 36px;
+  bottom: -4px;
+  left: 23.25px;
+  width: 1.5px;
+  border-radius: 1px;
+  background-color: var(--lens-border-secondary);
+}
+.lens-comment-avatar {
+  grid-row: 1;
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lens-text-secondary);
+  background-color: var(--lens-pill-bg);
+  border-radius: 50%;
+}
+.lens-comment-head {
+  grid-row: 1;
+  grid-column: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  line-height: 24px;
+}
+.lens-comment-author {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lens-comment-time {
+  font-size: 12px;
+  color: var(--lens-text-tertiary);
+  white-space: nowrap;
+}
+.lens-comment-body {
+  grid-row: 2;
+  grid-column: 2 / 4;
+  margin: 0;
+  padding-top: 4px;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* Edit and Delete, while the pointer is over the message */
+.lens-comment-tools {
+  grid-row: 1;
+  grid-column: 3;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 100ms;
+}
+.lens-comment-row:hover .lens-comment-tools,
+.lens-comment-tools:focus-within {
+  opacity: 1;
+}
+@media (hover: none) {
+  .lens-comment-tools { opacity: 1; }
+}
+.lens-comment-tool,
+.lens-comment-action {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--lens-text-tertiary);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lens-comment-tool:hover,
+.lens-comment-action:hover {
+  color: var(--lens-text-secondary);
+  background-color: var(--lens-hover-bg);
+}
+/* Reply and the thread's other actions, in line with the text */
+.lens-comment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 8px 38px;
+}
+.lens-comment-note {
+  font-size: 12px;
+  color: var(--lens-text-tertiary);
+}
+.lens-comment-quote {
+  padding-left: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--lens-text-secondary);
+  border-left: 2px solid rgba(255, 203, 0, 0.6);
+}
+
+/* Notion's comment box (AddCommentForm.tsx): a borderless field that grows,
+   and a round send arrow that turns blue once there is text */
+.lens-comment-reply,
+.lens-comment-edit {
+  border-top: 1px solid var(--lens-border-secondary);
+}
+.lens-comment-form {
+  padding: 8px 12px 6px;
+}
+.lens-comment-input {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  padding: 2px 0;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--lens-text);
+  background: transparent;
+  border: 0;
+  outline: none;
+  resize: none;
+}
+.lens-comment-input::placeholder {
+  color: var(--lens-text-tertiary);
+}
+.lens-comment-form-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 4px;
+}
+.lens-comment-cancel {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--lens-text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lens-comment-cancel:hover {
+  background-color: var(--lens-hover-bg);
+}
+.lens-comment-send {
+  display: inline-flex;
+  color: var(--lens-border-strong);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color 100ms;
+}
+.lens-comment-send[data-ready] {
+  color: var(--lens-blue);
+}
+
+/* "Add comment" at the top of the margin */
+.lens-comment-add {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 14px;
+  color: var(--lens-text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.lens-comment-add:hover {
+  background-color: var(--lens-hover-bg);
+}
+.lens-comments-empty {
+  padding: 48px 24px;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: center;
+  color: var(--lens-text-tertiary);
+  pointer-events: none;
 }
 
 /* ToC heading flash highlight */
@@ -942,7 +1617,7 @@
 
 .cm-criticmarkup-accept {
   background-color: rgba(34, 197, 94, 0.3);
-  color: #15803d;
+  color: var(--lens-addition-text);
 }
 
 .cm-criticmarkup-accept:hover {
@@ -951,7 +1626,7 @@
 
 .cm-criticmarkup-reject {
   background-color: rgba(239, 68, 68, 0.3);
-  color: #b91c1c;
+  color: var(--lens-deletion-text);
 }
 
 .cm-criticmarkup-reject:hover {
@@ -986,8 +1661,8 @@
   position: absolute;
   z-index: 10;
   padding: 4px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
+  background: var(--lens-popover-bg);
+  border: 1px solid var(--lens-border);
   border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   display: flex;
@@ -1036,11 +1711,8 @@ html, body {
   }
 
   .cm-comment-badge {
-    min-width: 22px;
-    height: 22px;
-    padding: 0 6px;
-    font-size: 12px;
-    border-radius: 11px;
+    height: 24px;
+    padding: 0 6px 0 5px;
   }
 
   .cm-checkbox {
@@ -1052,3 +1724,391 @@ html, body {
     padding: 12px;
   }
 }
+
+/* The app around the page, after Notion's: the sidebar on its own warm grey
+   with a hairline edge, the top bar on the page's colour (App.tsx) */
+.lens-sidebar,
+.lens-sidebar-panel {
+  background-color: var(--lens-sidebar-bg);
+}
+.lens-sidebar {
+  box-shadow: inset -1px 0 0 var(--lens-sidebar-edge);
+}
+/* Notion's workspace row at the top of the sidebar: the app's icon and name,
+   and (while the pointer is over it) the button that closes the sidebar */
+.lens-workspace {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 8px 0 14px;
+}
+.lens-workspace-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+.lens-workspace-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  color: var(--lens-text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lens-sidebar-close {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.lens-sidebar:hover .lens-sidebar-close,
+.lens-sidebar-close:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .lens-sidebar-close { opacity: 1; }
+}
+.lens-topbar {
+  flex: none;
+  height: 44px;
+  padding: 0 10px 0 12px;
+  background-color: var(--lens-topbar-bg);
+}
+/* The page's controls in the top bar as Notion's buttons: no outline, a grey
+   background on hover (a control that is on keeps its tint) */
+.lens-topbar #header-controls button.border {
+  border-color: transparent;
+}
+.lens-topbar #header-controls button.border:hover {
+  background-color: var(--lens-hover-bg);
+}
+
+/* Notion's breadcrumb (EditorArea): each folder and the page with its icon,
+   "/" between them */
+.lens-breadcrumb {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.2;
+  color: var(--lens-text);
+}
+.lens-crumb {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  max-width: 160px;
+  padding: 0 5px 0 3px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.lens-crumb:last-child {
+  min-width: 0;
+  max-width: 240px;
+}
+.lens-crumb-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 16.2px;
+  line-height: 1;
+  color: var(--lens-sidebar-icon);
+}
+.lens-crumb-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lens-crumb-separator {
+  flex: none;
+  width: 6px;
+  margin: 0 2px;
+  font-size: 13px;
+  text-align: center;
+  color: var(--lens-border);
+}
+
+/* The file tree (components/Sidebar, treeLayout.ts), as Notion's sidebar:
+   30px items 1px apart, inset 8px from the sides, 14px names in the
+   sidebar's grey after a 20px icon in a 22px slot; a grey background on
+   hover and on the open page, whose name is darker. A folder's icon turns
+   into a chevron on hover; the shared folders are section labels. */
+.lens-tree-row {
+  padding-bottom: 1px;
+}
+.lens-tree-item {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  margin: 0 8px;
+  padding-right: 4px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--lens-sidebar-text);
+  border-radius: 6px;
+  transition: background-color 20ms;
+}
+.lens-tree-row:hover .lens-tree-item {
+  background-color: var(--lens-hover-bg);
+}
+.lens-tree-item.is-active {
+  color: var(--lens-text);
+  background-color: var(--lens-hover-bg);
+}
+.lens-tree-item.is-drop-target {
+  background-color: var(--lens-bg-blue);
+  box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.57);
+}
+.lens-tree-item.is-section {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lens-text-tertiary);
+}
+.lens-tree-icon {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 18px;
+  margin-right: 8px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--lens-sidebar-icon);
+}
+.lens-tree-glyph,
+.lens-tree-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 150ms;
+}
+.lens-tree-chevron {
+  position: absolute;
+  inset: -1px 0;
+  color: var(--lens-icon-secondary);
+  border-radius: 4px;
+  opacity: 0;
+}
+.lens-tree-chevron svg,
+.lens-tree-section-chevron svg {
+  transform: rotate(-90deg);
+  transition: transform 150ms;
+}
+.lens-tree-chevron.is-open svg,
+.lens-tree-section-chevron.is-open svg {
+  transform: none;
+}
+/* Sticky folder headers update without animating */
+.lens-tree-snap svg {
+  transition: none;
+}
+.lens-tree-row:hover .lens-tree-icon.is-folder .lens-tree-glyph {
+  opacity: 0;
+}
+.lens-tree-row:hover .lens-tree-icon.is-folder .lens-tree-chevron {
+  opacity: 1;
+}
+.lens-tree-name {
+  min-width: 0;
+}
+.lens-tree-section-chevron {
+  display: flex;
+  margin-left: 4px;
+  color: var(--lens-text-tertiary);
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.lens-tree-row:hover .lens-tree-section-chevron {
+  opacity: 1;
+}
+.lens-tree-rename {
+  height: 22px;
+  padding: 0 4px;
+  font-size: 14px;
+  color: var(--lens-text);
+  background-color: var(--lens-page-bg);
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.57), 0 0 0 2px rgba(35, 131, 226, 0.2);
+}
+/* A sticky folder header covers the rows scrolling under it */
+.lens-tree-sticky {
+  background-color: var(--lens-sidebar-bg);
+}
+/* "+" on a folder (CreateMenu.tsx), while the pointer is over it, and its menu */
+.lens-tree-actions {
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.lens-tree-row:hover .lens-tree-actions,
+.lens-tree-actions.is-open,
+.lens-tree-actions:focus-within {
+  opacity: 1;
+}
+@media (hover: none) {
+  .lens-tree-actions { opacity: 1; }
+}
+.lens-tree-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--lens-icon-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.lens-tree-action:hover {
+  background-color: var(--lens-pressed-bg);
+}
+.lens-create-item {
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  color: var(--lens-text);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lens-create-item:hover {
+  background-color: var(--lens-hover-bg);
+}
+
+/* Dark mode for the app around the page. Its components use Tailwind's
+   palette rather than the tokens above, so in dark mode the palette itself
+   turns dark, after Notion's: greys invert (backgrounds dark, text light),
+   white is the page's dark, light tints become dark ones and the dark shades
+   used for text light ones. Strong fills keep a strong colour under their
+   white text. */
+:root[data-theme=dark] {
+  --color-white: #191919;
+  --color-gray-50: #202020;
+  --color-gray-100: #2a2a29;
+  --color-gray-200: #353534;
+  --color-gray-300: #454544;
+  --color-gray-400: #7d7a75;
+  --color-gray-500: #9b9893;
+  --color-gray-600: #ada9a3;
+  --color-gray-700: #c9c6c1;
+  --color-gray-800: #e1dfdb;
+  --color-gray-900: #f0efed;
+  --color-gray-950: #f7f6f4;
+  --color-blue-50: #1c2733;
+  --color-blue-100: #233850;
+  --color-blue-200: #29466a;
+  --color-blue-300: #335a86;
+  --color-blue-700: #8ec5ff;
+  --color-blue-800: #b3d7ff;
+  --color-blue-900: #d6e9ff;
+  --color-sky-50: #172631;
+  --color-sky-100: #1c3241;
+  --color-sky-200: #213e52;
+  --color-sky-300: #2a5069;
+  --color-sky-700: #8fd3ff;
+  --color-sky-800: #b5e2ff;
+  --color-sky-900: #d8f0ff;
+  --color-cyan-50: #172b2f;
+  --color-cyan-100: #1c373d;
+  --color-cyan-200: #21444b;
+  --color-cyan-700: #8fe3f0;
+  --color-cyan-800: #b5edf5;
+  --color-indigo-50: #1e2033;
+  --color-indigo-100: #262a45;
+  --color-indigo-200: #303659;
+  --color-indigo-300: #3f4775;
+  --color-indigo-700: #b4bcff;
+  --color-indigo-800: #ccd2ff;
+  --color-indigo-900: #e2e5ff;
+  --color-purple-50: #241d2e;
+  --color-purple-100: #2f243d;
+  --color-purple-200: #3b2c4f;
+  --color-purple-300: #4f3a69;
+  --color-purple-700: #d4b3ff;
+  --color-purple-800: #e2ccff;
+  --color-purple-900: #efe3ff;
+  --color-violet-50: #241d2e;
+  --color-violet-100: #2f243d;
+  --color-violet-200: #3b2c4f;
+  --color-violet-700: #d4b3ff;
+  --color-violet-800: #e2ccff;
+  --color-red-50: #2e1b1a;
+  --color-red-100: #3e2423;
+  --color-red-200: #522b29;
+  --color-red-300: #6e3531;
+  --color-red-700: #ff9e95;
+  --color-red-800: #ffbdb7;
+  --color-red-900: #ffd9d5;
+  --color-rose-50: #2e1a22;
+  --color-rose-100: #3e222d;
+  --color-rose-200: #512a39;
+  --color-rose-700: #ff9fbd;
+  --color-rose-800: #ffbfd3;
+  --color-pink-50: #2e1a22;
+  --color-pink-100: #3e222d;
+  --color-pink-700: #ff9fbd;
+  --color-orange-50: #2d2016;
+  --color-orange-100: #3d2919;
+  --color-orange-200: #4f331c;
+  --color-orange-300: #6a4222;
+  --color-orange-700: #ffb27a;
+  --color-orange-800: #ffcaa3;
+  --color-orange-900: #ffe0c9;
+  --color-amber-50: #2b2414;
+  --color-amber-100: #3a2f17;
+  --color-amber-200: #4a3c1a;
+  --color-amber-300: #61501f;
+  --color-amber-700: #f5c05b;
+  --color-amber-800: #f8d38a;
+  --color-amber-900: #fbe5b9;
+  --color-yellow-50: #2b2414;
+  --color-yellow-100: #3a2f17;
+  --color-yellow-200: #4a3c1a;
+  --color-yellow-300: #61501f;
+  --color-yellow-700: #f5c05b;
+  --color-yellow-800: #f8d38a;
+  --color-yellow-900: #fbe5b9;
+  --color-green-50: #1b2a22;
+  --color-green-100: #23372b;
+  --color-green-200: #2a4534;
+  --color-green-300: #345a43;
+  --color-green-700: #7dd3a0;
+  --color-green-800: #a6e3bd;
+  --color-green-900: #cdf1da;
+  --color-emerald-50: #1b2a22;
+  --color-emerald-100: #23372b;
+  --color-emerald-200: #2a4534;
+  --color-emerald-700: #7dd3a0;
+  --color-emerald-800: #a6e3bd;
+  --color-teal-50: #152825;
+  --color-teal-100: #1a3530;
+  --color-teal-200: #1f433d;
+  --color-teal-300: #27574f;
+  --color-teal-700: #7fe0cf;
+  --color-teal-800: #a8eadf;
+  --color-teal-900: #cff4ee;
+}
+:root[data-theme=dark] .text-white { color: #fff; }
+:root[data-theme=dark] .bg-gray-900,
+:root[data-theme=dark] .bg-gray-900\/95 { background-color: #373737; }
+:root[data-theme=dark] .bg-gray-800,
+:root[data-theme=dark] .hover\:bg-gray-800:hover { background-color: #454545; }
+:root[data-theme=dark] .bg-gray-700,
+:root[data-theme=dark] .hover\:bg-gray-700:hover { background-color: #525252; }
+:root[data-theme=dark] .hover\:bg-blue-700:hover { background-color: #1d4ed8; }
+:root[data-theme=dark] .hover\:bg-red-700:hover { background-color: #b91c1c; }
+:root[data-theme=dark] .hover\:bg-green-700:hover { background-color: #15803d; }
+:root[data-theme=dark] .bg-amber-700 { background-color: #b45309; }
+:root[data-theme=dark] .hover\:bg-amber-800:hover { background-color: #92400e; }
+:root[data-theme=dark] .bg-sky-700 { background-color: #0369a1; }
+:root[data-theme=dark] .hover\:bg-sky-800:hover { background-color: #075985; }
+:root[data-theme=dark] .hover\:bg-teal-700:hover { background-color: #0f766e; }

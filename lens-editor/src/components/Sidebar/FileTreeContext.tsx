@@ -13,6 +13,8 @@ export interface FileTreeContextValue {
   getTemplates?: (folderPath: string) => TemplateOption[];
   onCreateFromTemplate?: (folderPath: string, template: TemplateOption) => void;
   onOpenNewTab?: (docId: string) => void;
+  /** Page icons (emoji) by doc id, from the folders' icon maps (lib/pageIcons). */
+  pageIcons?: Map<string, string>;
   editingPath: string | null;
   onEditingChange: (path: string | null) => void;
   activeDocId?: string;

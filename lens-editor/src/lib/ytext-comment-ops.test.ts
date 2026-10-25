@@ -31,6 +31,16 @@ describe('ytext-comment-ops', () => {
     expect(comment?.content).toBe('first thought');
   });
 
+  it('wraps the text a comment is on in a highlight the comment follows', () => {
+    ytext.insert(0, 'Hello world.');
+    const at = insertCommentInYText(ytext, 'which world?', 11, 6);
+
+    expect(ytext.toString()).toMatch(/^Hello \{==world==\}\{>>.*@@which world\?<<\}\.$/);
+    const ranges = parse(ytext.toString());
+    expect(ranges.map((r) => r.type)).toEqual(['highlight', 'comment']);
+    expect(ranges[1].from).toBe(at);
+  });
+
   it('replies append a second comment that parseThreads groups with the first', () => {
     ytext.insert(0, 'Hello.');
     insertCommentInYText(ytext, 'first', 5);

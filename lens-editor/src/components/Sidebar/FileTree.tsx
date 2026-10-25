@@ -4,6 +4,7 @@ import { createDragDropManager } from 'dnd-core';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { FileTreeNode } from './FileTreeNode';
 import { StickyScrollOverlay } from './StickyScrollOverlay';
+import { TREE_INDENT, TREE_ROW_HEIGHT, TREE_ROW_HEIGHT_MOBILE } from './treeLayout';
 import { useMobile } from '../../contexts/MobileContext';
 import type { TreeNode } from '../../lib/tree-utils';
 
@@ -171,8 +172,8 @@ export function FileTree({ data, onSelect, onMove, openAll, activeDocId }: FileT
         data={data}
         openByDefault={!!openAll}
         initialOpenState={initialOpenState}
-        indent={16}
-        rowHeight={isMobile ? 40 : 28}
+        indent={TREE_INDENT}
+        rowHeight={isMobile ? TREE_ROW_HEIGHT_MOBILE : TREE_ROW_HEIGHT}
         width="100%"
         height={treeHeight}
         overscanCount={5}

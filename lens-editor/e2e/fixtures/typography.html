@@ -5,17 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Typography fixture</title>
     <style>
-      html, body { margin: 0; background: #fff; }
+      html, body { margin: 0; background: var(--lens-page-bg); }
     </style>
   </head>
   <body>
-    <!-- The title as EditorArea and DocumentTitle lay it out -->
-    <div class="max-w-[700px] mx-auto w-full">
-      <div class="px-4 min-[500px]:px-6 pt-5 pb-1">
-        <textarea rows="1" class="lens-doc-title w-full resize-none overflow-hidden bg-transparent border-none outline-none">Q4 OKRs and weekly plan</textarea>
-      </div>
-      <div class="mx-4 min-[500px]:mx-6 border-b border-gray-200"></div>
-    </div>
+    <!-- The page header (icon row and title) is in the editor, at the top of
+         the document, as EditorArea puts it (typography.ts) -->
     <div id="editor"></div>
     <script type="module" src="./typography.ts"></script>
   </body>

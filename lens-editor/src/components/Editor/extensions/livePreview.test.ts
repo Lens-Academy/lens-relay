@@ -11,6 +11,7 @@ import {
   getTextWithClass,
 } from '../../../test/codemirror-helpers';
 import { livePreview, toggleSourceMode, updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
+import { setFrontmatterCollapsed } from './frontmatter';
 import { parseCalloutHeader } from './callouts';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
@@ -221,20 +222,18 @@ describe('livePreview - horizontal rules', () => {
     expect(hasClass(view, 'cm-hr-line')).toBe(false);
   });
 
-  it('leaves frontmatter --- delimiters to the frontmatter bar, collapsed or expanded', () => {
+  it('leaves frontmatter --- delimiters to the properties, shown or hidden', () => {
     const doc = '---\ntitle: Notes\n---\n\nBody\n\n---\n\nEnd';
     const { view, cleanup: c } = createTestEditor(doc, doc.length);
     cleanup = c;
 
-    // Collapsed: only the body's rule is a divider
-    expect(hasClass(view, 'cm-frontmatter-bar')).toBe(true);
+    // Shown: the delimiters are frontmatter lines, not dividers
+    expect(countClass(view, 'cm-frontmatter-line')).toBe(3);
     expect(countClass(view, 'cm-hr-line')).toBe(1);
 
-    // Expanded: the delimiters are frontmatter lines, still not dividers
-    const bar = view.contentDOM.querySelector('.cm-frontmatter-bar') as HTMLElement;
-    bar.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    expect(hasClass(view, 'cm-frontmatter-header')).toBe(true);
-    expect(countClass(view, 'cm-frontmatter-line')).toBe(3);
+    // Hidden: only the body's rule is a divider
+    view.dispatch({ effects: setFrontmatterCollapsed.of(true) });
+    expect(hasClass(view, 'cm-frontmatter-bar')).toBe(true);
     expect(countClass(view, 'cm-hr-line')).toBe(1);
     expect(view.state.doc.toString()).toBe(doc);
   });
@@ -349,13 +348,11 @@ describe('livePreview - hashtags', () => {
     const { view, cleanup: c } = createTestEditor(content, content.length);
     cleanup = c;
 
-    const bar = view.contentDOM.querySelector('.cm-frontmatter-bar') as HTMLElement;
-    bar.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     moveCursor(view, content.indexOf('#metadata'));
     view.requestMeasure();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(view.contentDOM.querySelector('.cm-frontmatter-header')).not.toBeNull();
+    expect(view.contentDOM.querySelector('.cm-frontmatter-row')).not.toBeNull();
     const tags = Array.from(view.contentDOM.querySelectorAll('.cm-hashtag'));
     expect(tags.map((tag) => tag.textContent)).toEqual(['#tag']);
   });
@@ -845,6 +842,56 @@ describe('livePreview - bullet lists', () => {
   });
 });
 
+describe('livePreview - block spacing (Notion\'s 16px between blocks)', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  const lineClasses = (view: EditorView) =>
+    [...view.contentDOM.querySelectorAll('.cm-line')].map((line) => line.className);
+
+  it('marks blank lines, but not those in code', () => {
+    const content = 'one\n\ntwo\n```\n\n```\nend';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const blank = lineClasses(view).map((cls) => cls.includes('cm-blank-line'));
+    expect(blank).toEqual([false, true, false, false, false, false, false]);
+  });
+
+  it('marks a heading that touches text above or below it', () => {
+    const content = 'text\n## Touching\nmore\n\n## Apart\n\nend';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const [touching, apart] = [...view.contentDOM.querySelectorAll('.cm-heading-line')];
+    expect(touching.classList.contains('cm-heading-after-text')).toBe(true);
+    expect(touching.classList.contains('cm-heading-before-text')).toBe(true);
+    expect(apart.classList.contains('cm-heading-after-text')).toBe(false);
+    expect(apart.classList.contains('cm-heading-before-text')).toBe(false);
+  });
+
+  it('marks the first and last lines of a list that touches text', () => {
+    const content = 'intro:\n- a\n- b\n\nend';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const classes = lineClasses(view);
+    expect(classes[1]).toContain('cm-list-after-text');
+    expect(classes[2]).not.toContain('cm-list-before-text');
+  });
+
+  it('puts numbered list markers in their column', () => {
+    const content = '1. one\n2. two\n\nend';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-list-number')).toEqual(['1.', '2.']);
+  });
+});
+
 describe('livePreview - strikethrough', () => {
   let view: EditorView | null = null;
 
@@ -1005,6 +1052,17 @@ describe('livePreview - fenced code blocks', () => {
     cleanup = c;
 
     expect(hasClass(view, 'cm-code-block')).toBe(true);
+  });
+
+  it('labels the box with its language while the cursor is outside it, as Notion does', () => {
+    const content = 'before\n```ts\nconst x = 1;\n```\nafter';
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-code-language')).toEqual(['TypeScript']);
+    expect(hasClass(view, 'cm-code-block')).toBe(true);
+    moveCursor(view, content.indexOf('const'));
+    expect(getTextWithClass(view, 'cm-code-language')).toEqual([]);
   });
 
   it('marks the first and last lines, for the box\'s round corners', () => {

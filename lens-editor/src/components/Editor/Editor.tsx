@@ -84,7 +84,7 @@ interface EditorProps {
   onNavigate?: (docId: string) => void;
   onRequestAddComment?: () => void;
   /** Fires when a comment badge is clicked, with the absolute Y.Text offset. */
-  onCommentClick?: (absFrom: number) => void;
+  onCommentClick?: (absFrom: number, opts?: { fromText?: boolean }) => void;
   metadata?: FolderMetadata;
   currentFilePath?: string;
   getFolderDoc?: () => Y.Doc | null;
@@ -268,7 +268,11 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         label: 'Add Comment',
         shortcut: 'Ctrl+Shift+M',
         action: () => {
-          view.dispatch({ selection: { anchor: clickPos } });
+          // Right-clicked in a selection: the comment is on that text
+          const sel = view.state.selection.main;
+          if (sel.empty || clickPos < sel.from || clickPos > sel.to) {
+            view.dispatch({ selection: { anchor: clickPos } });
+          }
           view.focus();
           onRequestAddCommentRef.current?.();
         },
@@ -479,7 +483,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
             ]),
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
         criticMarkupExtension({ canAcceptReject }),
-        commentClickCallback.of((absFrom) => onCommentClickRef.current?.(absFrom)),
+        commentClickCallback.of((absFrom, opts) => onCommentClickRef.current?.(absFrom, opts)),
         harperLinter,
         ...(!readOnly && getFolderDoc
           ? [imagePasteExtension({ getFolderDoc, getCurrentFilePath })]

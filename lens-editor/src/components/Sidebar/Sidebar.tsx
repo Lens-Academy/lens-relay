@@ -9,6 +9,7 @@ import type { TreeNode } from '../../lib/tree-utils';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { usePageIcons } from '../../lib/pageIcons';
 import { useAuth } from '../../contexts/AuthContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
@@ -34,6 +35,7 @@ export function Sidebar() {
 
   // Get metadata from NavigationContext (needed early for doc ID resolution)
   const { metadata, folderDocs, folderNames, onNavigate, justCreatedRef } = useNavigation();
+  const pageIcons = usePageIcons(folderDocs);
   const { canWrite, canDelete } = useAuth();
 
   // Derive active doc ID from URL path (first segment is the doc UUID — may be short)
@@ -354,9 +356,9 @@ export function Sidebar() {
   }, [folderNames]);
 
   return (
-    <aside className="w-full h-full bg-[#f6f6f6] flex flex-col">
+    <aside className="lens-sidebar-panel w-full h-full flex flex-col">
       {/* Header with search */}
-      <div className="p-3 border-b border-gray-200 space-y-2">
+      <div className="px-2 pt-1 pb-2 space-y-2">
         <SearchInput
           ref={searchInputRef}
           value={searchTerm}
@@ -397,10 +399,10 @@ export function Sidebar() {
           <>
             {/* File name filter input */}
             {folderDocs.size > 0 && (
-              <div className="px-3 py-1.5 border-b border-gray-100">
+              <div className="px-2 pb-1.5">
                 <div className="relative">
                   <svg
-                    className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400"
+                    className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--lens-text-tertiary)]"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -413,8 +415,7 @@ export function Sidebar() {
                     value={fileFilter}
                     onChange={(e) => setFileFilter(e.target.value)}
                     placeholder="Filter files..."
-                    className="w-full pl-7 pr-6 py-1 text-xs bg-white border border-gray-200 rounded
-                               placeholder-gray-400 outline-none focus:border-gray-300"
+                    className="lens-input w-full pl-7 pr-6 h-7 text-xs"
                   />
                   {fileFilter && (
                     <button
@@ -467,6 +468,7 @@ export function Sidebar() {
                     getTemplates,
                     onCreateFromTemplate: canWrite ? handleInstantCreate : undefined,
                     onOpenNewTab: handleOpenNewTab,
+                    pageIcons,
                     activeDocId,
                   }}
                 >

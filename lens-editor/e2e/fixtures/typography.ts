@@ -10,7 +10,15 @@ import { livePreview } from '../../src/components/Editor/extensions/livePreview'
 import { markdownTableCompartment, markdownTableExtension } from '../../src/components/Editor/extensions/markdownTable';
 import { criticMarkupExtension } from '../../src/components/Editor/extensions/criticmarkup';
 import { codeBlockCopyButton } from '../../src/components/Editor/extensions/codeBlockCopyButton';
+import { panelHostField, setPanelHost } from '../../src/components/ConceptRowsPanel/panelHost';
 import { typographyDoc } from './typography-doc';
+
+// The page header as DocumentTitle renders it (no icon), which EditorArea
+// puts in the editor's top widget
+const header = document.createElement('div');
+header.innerHTML = '<div class="lens-page-header flex flex-col"><div class="relative"><div class="lens-page-controls"></div></div>'
+  + '<div class="flex items-start gap-2"><textarea rows="1" aria-label="Document name" '
+  + 'class="lens-doc-title flex-1 min-w-0 resize-none overflow-hidden bg-transparent border-none outline-none">Q4 OKRs and weekly plan</textarea></div></div>';
 
 // The editor's look as Editor.tsx sets it up, on a page with every element
 const state = EditorState.create({
@@ -25,7 +33,10 @@ const state = EditorState.create({
     criticMarkupExtension(),
     EditorView.lineWrapping,
     editorTheme,
+    panelHostField,
   ],
 });
 
-(window as unknown as { __view: EditorView }).__view = new EditorView({ state, parent: document.querySelector('#editor')! });
+const view = new EditorView({ state, parent: document.querySelector('#editor')! });
+view.dispatch({ effects: setPanelHost.of(header) });
+(window as unknown as { __view: EditorView }).__view = view;

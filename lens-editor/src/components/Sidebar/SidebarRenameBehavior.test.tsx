@@ -74,7 +74,7 @@ describe('Sidebar file tree rename behavior', () => {
     );
 
     const fileRow = screen
-      .getByText('source.md')
+      .getByText('source')
       .closest('[class*="cursor-pointer"]') as HTMLElement;
 
     fireEvent.contextMenu(fileRow);
