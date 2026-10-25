@@ -11,6 +11,18 @@ export function linkHref(url: string): string | null {
 }
 
 /**
+ * Whether a link leaves the editor for the web, and so gets the external-link
+ * icon: an http(s) URL, written with its scheme or as www.…, on another host.
+ * Email addresses, links to this editor and relative paths don't.
+ */
+export function isExternalUrl(url: string): boolean {
+  const match = /^(?:https?:\/\/|www\.)([^/?#]*)/i.exec(url);
+  if (!match) return false;
+  const host = match[1].replace(/^[^@]*@/, '').toLowerCase();
+  return host !== '' && host !== window.location.host.toLowerCase();
+}
+
+/**
  * The clickable external link shown in live preview, shared by the inline
  * LinkWidget (livePreview.ts) and table cells (markdownTable.ts).
  */
@@ -22,6 +34,12 @@ export function createLinkElement(label: string | Node, url: string): HTMLElemen
   if (!href) return span;
 
   span.className = 'cm-link-widget';
+  if (isExternalUrl(url)) {
+    const icon = document.createElement('span');
+    icon.className = 'cm-link-external-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    span.appendChild(icon);
+  }
   span.style.cursor = 'pointer';
   span.onclick = (e) => {
     e.preventDefault();
