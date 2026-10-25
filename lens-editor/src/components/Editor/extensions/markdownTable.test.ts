@@ -1,19 +1,22 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { markdown } from '@codemirror/lang-markdown';
-import { Table } from '@lezer/markdown';
+import { commonmarkLanguage, markdown } from '@codemirror/lang-markdown';
 import { cursorLineUp } from '@codemirror/commands';
 import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
 import { livePreview, toggleSourceMode } from './livePreview';
 import { markdownTableCompartment, markdownTableExtension, tableEscapeKeymap } from './markdownTable';
+import { lensMarkdownExtensions } from './wikilinkTable';
+
+// The Markdown language as Editor.tsx configures it
+const tableMarkdown = () => markdown({ base: commonmarkLanguage, extensions: lensMarkdownExtensions });
 
 function createEditor(content: string, cursorPos: number) {
   const state = EditorState.create({
     doc: content,
     selection: { anchor: cursorPos },
     extensions: [
-      markdown({ extensions: [Table] }),
+      tableMarkdown(),
       markdownTableExtension(),
     ],
   });
@@ -25,7 +28,7 @@ function createEditorWithModeToggle(content: string, cursorPos: number) {
     doc: content,
     selection: { anchor: cursorPos },
     extensions: [
-      markdown({ extensions: [Table] }),
+      tableMarkdown(),
       livePreview(),
       markdownTableCompartment.of(markdownTableExtension()),
     ],
@@ -214,12 +217,13 @@ describe('markdownTable - rendering', () => {
     open.mockRestore();
   });
 
-  it('does not treat wikilinks or mid-word text as links', () => {
+  it('does not treat wikilinks or mid-word text as external links', () => {
     const content = '| A |\n| - |\n| [[Page]] and xhttps://nope.example |\n\nend';
     view = createEditor(content, content.indexOf('end'));
 
     expect(view.contentDOM.querySelector('.cm-md-table .cm-link-widget')).toBeNull();
-    expect(view.contentDOM.querySelector('.cm-md-table td')?.textContent).toBe('[[Page]] and xhttps://nope.example');
+    expect(view.contentDOM.querySelector('.cm-md-table td .cm-wikilink-widget')?.textContent).toBe('Page');
+    expect(view.contentDOM.querySelector('.cm-md-table td')?.textContent).toBe('Page and xhttps://nope.example');
   });
 
   it('shows the link Markdown while the cell is focused and the link again on blur', () => {
@@ -672,3 +676,97 @@ describe('markdownTable - escape keymap', () => {
     expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
   });
 });
+
+describe('markdownTable - wikilinks in cells', () => {
+  // Luc's table (Discord, 25 Oct 2026): the | of each aliased wikilink split the cell
+  const lucsTable = [
+    '| Real, anonymized | Fit for MATS |',
+    '|---|---|',
+    '| [[Polymath/MATS interviews/Kiran (real, anonymized)|Kiran]] | 7/10 |',
+    '| [[Polymath/MATS interviews/Noor (real, anonymized)|Noor]] | 9/10 |',
+    '| [[Polymath/MATS interviews/Elias (real, anonymized)|Elias]] | 7/10 |',
+    '| [[Polymath/MATS interviews/Felix (real, anonymized)|Felix]] | 9/10 |',
+    '| [[Polymath/MATS interviews/Theo (real, anonymized)|Theo]] | 9/10 |',
+  ].join('\n');
+
+  const cellTexts = (v: EditorView) =>
+    Array.from(v.contentDOM.querySelectorAll('.cm-md-table tbody tr')).map(tr =>
+      Array.from(tr.querySelectorAll('td')).map(td => td.textContent));
+
+  it("keeps the alias pipe inside the link: Luc's table has two columns", () => {
+    const content = lucsTable + '\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    expect(cellTexts(view)).toEqual([
+      ['Kiran', '7/10'], ['Noor', '9/10'], ['Elias', '7/10'], ['Felix', '9/10'], ['Theo', '9/10'],
+    ]);
+  });
+
+  it('shows the alias as an internal link to the note', () => {
+    const onClick = vi.fn();
+    view = createEditorWithLinks(lucsTable + '\n\nend', onClick);
+
+    const links = view.contentDOM.querySelectorAll<HTMLElement>('.cm-md-table td .cm-wikilink-widget');
+    expect(Array.from(links).map(l => l.textContent)).toEqual(['Kiran', 'Noor', 'Elias', 'Felix', 'Theo']);
+    links[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onClick).toHaveBeenCalledWith('Polymath/MATS interviews/Kiran (real, anonymized)', true);
+  });
+
+  it('reads the escaped alias pipe Obsidian writes in tables ([[note\\|alias]])', () => {
+    const onClick = vi.fn();
+    view = createEditorWithLinks('| A | B |\n| - | - |\n| [[Note\\|alias]] | 2 |\n\nend', onClick);
+
+    expect(cellTexts(view)).toEqual([['alias', '2']]);
+    view.contentDOM.querySelector<HTMLElement>('.cm-md-table .cm-wikilink-widget')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onClick).toHaveBeenCalledWith('Note', true);
+  });
+
+  it('keeps a header with an aliased wikilink in one cell', () => {
+    const content = '| [[Note|N]] | B |\n| - | - |\n| 1 | 2 |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    expect(Array.from(view.contentDOM.querySelectorAll('.cm-md-table th')).map(th => th.textContent))
+      .toEqual(['N', 'B']);
+  });
+
+  it('still splits at a pipe after a closed wikilink, and at an unclosed [[', () => {
+    const content = '| A | B | C |\n| - | - | - |\n| [[x]] | [[y | z |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    expect(cellTexts(view)).toEqual([['x', '[[y', 'z']]);
+  });
+
+  it('keeps a body row that looks like a delimiter row in the same table', () => {
+    const content = '| a | b |\n|---|---|\n| 1 | 2 |\n|---|---|\n| 3 | 4 |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
+    expect(cellTexts(view)).toEqual([['1', '2'], ['---', '---'], ['3', '4']]);
+  });
+
+  it('editing a cell leaves the alias pipe of a wikilink unescaped', () => {
+    const content = '| A | B |\n| - | - |\n| 1 | 2 |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector<HTMLElement>('.cm-md-table td')!;
+    td.textContent = '[[Note|alias]] a|b';
+    td.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(view.state.doc.toString()).toBe('| A | B |\n| - | - |\n| [[Note|alias]] a\\|b | 2 |\n\nend');
+    expect(cellTexts(view)).toEqual([['alias a|b', '2']]);
+  });
+});
+
+function createEditorWithLinks(content: string, onClick: (page: string, create?: boolean) => void) {
+  const state = EditorState.create({
+    doc: content,
+    selection: { anchor: content.indexOf('end') },
+    extensions: [
+      tableMarkdown(),
+      livePreview({ onClick, isResolved: () => true }),
+      markdownTableCompartment.of(markdownTableExtension()),
+    ],
+  });
+  return new EditorView({ state, parent: document.body });
+}

@@ -30,13 +30,15 @@ import {
 import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin, criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
 import { markdownTableCompartment, markdownTableExtension } from './markdownTable';
 import { createLinkElement } from './linkElement';
+import { createWikilinkElement, getWikilinkContext, inEmbedCard, linksCreate, setWikilinkContext, splitWikilink } from './wikilinkElement';
+import type { WikilinkContext } from './wikilinkElement';
 import { pastedLinkField } from './pasteLink';
 import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontmatterEnabled } from './frontmatter';
 import { listHangingIndent } from './listHangingIndent';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
-import { RangeSetBuilder, Compartment, EditorSelection, StateField, Prec, Facet } from '@codemirror/state';
+import { RangeSetBuilder, Compartment, EditorSelection, StateField, Prec } from '@codemirror/state';
 import type { EditorState } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { wikilinkMetadataChanged } from './wikilinkEffects';
@@ -90,20 +92,7 @@ const HASHTAG_EXCLUDED_NODES = new Set([
   'URL',
 ]);
 
-/**
- * WikilinkContext for navigation callbacks
- * Set via livePreview() function parameter
- */
-export interface WikilinkContext {
-  /** `create`: an unresolved link may create its file (not in embed cards,
-   *  whose links are relative to a file the context does not know) */
-  onClick: (pageName: string, create?: boolean) => void;
-  onOpenNewTab?: (pageName: string, create?: boolean) => void;
-  isResolved: (pageName: string) => boolean;
-}
-
-// Module-scoped context (set by livePreview factory)
-let wikilinkContext: WikilinkContext | null = null;
+export type { WikilinkContext } from './wikilinkElement';
 
 /**
  * Context for resolving ![[image]] embeds — set via updateImageEmbedContext()
@@ -123,13 +112,6 @@ export function updateImageEmbedContext(context: ImageEmbedContext | undefined) 
 
 export { wikilinkMetadataChanged } from './wikilinkEffects';
 
-/** True in an embed card's editor, whose links must not create files. */
-const inEmbedCard = Facet.define<boolean, boolean>({ combine: (values) => values.some(Boolean) });
-
-function linksCreate(view: EditorView): boolean {
-  return !view.state.facet(inEmbedCard);
-}
-
 /**
  * WikilinkWidget - Renders wikilinks as clickable internal links
  * Uses module-scoped wikilinkContext for navigation and resolution checking
@@ -147,34 +129,7 @@ class WikilinkWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
-    const create = linksCreate(view);
-    const span = document.createElement('span');
-    span.className = 'cm-wikilink-widget';
-
-    // Add unresolved class if document doesn't exist
-    if (!this.resolved) {
-      span.classList.add('unresolved');
-    }
-
-    span.textContent = this.displayText;
-    span.style.cursor = 'pointer';
-    span.onclick = (e) => {
-      e.preventDefault();
-      if (!wikilinkContext) return;
-      if (e.ctrlKey || e.metaKey) {
-        wikilinkContext.onOpenNewTab?.(this.pageName, create);
-      } else {
-        wikilinkContext.onClick(this.pageName, create);
-      }
-    };
-    span.onmousedown = (e) => { if (e.button === 1) e.preventDefault(); };
-    span.onauxclick = (e) => {
-      if (e.button === 1) {
-        e.preventDefault();
-        wikilinkContext?.onOpenNewTab?.(this.pageName, create);
-      }
-    };
-    return span;
+    return createWikilinkElement(this.pageName, this.displayText, this.resolved, () => linksCreate(view));
   }
 
   eq(other: WikilinkWidget): boolean {
@@ -827,10 +782,8 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 const contentNode = node.node.getChild('WikilinkContent');
                 if (!contentNode) return;
                 const raw = view.state.doc.sliceString(contentNode.from, contentNode.to);
-                const pipeIndex = raw.indexOf('|');
-                const content = pipeIndex !== -1 ? raw.substring(0, pipeIndex) : raw;
                 // [[target|alias]] shows the alias; a blank alias falls back to the target
-                const alias = pipeIndex !== -1 ? raw.substring(pipeIndex + 1) : '';
+                const { target: content, alias } = splitWikilink(raw);
 
                 // Detect ![[...]] image embed: leading '!' plus an image file extension.
                 // Without an image extension, fall through to render as a regular wikilink
@@ -868,6 +821,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   return false;
                 }
 
+                const wikilinkContext = getWikilinkContext();
                 const resolved = wikilinkContext ? wikilinkContext.isResolved(content) : true;
                 decorations.push({
                   from: node.from,
@@ -1261,9 +1215,7 @@ export function wikilinkTargetAt(state: EditorState, pos: number, clicked = fals
       if (node.name !== 'Wikilink') continue;
       const content = node.getChild('WikilinkContent');
       if (!content) return null;
-      const raw = state.doc.sliceString(content.from, content.to);
-      const pipe = raw.indexOf('|');
-      return pipe === -1 ? raw : raw.substring(0, pipe);
+      return splitWikilink(state.doc.sliceString(content.from, content.to)).target;
     }
   }
   return null;
@@ -1282,6 +1234,7 @@ const wikilinkFollow = [
     run: (view) => {
       const head = view.state.selection.main.head;
       const target = wikilinkTargetAt(view.state, head);
+      const wikilinkContext = getWikilinkContext();
       if (!target || !wikilinkContext?.onOpenNewTab) return false;
       // On a suggestion a reviewer may accept, Mod-Enter accepts it (criticMarkupKeymap)
       const { from, to } = view.state.selection.main;
@@ -1294,6 +1247,7 @@ const wikilinkFollow = [
   EditorView.domEventHandlers({
     mousedown: (e, view) => {
       // Mod as in keymaps: on a Mac Ctrl-click is the context menu
+      const wikilinkContext = getWikilinkContext();
       if (e.button !== 0 || !(IS_MAC ? e.metaKey : e.ctrlKey) || !wikilinkContext?.onOpenNewTab) return false;
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
       const target = pos === null ? null : wikilinkTargetAt(view.state, pos, true);
@@ -1317,7 +1271,7 @@ const wikilinkFollow = [
  */
 export function livePreview(context?: WikilinkContext, { embeds = true }: { embeds?: boolean } = {}) {
   if (context) {
-    wikilinkContext = context;
+    setWikilinkContext(context);
   }
   return [
     drawSelection(), // Required for proper cursor with hidden content
@@ -1336,7 +1290,7 @@ export function livePreview(context?: WikilinkContext, { embeds = true }: { embe
  * Call this when metadata changes to update navigation and resolution.
  */
 export function updateWikilinkContext(context: WikilinkContext | undefined) {
-  wikilinkContext = context ?? null;
+  setWikilinkContext(context ?? null);
 }
 
 /**
