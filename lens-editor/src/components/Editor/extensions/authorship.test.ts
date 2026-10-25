@@ -55,6 +55,11 @@ describe('actorDisplayName', () => {
     expect(actorDisplayName('ai:fable-5')).toBe('fable-5');
     expect(actorDisplayName(undefined)).toBe('Unknown');
   });
+
+  it("names the paste popover's generic human answers", () => {
+    expect(actorDisplayName('human:unknown')).toBe('Human');
+    expect(actorDisplayName('human:unknown:translated')).toBe('Human → translated');
+  });
 });
 
 describe('AuthorshipPlugin decorations on Y/CM length mismatch', () => {
