@@ -4,7 +4,7 @@ import { EditorView } from '@codemirror/view';
 import { commonmarkLanguage, markdown } from '@codemirror/lang-markdown';
 import { cursorLineUp } from '@codemirror/commands';
 import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
-import { livePreview, toggleSourceMode } from './livePreview';
+import { livePreview, toggleSourceMode, wikilinkMetadataChanged } from './livePreview';
 import { markdownTableCompartment, markdownTableExtension, tableEscapeKeymap } from './markdownTable';
 import { lensMarkdownExtensions } from './wikilinkTable';
 
@@ -722,6 +722,19 @@ describe('markdownTable - wikilinks in cells', () => {
     expect(onClick).toHaveBeenCalledWith('Note', true);
   });
 
+  it('draws a link again when the file list arrives after the table', () => {
+    // Before the folder's file list loads, no note is known to exist
+    let known = false;
+    view = createEditorWithLinks(lucsTable + '\n\nend', vi.fn(), () => known);
+    const firstLink = () => view!.contentDOM.querySelector<HTMLElement>('.cm-md-table .cm-wikilink-widget')!;
+    expect(firstLink().classList.contains('unresolved')).toBe(true);
+
+    known = true;
+    view.dispatch({ effects: wikilinkMetadataChanged.of(undefined) });
+    expect(firstLink().classList.contains('unresolved')).toBe(false);
+    expect(firstLink().textContent).toBe('Kiran');
+  });
+
   it('keeps a header with an aliased wikilink in one cell', () => {
     const content = '| [[Note|N]] | B |\n| - | - |\n| 1 | 2 |\n\nend';
     view = createEditor(content, content.indexOf('end'));
@@ -758,13 +771,15 @@ describe('markdownTable - wikilinks in cells', () => {
   });
 });
 
-function createEditorWithLinks(content: string, onClick: (page: string, create?: boolean) => void) {
+function createEditorWithLinks(
+  content: string, onClick: (page: string, create?: boolean) => void, isResolved: (page: string) => boolean = () => true,
+) {
   const state = EditorState.create({
     doc: content,
     selection: { anchor: content.indexOf('end') },
     extensions: [
       tableMarkdown(),
-      livePreview({ onClick, isResolved: () => true }),
+      livePreview({ onClick, isResolved }),
       markdownTableCompartment.of(markdownTableExtension()),
     ],
   });

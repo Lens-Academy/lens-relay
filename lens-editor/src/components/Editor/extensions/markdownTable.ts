@@ -9,6 +9,7 @@ import { createLinkElement } from './linkElement';
 import { linkMarkup, pastedUrl } from './pasteLink';
 import { createWikilinkElement, getWikilinkContext, linksCreate, splitWikilink } from './wikilinkElement';
 import { WikilinkExtension } from './wikilinkParser';
+import { wikilinkMetadataChanged } from './wikilinkEffects';
 import { wikilinkEnd } from './wikilinkTable';
 
 type Align = 'left' | 'center' | 'right';
@@ -25,6 +26,8 @@ interface TableWidgetData {
   rows: CellInfo[][];
   nodeFrom: number;
   nodeTo: number;
+  /** linkEpochField when built: cells draw their wikilinks again when it changes */
+  linkEpoch: number;
 }
 
 // `|` and `\` are syntactically meaningful inside a GFM table cell. Escape
@@ -199,6 +202,7 @@ class TableWidget extends WidgetType {
     return (
       this.data.nodeFrom === other.data.nodeFrom &&
       this.data.nodeTo === other.data.nodeTo &&
+      this.data.linkEpoch === other.data.linkEpoch &&
       this.data.headers.length === other.data.headers.length &&
       this.data.rows.length === other.data.rows.length &&
       this.data.headers.every((h, i) => h.content === other.data.headers[i]?.content) &&
@@ -584,7 +588,9 @@ function buildTableDecorations(state: EditorState): DecorationSet {
         from: firstLine.from,
         to: lastLine.to,
         deco: Decoration.replace({
-          widget: new TableWidget({ headers, rows, nodeFrom: node.from, nodeTo: node.to }),
+          widget: new TableWidget({
+            headers, rows, nodeFrom: node.from, nodeTo: node.to, linkEpoch: state.field(linkEpochField, false) ?? 0,
+          }),
           block: true,
         }),
       });
@@ -613,6 +619,14 @@ const userInteractedField = StateField.define<boolean>({
   },
 });
 
+// Counts wikilinkMetadataChanged effects. Which notes exist is not in the doc,
+// so without it a table drawn before the folder's file list arrived would keep
+// showing its links as missing notes.
+const linkEpochField = StateField.define<number>({
+  create: () => 0,
+  update: (value, tr) => (tr.effects.some(e => e.is(wikilinkMetadataChanged)) ? value + 1 : value),
+});
+
 const tableField = StateField.define<DecorationSet>({
   create(state) {
     return buildTableDecorations(state);
@@ -623,7 +637,8 @@ const tableField = StateField.define<DecorationSet>({
     // must render then, not on the next click (which made the page jump).
     if (
       tr.docChanged || tr.selection || tr.annotation(Transaction.userEvent) !== undefined ||
-      syntaxTree(tr.startState) !== syntaxTree(tr.state)
+      syntaxTree(tr.startState) !== syntaxTree(tr.state) ||
+      tr.state.field(linkEpochField, false) !== tr.startState.field(linkEpochField, false)
     ) {
       return buildTableDecorations(tr.state);
     }
@@ -789,5 +804,5 @@ const tableTheme = EditorView.theme({
 });
 
 export function markdownTableExtension(): Extension {
-  return [userInteractedField, tableField, Prec.highest(keymap.of(tableEscapeKeymap)), tableTheme];
+  return [userInteractedField, linkEpochField, tableField, Prec.highest(keymap.of(tableEscapeKeymap)), tableTheme];
 }
