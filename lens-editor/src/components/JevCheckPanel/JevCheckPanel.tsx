@@ -13,14 +13,14 @@ import { useLiveText, writeText } from './checkFile';
 import { chosen, poolOf, useCorpus } from './useCorpus';
 import { useView } from './useView';
 import { Field, Small } from './Field';
-import { keyHint, refSyntax, renameRef } from '../../lib/jev-keys';
+import { keyHint, refProblem, refSyntax, renameRef, unitNames } from '../../lib/jev-keys';
 import { InputPicker } from './InputPicker';
 import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary, type Labeler } from './Results';
 import { addLabel, parseLabels } from '../../lib/jev-labels';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import type { Para, Run } from './types';
-import { DEFAULT_PRESENTATION, describe, isDefault, presentationBlock, type Presentation } from '../../lib/jev-presentation';
+import { DEFAULT_PRESENTATION, describe, isDefault, LEVELS, presentationBlock, type Level, type Presentation } from '../../lib/jev-presentation';
 import { PresentationPicker } from './PresentationPicker';
 import { relayHeaders } from '../../lib/relay-api';
 
@@ -119,6 +119,13 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
     const renamed = from === to ? [] : fields.filter(([, v]) => renameRef(v, from, to) !== v);
     writeText(ytext, (t) => renamed.reduce((acc, [path, v]) => setDraftField(acc, path, renameRef(v, from, to)), setDraftPresentation(t, np)));
   };
+  // Level names in the words that the presentation cannot resolve, and that renaming to the
+  // asked-about level would fix: one click does it (Assay, deploy gate: T1's draft named
+  // `sentence` while asking about paragraphs, with no way back but retyping).
+  const fields: [string[], string][] = c ? [[['question'], c.question], ...(c.criteria ? [[['criteria', 'true'], c.criteria.true], [['criteria', 'false'], c.criteria.false]] as [string[], string][] : [])] : [];
+  const strays = [...new Set(fields.flatMap(([, v]) => unitNames(v)).filter((n) => (LEVELS as string[]).includes(n) && n !== pres.question && refProblem(n, pres) !== null))];
+  const renameTo = (from: string) => writeText(ytext, (t) => fields.filter(([, v]) => renameRef(v, from as Level, pres.question) !== v)
+    .reduce((acc, [path, v]) => setDraftField(acc, path, renameRef(v, from as Level, pres.question)), t));
   const setNum = (path: string[]) => (v: string) => { const x = Number(v); if (Number.isFinite(x)) writeText(ytext, (t) => setDraftField(t, path, x)); };
   // What the platform would make of the file now (and so after Enable), and after Save.
   const nowProblems = useMemo(() => platformProblems(text), [text]);
@@ -171,7 +178,11 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           <Field label="Question" value={c.question} live={live.question} onCommit={set(['question'])} hint={keyHint(c.question, pres)} shape={pres} />
           <Field label="Yes means" value={c.criteria?.true ?? ''} live={live.criteria?.true ?? ''} onCommit={set(['criteria', 'true'])} shape={pres} />
           <Field label="No means" value={c.criteria?.false ?? ''} live={live.criteria?.false ?? ''} onCommit={set(['criteria', 'false'])} shape={pres} />
-          <div className="px-1 text-[12px] text-gray-500">{refSyntax(pres)}</div>
+          <div className="px-1 text-[12px] text-gray-500">{refSyntax(pres)}
+            {strays.map((n) => (
+              <button key={n} onClick={() => renameTo(n)} className="ml-2 rounded border border-amber-300 bg-amber-50 px-1.5 text-amber-900 hover:bg-amber-100">
+                rename `{n}` to `{pres.question}`</button>
+            ))}</div>
           <div className="flex flex-wrap items-end gap-4 text-[13px] text-gray-600">
             <Small label="model" value={c.model} live={live.model} onCommit={set(['model'])} width="w-28" />
             <Small label="fail at" value={String(c.fail_at)} live={String(live.fail_at)} onCommit={setNum(['fail_at'])} width="w-14" />
@@ -238,9 +249,10 @@ function DraftBar({ draft, problems, lastRun, onSave, onDiscard }: { draft: bool
       <div>{draft ? 'This file has a draft: Run tests it beside the live check.' : 'No draft: edits here make one beside the live check.'}
         {' '}Save makes it live: staging agents after the next content sync (about a minute), production after a promote.
         {draft && lastRun && <b> {lastRun}</b>}</div>
-      {/* On a phone the reason takes its own line above the buttons (always there, so nothing moves). */}
+      {/* The reason has its own two lines above the buttons, always there, so nothing moves (Assay: it
+          was cut off even at 1400 px when it shared the buttons' row). */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="min-h-[1.25rem] w-full min-w-0 truncate text-red-800 sm:w-auto sm:flex-1" title={problems.join('\n')}>
+        <span className="line-clamp-2 min-h-[2.5rem] w-full text-red-800" title={problems.join('\n')}>
           {draft && problems.length > 0 ? `can't save: ${problems[0]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}` : ''}</span>
         <button onClick={onDiscard} disabled={!draft} className="shrink-0 rounded border border-amber-300 px-3 py-1 hover:bg-amber-100 disabled:opacity-40">Discard draft</button>
         <button onClick={onSave} disabled={!draft || problems.length > 0}
