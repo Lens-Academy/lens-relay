@@ -270,6 +270,7 @@ fn range_notice(content: &str, offset: usize, limit: usize) -> Option<String> {
         ));
     }
     let more = total - last;
+    // The read tool description in mod.rs quotes this text; keep them alike.
     Some(format!(
         "[Showing lines {}-{} of {}. {} more line{} not shown. Call read again with offset={} to continue.]",
         first,
@@ -393,6 +394,40 @@ mod accepted_view_tests {
         .await
         .unwrap();
         assert!(!rest.contains("[Showing lines"), "{}", rest);
+    }
+
+    #[tokio::test]
+    async fn read_of_long_html_page_ends_with_notice_after_threads() {
+        let mut page = String::from("<p>Keep this sentence.</p>\n");
+        page.extend((2..=2100).map(|i| format!("<p>{}</p>\n", i)));
+        let server = build_test_server(&[("/Long.html", "uuid-long-html", &page)]).await;
+        let sid = setup_session_with_read(&server, &format!("{}-uuid-long-html", RELAY_ID));
+        crate::mcp::tools::html_comments::execute(
+            &server,
+            &sid,
+            &json!({
+                "action": "add", "file_path": "Lens/Long.html", "session_id": sid,
+                "quote": "Keep this sentence.", "body": "Why?",
+            }),
+        )
+        .await
+        .unwrap();
+        let result = execute(
+            &server,
+            &sid,
+            &json!({ "file_path": "Lens/Long.html", "session_id": sid }),
+        )
+        .await
+        .unwrap();
+        let threads = result.find("--- Comments: 1 open").expect("thread listing");
+        let notice = result
+            .find("[Showing lines 1-2000 of 2100. 100 more lines not shown. Call read again with offset=2001 to continue.]")
+            .expect("notice");
+        assert!(
+            threads < notice && result.ends_with("continue.]"),
+            "{}",
+            &result[result.len() - 400..]
+        );
     }
 
     #[tokio::test]
