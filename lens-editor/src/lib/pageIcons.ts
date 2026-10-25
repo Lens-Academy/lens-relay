@@ -26,6 +26,12 @@ export function recordPageIcon(folderDoc: Y.Doc, docId: string, icon: string | n
   }
 }
 
+function sameEntries(a: Map<string, string>, b: Map<string, string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [key, value] of a) if (b.get(key) !== value) return false;
+  return true;
+}
+
 /** Every page icon in these folders, by doc id, kept current. */
 export function usePageIcons(folderDocs: Map<string, Y.Doc>): Map<string, string> {
   const [icons, setIcons] = useState<Map<string, string>>(() => new Map());
@@ -35,7 +41,9 @@ export function usePageIcons(folderDocs: Map<string, Y.Doc>): Map<string, string
     const read = () => {
       const all = new Map<string, string>();
       for (const map of maps) for (const [docId, icon] of map) all.set(docId, icon);
-      setIcons(all);
+      // Keep the same map when nothing changed: a caller that passes a new
+      // Map of the same docs on every render would otherwise render forever
+      setIcons((prev) => (sameEntries(prev, all) ? prev : all));
     };
     read();
     for (const map of maps) map.observe(read);
