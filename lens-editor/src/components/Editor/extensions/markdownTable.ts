@@ -7,6 +7,9 @@ import type { SyntaxNode } from '@lezer/common';
 import { GFM, parser } from '@lezer/markdown';
 import { createLinkElement } from './linkElement';
 import { linkMarkup, pastedUrl } from './pasteLink';
+import { createWikilinkElement, getWikilinkContext, linksCreate, splitWikilink } from './wikilinkElement';
+import { WikilinkExtension } from './wikilinkParser';
+import { wikilinkEnd } from './wikilinkTable';
 
 type Align = 'left' | 'center' | 'right';
 
@@ -27,9 +30,20 @@ interface TableWidgetData {
 // `|` and `\` are syntactically meaningful inside a GFM table cell. Escape
 // them with a backslash when writing user input to the doc; reverse the
 // escape when displaying. Without this, typing or pasting `|` would split
-// the row into a new column on the next reparse.
+// the row into a new column on the next reparse. A wikilink is left as it is:
+// the table parser keeps the `|` of [[note|alias]] in the cell, as Obsidian does.
 function escapeForCell(s: string): string {
-  return s.replace(/[\\|]/g, c => '\\' + c);
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const linkEnd = wikilinkEnd(s, i);
+    if (linkEnd > -1) {
+      out += s.slice(i, linkEnd);
+      i = linkEnd - 1;
+    } else {
+      out += s[i] === '\\' || s[i] === '|' ? '\\' + s[i] : s[i];
+    }
+  }
+  return out;
 }
 
 function unescapeFromCell(s: string): string {
@@ -49,6 +63,7 @@ function unescapeFromCell(s: string): string {
 // with every block parser removed so that "# x" or "- x" stay one paragraph.
 const cellParser = parser.configure([
   GFM,
+  WikilinkExtension,
   {
     remove: [
       'SetextHeading', 'FencedCode', 'Blockquote', 'HorizontalRule', 'BulletList', 'OrderedList',
@@ -120,6 +135,22 @@ function renderInlineNode(target: Node, source: string, node: SyntaxNode): void 
         // cell for its Markdown source before the click reaches the link.
         link.addEventListener('mousedown', e => e.preventDefault());
       }
+      target.appendChild(link);
+      return;
+    }
+    case 'Wikilink': {
+      const contentNode = node.getChild('WikilinkContent');
+      if (!contentNode || raw.startsWith('!')) break; // ![[embed]] shows its source
+      // [[note|alias]] shows the alias; a blank alias falls back to the note
+      const { target: page, alias } = splitWikilink(source.slice(contentNode.from, contentNode.to));
+      const resolved = getWikilinkContext()?.isResolved(page) ?? true;
+      const link = createWikilinkElement(page, alias.trim() ? alias : page, resolved, () => {
+        const editor = link.closest<HTMLElement>('.cm-editor');
+        const view = editor && EditorView.findFromDOM(editor);
+        return view ? linksCreate(view) : false;
+      });
+      // As for links: keep the press from swapping the cell for its source
+      link.addEventListener('mousedown', e => e.preventDefault());
       target.appendChild(link);
       return;
     }
@@ -289,7 +320,7 @@ class TableWidget extends WidgetType {
     // doesn't split the markdown row across multiple lines. Pipes and
     // backslashes are handled by the input handler's escapeForCell.
     // A URL pasted over selected text links that text (a markdown link,
-    // even to a doc: cells don't render wikilinks).
+    // even to a doc).
     el.addEventListener('paste', e => {
       e.preventDefault();
       const pasted = e.clipboardData?.getData('text/plain') ?? '';

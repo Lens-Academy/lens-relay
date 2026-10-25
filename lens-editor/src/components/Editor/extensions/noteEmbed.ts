@@ -13,7 +13,7 @@ import { defaultKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { indentUnit, syntaxHighlighting } from '@codemirror/language';
 import { markdownHighlightStyle } from '../editorTheme';
-import { Autolink, Table, TaskList } from '@lezer/markdown';
+import { Autolink, TaskList } from '@lezer/markdown';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { findEmbedLines } from '../../../../shared/embeds';
@@ -23,6 +23,7 @@ import { criticMarkupExtension, suggestionModeField, toggleSuggestionMode } from
 import { livePreview } from './livePreview';
 import { markdownTableExtension } from './markdownTable';
 import { WikilinkExtension } from './wikilinkParser';
+import { WikilinkTable } from './wikilinkTable';
 import { wikilinkMetadataChanged } from './wikilinkEffects';
 
 export interface NoteEmbedContext {
@@ -145,7 +146,7 @@ export function embedViewExtensions(canAcceptReject: boolean) {
     indentUnit.of('\t'),
     EditorState.tabSize.of(4),
     syntaxHighlighting(markdownHighlightStyle, { fallback: true }),
-    markdown({ base: markdownLanguage, extensions: [WikilinkExtension, TaskList, Autolink, Table], addKeymap: false }),
+    markdown({ base: markdownLanguage, extensions: [WikilinkExtension, TaskList, Autolink, WikilinkTable], addKeymap: false }),
     livePreview(undefined, { embeds: false }),
     markdownTableExtension(),
     criticMarkupExtension({ canAcceptReject }),

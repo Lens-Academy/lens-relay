@@ -19,8 +19,9 @@ import { completionKeymap } from '@codemirror/autocomplete';
 import { lintKeymap, forceLinting } from '@codemirror/lint';
 import { harperLinter, updateHarperFolder } from './extensions/harper';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { Autolink, Table, TaskList } from '@lezer/markdown';
+import { Autolink, TaskList } from '@lezer/markdown';
 import { WikilinkExtension } from './extensions/wikilinkParser';
+import { WikilinkTable } from './extensions/wikilinkTable';
 import { tightMarkdownKeymap } from './extensions/tightListEnter';
 import { segmentIdKeymap } from './extensions/segmentIds';
 import { checklistKeymap } from './extensions/checklistToggle';
@@ -486,7 +487,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         ]),
         markdown({
           base: markdownLanguage,
-          extensions: [WikilinkExtension, TaskList, Autolink, Table],
+          extensions: [WikilinkExtension, TaskList, Autolink, WikilinkTable],
           addKeymap: false,
           // pasteLink below does this, with wikilinks for docs
           pasteURLAsLink: false,
