@@ -12,9 +12,13 @@ import { useDocTabTitle, docDisplayName } from '../hooks/useDocTabTitle';
 
 interface DocumentTitleProps {
   currentDocId: string;
+  /** One small line (the document is scrolled down), unless the title is being edited. */
+  compact?: boolean;
 }
 
-export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
+export function DocumentTitle({ currentDocId, compact: scrolled = false }: DocumentTitleProps) {
+  const [editing, setEditing] = useState(false);
+  const compact = scrolled && !editing;
   const { metadata, folderNames, justCreatedRef } = useNavigation();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const cancelledRef = useRef(false);
@@ -52,7 +56,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
     const observer = new ResizeObserver(fit);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [value]);
+  }, [value, compact]);
 
   // Auto-focus and select when document was just created via instant-create
   useEffect(() => {
@@ -151,11 +155,14 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
           value={value}
           // A file name is one line: a pasted line break becomes a space.
           onChange={(e) => { setValue(e.target.value.replace(/[\r\n]+/g, ' ')); setRenameError(null); }}
-          onBlur={handleBlur}
+          onFocus={() => setEditing(true)}
+          onBlur={() => { setEditing(false); handleBlur(); }}
+          wrap={compact ? 'off' : 'soft'}
           onKeyDown={handleKeyDown}
           aria-label="Document name"
-          className="flex-1 min-w-0 resize-none overflow-hidden text-3xl font-bold leading-tight text-gray-900 bg-transparent
-                     border-none outline-none placeholder-gray-400 caret-gray-900 [overflow-wrap:anywhere]"
+          className={`flex-1 min-w-0 resize-none overflow-hidden font-bold leading-tight text-gray-900 bg-transparent
+                     border-none outline-none placeholder-gray-400 caret-gray-900 [overflow-wrap:anywhere]
+                     ${compact ? 'text-base text-ellipsis whitespace-nowrap' : 'text-3xl'}`}
           placeholder="Untitled"
           spellCheck={false}
         />

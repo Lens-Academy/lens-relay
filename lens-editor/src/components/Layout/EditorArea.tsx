@@ -170,6 +170,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   // ScrollSource wrapping the editor's scroll container. Pass the live element
   // (not the ref) so the hook re-attaches when editorView arrives.
   const scrollSource = useScrollSource(editorView ? (editorView.scrollDOM as HTMLElement) : null);
+  // The title shrinks to one small line once the document is scrolled away from its top, so it
+  // stops taking a fifth of a phone screen (Lauren, 2026-10-25).
+  const [scrolledDown, setScrolledDown] = useState(false);
+  useEffect(() => scrollSource.subscribe(() => setScrolledDown(scrollSource.getScrollTop() > 8)), [scrollSource]);
 
   const [synced, setSynced] = useState(false);
   const [isSourceMode, setIsSourceMode] = useState(false);
@@ -544,8 +548,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         {/* Editor fills remaining space */}
         <div id="editor" className="flex-1 flex flex-col min-w-0 bg-white" style={{ minWidth: 250 }}>
           <div className="max-w-[700px] mx-auto w-full">
-            <div className="px-6 pt-5 pb-1">
-              <DocumentTitle currentDocId={currentDocId} />
+            <div className={`px-6 pb-1 transition-[padding] ${scrolledDown ? 'pt-1' : 'pt-5'}`}>
+              <DocumentTitle currentDocId={currentDocId} compact={scrolledDown} />
             </div>
             <div className="mx-6 border-b border-gray-200" />
           </div>
