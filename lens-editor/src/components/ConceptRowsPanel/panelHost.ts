@@ -1,8 +1,8 @@
 /**
- * The Concepts panel sits inside the main editor, as a block widget before
- * the first line, so it scrolls with the document instead of taking a fixed
- * slice of the pane. The widget only holds a host element; React renders
- * the panel into it through a portal (EditorArea).
+ * The page header (icon and title) and the Concepts panel sit inside the
+ * main editor, as a block widget before the first line, so they scroll with
+ * the document instead of taking a fixed slice of the pane. The widget only
+ * holds a host element; React renders into it through a portal (EditorArea).
  */
 import { StateEffect, StateField } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view';

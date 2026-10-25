@@ -9,7 +9,7 @@
  *   - Test A — Right-click → "Add Comment" goes through Editor's onRequestAddComment
  *     prop, which EditorArea must wire into CommentsLayer; submitting writes
  *     `{>>…<<}` into the Y.Text at the click position.
- *   - Test B — The sidebar "+ Add" button reads the cursor at click-time rather
+ *   - Test B — The sidebar "Add comment" button reads the cursor at click-time rather
  *     than at render-time, so a cursor move after the last EditorArea render is
  *     respected.
  *
@@ -190,8 +190,8 @@ describe('EditorArea — add comment integration', () => {
     });
   });
 
-  it('the sidebar "+ Add" button inserts at the current cursor, not a stale render-time cursor', async () => {
-    // Uses the sidebar's own "+ Add" button (which has its own showAddForm
+  it('the sidebar "Add comment" button inserts at the current cursor, not a stale render-time cursor', async () => {
+    // Uses the sidebar's own "Add comment" button (which has its own showAddForm
     // state, so it opens the form independent of the keyboard-shortcut wire
     // tested above). This isolates the stale-prop bug from the dead-trigger bug.
     const ytext = ydoc.getText('contents');
@@ -209,8 +209,8 @@ describe('EditorArea — add comment integration', () => {
       view.dispatch({ selection: { anchor: 6 } });
     });
 
-    // Click the sidebar's "+ Add" button → form opens.
-    const addBtn = screen.getByRole('button', { name: '+ Add' });
+    // Click the sidebar's "Add comment" button → form opens.
+    const addBtn = screen.getByRole('button', { name: 'Add comment' });
     fireEvent.click(addBtn);
     await fillAndSubmitForm('mid note');
 

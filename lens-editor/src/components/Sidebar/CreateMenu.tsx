@@ -52,7 +52,7 @@ export function CreateMenu({
   }, [open, handleClose]);
 
   return (
-    <div ref={menuRef} className="ml-auto flex-shrink-0 relative">
+    <div ref={menuRef} className={`lens-tree-actions ml-auto flex-shrink-0 relative${open ? " is-open" : ""}`}>
       <button
         aria-label={`Create in ${folderName}`}
         onClick={(e) => {
@@ -64,7 +64,7 @@ export function CreateMenu({
             setOpen(true);
           }
         }}
-        className="p-0.5 max-md:p-2 max-md:-my-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded"
+        className="lens-tree-action max-md:p-2 max-md:-my-1.5"
       >
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -72,10 +72,10 @@ export function CreateMenu({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 bg-white rounded shadow-lg border border-gray-200 py-1 min-w-[140px] max-w-[260px] z-50">
+        <div className="lens-popover absolute right-0 top-full mt-1 p-1 min-w-[140px] max-w-[260px] z-50">
           {onCreateDocument && (
             <button
-              className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+              className="lens-create-item"
               onClick={(e) => {
                 e.stopPropagation();
                 onCreateDocument();
@@ -89,7 +89,7 @@ export function CreateMenu({
             <>
               <button
                 aria-expanded={templatesOpen}
-                className="w-full flex items-center justify-between gap-2 text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 whitespace-nowrap"
+                className="lens-create-item flex items-center justify-between gap-2 whitespace-nowrap"
                 onClick={(e) => {
                   e.stopPropagation();
                   setTemplatesOpen(!templatesOpen);
@@ -107,7 +107,7 @@ export function CreateMenu({
                 <button
                   key={template.path}
                   title={template.path}
-                  className="w-full text-left pl-6 pr-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 truncate"
+                  className="lens-create-item pl-6 truncate"
                   onClick={(e) => {
                     e.stopPropagation();
                     onCreateFromTemplate(template);
@@ -121,7 +121,7 @@ export function CreateMenu({
           )}
           {onCreateHtmlDocument && (
             <button
-              className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+              className="lens-create-item"
               onClick={(e) => {
                 e.stopPropagation();
                 onCreateHtmlDocument();
@@ -133,7 +133,7 @@ export function CreateMenu({
           )}
           {onCreateFolder && (
             <button
-              className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+              className="lens-create-item"
               onClick={(e) => {
                 e.stopPropagation();
                 onCreateFolder();

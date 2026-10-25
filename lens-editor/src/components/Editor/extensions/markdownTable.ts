@@ -682,14 +682,15 @@ const tableTheme = EditorView.theme({
     minWidth: '100%',
     maxWidth: 'calc(100cqi - 32px)',
     overflowX: 'auto',
-    borderRadius: '6px',
-    border: '1px solid #e5e7eb',
+    // Notion's simple table: square corners, warm grey borders, 14px text on
+    // a 20px line, cells padded 7px 9px (colours are index.css tokens, for dark mode)
+    border: '1px solid var(--lens-table-border)',
   },
   '.cm-md-table': {
     borderCollapse: 'collapse',
     width: '100%',
     fontSize: '14px',
-    lineHeight: '1.5',
+    lineHeight: '20px',
   },
   // Each column is bounded on both sides:
   //  - minimum: 8em. The explicit minWidth is the only floor Chrome honors —
@@ -705,9 +706,9 @@ const tableTheme = EditorView.theme({
   // whiteSpace/overflowWrap are set explicitly because cells inherit
   // pre-wrap/anywhere from .cm-content and .cm-lineWrapping.
   '.cm-md-table th, .cm-md-table td': {
-    padding: '6px 12px',
-    borderRight: '1px solid #e5e7eb',
-    borderBottom: '1px solid #e5e7eb',
+    padding: '7px 9px',
+    borderRight: '1px solid var(--lens-table-border)',
+    borderBottom: '1px solid var(--lens-table-border)',
     whiteSpace: 'normal',
     overflowWrap: 'break-word',
     verticalAlign: 'top',
@@ -722,7 +723,7 @@ const tableTheme = EditorView.theme({
     content: '""',
     display: 'inline-block',
     width: '0',
-    height: '1.5em',
+    height: '20px',
     verticalAlign: 'middle',
   },
   '.cm-md-table th:last-child, .cm-md-table td:last-child': {
@@ -732,23 +733,23 @@ const tableTheme = EditorView.theme({
     borderBottom: 'none',
   },
   '.cm-md-table thead tr': {
-    borderBottom: '2px solid #e5e7eb',
+    borderBottom: '1px solid var(--lens-table-border)',
   },
   '.cm-md-table th': {
-    background: '#f9fafb',
-    fontWeight: '600',
-    color: '#374151',
+    background: 'var(--lens-table-header-bg)',
+    fontWeight: '500',
+    color: 'var(--lens-text)',
   },
   '.cm-md-table td': {
-    color: '#4b5563',
-    background: 'white',
+    color: 'var(--lens-text)',
+    background: 'var(--lens-page-bg)',
   },
   '.cm-md-table tbody tr:hover td': {
-    background: '#f9fafb',
+    background: 'var(--lens-table-row-hover)',
   },
   '.cm-md-table th:focus, .cm-md-table td:focus': {
-    background: '#eff6ff',
-    boxShadow: 'inset 0 0 0 2px #3b82f6',
+    background: 'var(--lens-bg-blue)',
+    boxShadow: 'inset 0 0 0 2px var(--lens-blue)',
     borderRadius: '2px',
   },
 });

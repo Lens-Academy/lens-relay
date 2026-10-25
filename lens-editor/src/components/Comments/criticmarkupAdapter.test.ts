@@ -118,6 +118,16 @@ describe('a new comment while others edit', () => {
     expect(text.startsWith('NEW LINE\nalpha beta{>>')).toBe(true);
     expect(text.endsWith('<<} gamma')).toBe(true);
   });
+  it('highlights the text it is on, and returns the new thread key', () => {
+    const { ytext } = makeDoc('alpha beta gamma');
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', false));
+    const key = pinInsertKey(ytext, String('alpha beta'.length), 'alpha '.length); // "beta" selected
+    act(() => { ytext.insert(0, 'NEW '); }); // a collaborator types above
+    let created: string | void = undefined;
+    act(() => { created = result.current.callbacks.onAddComment!(key, 'hi'); });
+    expect(ytext.toString().startsWith('NEW alpha {==beta==}{>>')).toBe(true);
+    expect(created).toBe(String('NEW alpha {==beta==}'.length));
+  });
   it('still accepts a plain offset key', () => {
     const { ytext } = makeDoc('ab');
     const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', false));

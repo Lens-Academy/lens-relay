@@ -3,9 +3,9 @@ import type { TreeApi, NodeApi } from 'react-arborist';
 import type { TreeNode } from '../../lib/tree-utils';
 import { useFileTreeContext } from './FileTreeContext';
 import type { TemplateOption } from '../../lib/templates';
+import { CHEVRON_SVG, FOLDER_ICON_SVG, TREE_ROW_HEIGHT, treeItemPadding } from './treeLayout';
 
-const ROW_HEIGHT = 28; // Must match FileTree's rowHeight prop
-const INDENT_SIZE = 16; // Must match FileTree's indent prop
+const ROW_HEIGHT = TREE_ROW_HEIGHT;
 const MAX_STICKY_DEPTH = 5;
 
 interface StickyScrollOverlayProps {
@@ -135,9 +135,9 @@ function computeStickyHeaders(
 
 interface RowHolder {
   root: HTMLDivElement;
-  indentGuides: HTMLSpanElement[];
-  chevron: SVGSVGElement;
-  folderIcon: SVGSVGElement;
+  item: HTMLDivElement;
+  icon: HTMLSpanElement;
+  sectionChevron: HTMLSpanElement;
   nameSpan: HTMLSpanElement;
   createWrapper: HTMLDivElement;
   createButton: HTMLButtonElement;
@@ -159,138 +159,61 @@ function createMenuItem(label: string): HTMLButtonElement {
   const button = document.createElement('button');
   button.type = 'button';
   button.textContent = label;
-  button.style.display = 'block';
-  button.style.width = '100%';
-  button.style.padding = '6px 12px';
-  button.style.border = 'none';
-  button.style.background = 'transparent';
-  button.style.color = '#374151';
-  button.style.fontSize = '14px';
-  button.style.lineHeight = '20px';
-  button.style.textAlign = 'left';
-  button.style.cursor = 'pointer';
-  button.addEventListener('mouseenter', () => { button.style.backgroundColor = '#f3f4f6'; });
-  button.addEventListener('mouseleave', () => { button.style.backgroundColor = 'transparent'; });
+  button.className = 'lens-create-item';
   return button;
 }
 
+/**
+ * A sticky folder header, built like a FileTreeNode row (the lens-tree-*
+ * classes in index.css): the folder's icon (open, since its rows are below),
+ * the name, and the create button. A shared folder is a section label.
+ */
 function createRowElement(
   slot: number,
   callbacksRef: MutableRefObject<CreateCallbacks>,
   openMenuRef: MutableRefObject<HTMLDivElement | null>,
 ): RowHolder {
   const root = document.createElement('div');
+  root.className = 'lens-tree-row lens-tree-sticky';
   root.style.position = 'absolute';
   root.style.left = '0';
   root.style.right = '0';
   root.style.height = `${ROW_HEIGHT}px`;
   root.style.display = 'none';
-  root.style.alignItems = 'center';
-  root.style.paddingRight = '8px';
-  root.style.paddingTop = '2px';
-  root.style.paddingBottom = '2px';
   root.style.cursor = 'pointer';
   root.style.userSelect = 'none';
-  root.style.backgroundColor = '#f6f6f6';
   root.style.pointerEvents = 'auto';
   root.style.zIndex = String(MAX_STICKY_DEPTH - slot);
 
-  root.addEventListener('mouseenter', () => { root.style.backgroundColor = '#f3f4f6'; });
-  root.addEventListener('mouseleave', () => { root.style.backgroundColor = '#f6f6f6'; });
+  const item = document.createElement('div');
+  item.className = 'lens-tree-item';
+  root.appendChild(item);
 
-  // Pre-allocate indent guides (max depth, hide extras)
-  const indentGuides: HTMLSpanElement[] = [];
-  for (let i = 0; i < MAX_STICKY_DEPTH; i++) {
-    const guide = document.createElement('span');
-    guide.style.flexShrink = '0';
-    guide.style.position = 'relative';
-    guide.style.width = `${INDENT_SIZE}px`;
-    guide.style.display = 'none';
-
-    const line = document.createElement('span');
-    line.style.position = 'absolute';
-    line.style.left = '7px';
-    line.style.top = '0';
-    line.style.bottom = '0';
-    line.style.width = '1px';
-    line.style.backgroundColor = '#e5e7eb'; // gray-200
-
-    guide.appendChild(line);
-    root.appendChild(guide);
-    indentGuides.push(guide);
-  }
-
-  // Chevron SVG (no transition — imperative updates must snap, not animate)
-  const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  chevron.setAttribute('viewBox', '0 0 24 24');
-  chevron.setAttribute('fill', 'none');
-  chevron.setAttribute('stroke', 'currentColor');
-  chevron.style.width = '16px';
-  chevron.style.height = '16px';
-  chevron.style.color = '#6b7280'; // gray-500
-  chevron.style.flexShrink = '0';
-  chevron.style.marginLeft = '4px';
-  const chevronPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  chevronPath.setAttribute('stroke-linecap', 'round');
-  chevronPath.setAttribute('stroke-linejoin', 'round');
-  chevronPath.setAttribute('stroke-width', '2');
-  chevronPath.setAttribute('d', 'M9 5l7 7-7 7');
-  chevron.appendChild(chevronPath);
-  root.appendChild(chevron);
-
-  // Folder icon SVG
-  const folderIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  folderIcon.setAttribute('viewBox', '0 0 24 24');
-  folderIcon.setAttribute('fill', 'none');
-  folderIcon.setAttribute('stroke', 'currentColor');
-  folderIcon.style.width = '16px';
-  folderIcon.style.height = '16px';
-  folderIcon.style.color = '#6b7280'; // gray-500
-  folderIcon.style.flexShrink = '0';
-  folderIcon.style.marginLeft = '2px';
-  const folderPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  folderPath.setAttribute('stroke-linecap', 'round');
-  folderPath.setAttribute('stroke-linejoin', 'round');
-  folderPath.setAttribute('stroke-width', '2');
-  folderPath.setAttribute('d', 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z');
-  folderIcon.appendChild(folderPath);
-  root.appendChild(folderIcon);
+  // No transitions: imperative updates must snap, not animate
+  const icon = document.createElement('span');
+  icon.className = 'lens-tree-icon is-folder lens-tree-snap';
+  icon.innerHTML = FOLDER_ICON_SVG;
+  item.appendChild(icon);
 
   // Name span
   const nameSpan = document.createElement('span');
-  nameSpan.style.overflow = 'hidden';
-  nameSpan.style.textOverflow = 'ellipsis';
-  nameSpan.style.whiteSpace = 'nowrap';
-  nameSpan.style.fontSize = '14px';
-  nameSpan.style.lineHeight = '20px';
-  nameSpan.style.color = '#374151'; // gray-700
-  nameSpan.style.marginLeft = '4px';
-  root.appendChild(nameSpan);
+  nameSpan.className = 'lens-tree-name truncate';
+  item.appendChild(nameSpan);
+
+  const sectionChevron = document.createElement('span');
+  sectionChevron.className = 'lens-tree-section-chevron lens-tree-snap';
+  sectionChevron.innerHTML = CHEVRON_SVG;
+  item.appendChild(sectionChevron);
 
   const createWrapper = document.createElement('div');
+  createWrapper.className = 'lens-tree-actions';
   createWrapper.style.marginLeft = 'auto';
   createWrapper.style.flexShrink = '0';
   createWrapper.style.display = 'none';
 
   const createButton = document.createElement('button');
   createButton.type = 'button';
-  createButton.style.padding = '2px';
-  createButton.style.border = 'none';
-  createButton.style.borderRadius = '4px';
-  createButton.style.background = 'transparent';
-  createButton.style.color = '#9ca3af'; // gray-400
-  createButton.style.cursor = 'pointer';
-  createButton.style.display = 'flex';
-  createButton.style.alignItems = 'center';
-  createButton.style.justifyContent = 'center';
-  createButton.addEventListener('mouseenter', () => {
-    createButton.style.color = '#4b5563';
-    createButton.style.backgroundColor = '#e5e7eb';
-  });
-  createButton.addEventListener('mouseleave', () => {
-    createButton.style.color = '#9ca3af';
-    createButton.style.backgroundColor = 'transparent';
-  });
+  createButton.className = 'lens-tree-action';
   createButton.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -357,18 +280,15 @@ function createRowElement(
   plusIcon.appendChild(plusPath);
   createButton.appendChild(plusIcon);
   createWrapper.appendChild(createButton);
-  root.appendChild(createWrapper);
+  item.appendChild(createWrapper);
 
   const createMenu = document.createElement('div');
+  createMenu.className = 'lens-popover';
   createMenu.style.position = 'fixed';
   createMenu.style.display = 'none';
   createMenu.style.minWidth = '140px';
   createMenu.style.maxWidth = '260px';
-  createMenu.style.padding = '4px 0';
-  createMenu.style.border = '1px solid #e5e7eb';
-  createMenu.style.borderRadius = '4px';
-  createMenu.style.backgroundColor = '#ffffff';
-  createMenu.style.boxShadow = '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)';
+  createMenu.style.padding = '4px';
   createMenu.style.zIndex = '50';
   createMenu.addEventListener('click', e => e.stopPropagation());
   createMenu.addEventListener('mousedown', e => e.stopPropagation());
@@ -399,7 +319,7 @@ function createRowElement(
   templatesChevron.style.width = '12px';
   templatesChevron.style.height = '12px';
   templatesChevron.style.flexShrink = '0';
-  templatesChevron.style.color = '#9ca3af'; // gray-400
+  templatesChevron.style.color = 'var(--lens-text-tertiary)';
   const templatesChevronPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   templatesChevronPath.setAttribute('stroke-linecap', 'round');
   templatesChevronPath.setAttribute('stroke-linejoin', 'round');
@@ -432,7 +352,7 @@ function createRowElement(
   createMenu.appendChild(newFolderButton);
   document.body.appendChild(createMenu);
 
-  return { root, indentGuides, chevron, folderIcon, nameSpan, createWrapper, createButton, createMenu, newFileButton, templatesButton, templatesList, newFolderButton };
+  return { root, item, icon, sectionChevron, nameSpan, createWrapper, createButton, createMenu, newFileButton, templatesButton, templatesList, newFolderButton };
 }
 
 // ── React component (thin shell — all scroll work is imperative) ────
@@ -524,7 +444,8 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
       let maxBottom = 0;
       for (let i = 0; i < headers.length; i++) {
         rows[i].root.style.transform = `translateY(${headers[i].top}px)`;
-        rows[i].chevron.style.transform = headers[i].isOpen ? 'rotate(90deg)' : '';
+        rows[i].icon.classList.toggle('is-open', headers[i].isOpen);
+        rows[i].sectionChevron.classList.toggle('is-open', headers[i].isOpen);
         maxBottom = Math.max(maxBottom, headers[i].top + ROW_HEIGHT);
       }
       container.style.height = `${Math.max(0, maxBottom)}px`;
@@ -544,13 +465,16 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
         row.root.dataset.nodeId = h.id;
         row.root.dataset.nodePath = h.path;
 
-        // Update indent guides
-        for (let g = 0; g < MAX_STICKY_DEPTH; g++) {
-          row.indentGuides[g].style.display = g < h.level ? 'block' : 'none';
-        }
+        // Indent, or a section label for a shared folder
+        const section = h.level === 0;
+        row.item.style.paddingLeft = `${treeItemPadding(h.level)}px`;
+        row.item.classList.toggle('is-section', section);
+        row.icon.style.display = section ? 'none' : '';
+        row.sectionChevron.style.display = section ? '' : 'none';
 
-        // Chevron rotation (no transition — snaps immediately)
-        row.chevron.style.transform = h.isOpen ? 'rotate(90deg)' : '';
+        // Open or closed (no transition — snaps immediately)
+        row.icon.classList.toggle('is-open', h.isOpen);
+        row.sectionChevron.classList.toggle('is-open', h.isOpen);
 
         // Name
         row.nameSpan.textContent = h.name;

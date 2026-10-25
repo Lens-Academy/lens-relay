@@ -17,7 +17,14 @@ export interface CommentCardProps {
   actions?: ThreadActions;
 }
 
-const CARD_BORDER = '#e8e5df';
+/** Notion's comment icon: a speech bubble */
+export function CommentIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.5 2.75h9a1.75 1.75 0 0 1 1.75 1.75v5.5A1.75 1.75 0 0 1 12.5 11.75H8.5l-3 2.5v-2.5h-2A1.75 1.75 0 0 1 1.75 10V4.5A1.75 1.75 0 0 1 3.5 2.75Z" />
+    </svg>
+  );
+}
 
 function clipText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
@@ -30,7 +37,7 @@ function stop(fn: () => void) {
   };
 }
 
-const LINK_BUTTON = 'text-[11px] font-medium text-blue-600 hover:text-blue-800';
+const LINK_BUTTON = 'lens-comment-action';
 
 /** What the thread points at in the page, and whether it is still found there. */
 function AnchorLine({ info, thread, actions }: { info: ThreadAnchorInfo; thread: ThreadView; actions?: ThreadActions }) {
@@ -93,86 +100,47 @@ export function CommentCard(props: CommentCardProps): ReactElement {
     setShowReplyForm(false);
   };
 
+  // Notion's discussion card (index.css): at rest a faint border, hovered a
+  // grey background, open (focused) a shadow; both nudge it left. Messages
+  // are rows with an avatar, joined by a thread line.
   return (
     <div
-      className={`comments-card${focused ? ' comments-card--focused' : ''}${resolved ? ' opacity-75' : ''} bg-white rounded-lg border overflow-hidden transition-shadow`}
+      className={`comments-card lens-comment-card${focused ? ' comments-card--focused is-open' : ''}${resolved ? ' is-resolved' : ''}`}
       data-resolved={resolved ? '' : undefined}
-      style={{
-        borderColor: focused ? undefined : CARD_BORDER,
-        outline: focused ? '2px solid #3b82f6' : undefined,
-        outlineOffset: focused ? '-1px' : undefined,
-        boxShadow: focused ? '0 1px 3px rgba(0,0,0,0.12)' : undefined,
-      }}
       onClick={handleCardClick}
     >
-      {/* Number badge — palette matches the inline .cm-comment-badge in the prose. */}
-      {number != null && (
-        <div
-          className="px-3 pt-2 pb-0 flex items-center gap-2"
-          style={{ fontSize: 11, color: focused ? '#2563eb' : '#9ca3af', fontWeight: 600 }}
-        >
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              minWidth: 18,
-              height: 18,
-              padding: '0 6px',
-              borderRadius: 9,
-              fontSize: 10,
-              background: focused ? '#2563eb' : 'rgba(59, 130, 246, 0.15)',
-              color: focused ? '#fff' : '#2563eb',
-              border: focused ? '1px solid #2563eb' : '1px solid rgba(59, 130, 246, 0.3)',
-              fontWeight: 700,
-            }}
-          >
-            {number}
-          </span>
-        </div>
-      )}
-
-      {resolved && (
-        <div className="px-3 pt-2">
-          <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-800">Resolved</span>
+      {/* Number, as on the comment's marker in the text */}
+      {(number != null || resolved) && (
+        <div className="lens-comment-card-top">
+          {number != null && (
+            <span className="lens-comment-number" title={`Comment ${number}`}>
+              <CommentIcon size={14} />
+              {number}
+            </span>
+          )}
+          {resolved && <span className="lens-comment-resolved">Resolved</span>}
         </div>
       )}
       {thread.anchor && <AnchorLine info={thread.anchor} thread={thread} actions={actions} />}
 
-      {/* Root comment */}
-      <div className="px-3 pt-2">
+      <div className="lens-comment-thread">
         <CommentRow
           message={root}
           onEdit={onEdit}
           onDelete={onDelete}
         />
+        {replies.map((reply) => (
+          <CommentRow
+            key={reply.id}
+            message={reply}
+            onEdit={onEdit}
+            onDelete={onDelete}
+          />
+        ))}
       </div>
 
-      {/* Replies */}
-      {replies.length > 0 && (
-        <div
-          className="ml-3 mr-3 mb-2 mt-2 border-l-2 pl-3"
-          style={{ borderColor: CARD_BORDER }}
-        >
-          {replies.map((reply) => (
-            <div key={reply.id} className="py-1">
-              <CommentRow
-                message={reply}
-                onEdit={onEdit}
-                onDelete={onDelete}
-              />
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Reply button row */}
-      <div className="px-3 pb-2 pt-1 flex items-center gap-3">
-        {replies.length > 0 && (
-          <span className="text-[11px] text-gray-500">
-            {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
-          </span>
-        )}
+      {/* Actions row */}
+      <div className="lens-comment-actions">
         {!showReplyForm && (
           <button
             type="button"
@@ -180,7 +148,7 @@ export function CommentCard(props: CommentCardProps): ReactElement {
               e.stopPropagation();
               setShowReplyForm(true);
             }}
-            className="text-[11px] text-blue-600 hover:text-blue-800 font-medium"
+            className="lens-comment-action"
           >
             Reply
           </button>
@@ -191,7 +159,7 @@ export function CommentCard(props: CommentCardProps): ReactElement {
           </button>
         )}
         {resolved && (
-          <span className="text-[11px] text-gray-500">
+          <span className="lens-comment-note">
             Resolved by {resolved.by}
             {actions?.onReopen && (
               <>
@@ -205,16 +173,13 @@ export function CommentCard(props: CommentCardProps): ReactElement {
         )}
       </div>
 
-      {/* Reply form */}
+      {/* Reply box */}
       {showReplyForm && (
-        <div
-          className="mx-3 mb-3 border rounded-md overflow-hidden"
-          style={{ borderColor: CARD_BORDER }}
-        >
+        <div className="lens-comment-reply" onClick={(e) => e.stopPropagation()}>
           <AddCommentForm
             onSubmit={handleReplySubmit}
             onCancel={() => setShowReplyForm(false)}
-            placeholder="Write a reply..."
+            placeholder="Reply…"
             submitLabel="Send"
           />
         </div>
@@ -243,18 +208,14 @@ function CommentRow({ message, onEdit, onDelete }: CommentRowProps) {
 
   if (editing) {
     return (
-      <div
-        className="border rounded-md overflow-hidden my-1"
-        style={{ borderColor: CARD_BORDER }}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="lens-comment-edit" onClick={(e) => e.stopPropagation()}>
         <AddCommentForm
           onSubmit={(content) => {
             onEdit(message, content);
             setEditing(false);
           }}
           onCancel={() => setEditing(false)}
-          placeholder="Edit comment..."
+          placeholder="Edit comment…"
           submitLabel="Save"
           initialValue={body}
         />
@@ -263,30 +224,29 @@ function CommentRow({ message, onEdit, onDelete }: CommentRowProps) {
   }
 
   return (
-    <div className="comment-item">
-      <div className="flex items-baseline gap-2 mb-0.5">
-        <span className="text-[13px] font-semibold text-gray-900">{author}</span>
+    <div className="comment-item lens-comment-row">
+      {/* Notion's avatar for someone without a photo: their initial */}
+      <span className="lens-comment-avatar" aria-hidden="true">{author.trim().charAt(0).toUpperCase() || '?'}</span>
+      <div className="lens-comment-head">
+        <span className="lens-comment-author">{author}</span>
         {timestamp && (
-          <span className="text-[11px] text-gray-400">{formatTimestamp(timestamp)}</span>
+          <span className="lens-comment-time">{formatTimestamp(timestamp)}</span>
         )}
       </div>
-      <p className="text-[13px] leading-relaxed text-gray-800 whitespace-pre-wrap">{body}</p>
+      <p className="lens-comment-body">{body}</p>
       {(canModify || canDelete) && (
-        <div className="mt-1 flex items-center gap-2">
+        <div className="lens-comment-tools">
           {canModify && (
-            <>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditing(true);
-                }}
-                className="text-[11px] text-gray-500 hover:text-blue-700"
-              >
-                Edit
-              </button>
-              <span className="text-gray-300">·</span>
-            </>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditing(true);
+              }}
+              className="lens-comment-tool"
+            >
+              Edit
+            </button>
           )}
           <button
             type="button"
@@ -294,7 +254,7 @@ function CommentRow({ message, onEdit, onDelete }: CommentRowProps) {
               e.stopPropagation();
               setDeleteOpen(true);
             }}
-            className="text-[11px] text-gray-500 hover:text-red-700"
+            className="lens-comment-tool"
           >
             Delete
           </button>

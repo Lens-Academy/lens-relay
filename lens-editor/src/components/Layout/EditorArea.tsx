@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { Fragment, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { EditorView } from '@codemirror/view';
@@ -34,6 +34,7 @@ import { PanelErrorBoundary } from '../PanelErrorBoundary';
 import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { pinInsertKey, useThreadsFromYText } from '../Comments/criticmarkupAdapter';
+import { commentTarget } from '../Comments/commentTarget';
 import { useScrollSource } from '../Comments/useScrollSource';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { PanelDebugOverlay } from '../PanelDebugOverlay';
@@ -264,21 +265,21 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     return folderName ? (folderDocsRef.current.get(folderName) ?? null) : null;
   }, []);
 
-  // The Concepts panel, for the files the concept-row rules name, and the
-  // concept graph header, for concept files: rendered into a block widget at
-  // the top of the document so they scroll with it (graph first if both).
-  const [conceptPanelHost] = useState(() => document.createElement('div'));
+  // The page header (icon and title), then the Concepts panel, for the files
+  // the concept-row rules name, and the concept graph header, for concept
+  // files: rendered into a block widget at the top of the document so they
+  // scroll with it, as Notion's page header does (graph first if both).
+  const [pageTopHost] = useState(() => document.createElement('div'));
   const showConceptPanel = matchRule(currentFilePath) !== null;
   const showConceptGraph = isConceptPath(currentFilePath);
   const showJevCheck = isCheckPath(currentFilePath);
-  const showPanelHost = showConceptPanel || showConceptGraph || showJevCheck;
   useEffect(() => {
     if (!editorView) return;
     if (editorView.state.field(panelHostField, false) === undefined) {
       editorView.dispatch({ effects: StateEffect.appendConfig.of(panelHostField) });
     }
-    editorView.dispatch({ effects: setPanelHost.of(showPanelHost ? conceptPanelHost : null) });
-  }, [editorView, showPanelHost, conceptPanelHost]);
+    editorView.dispatch({ effects: setPanelHost.of(pageTopHost) });
+  }, [editorView, pageTopHost]);
 
   // Callback to receive view reference from Editor
   const handleEditorReady = useCallback((view: EditorView) => {
@@ -302,18 +303,24 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const commentsLayerRef = useRef<CommentsLayerHandle | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   editorViewRef.current = editorView;
+  // A new comment's place, pinned when its form opens: the selected text,
+  // which the comment highlights, or the cursor (Comments/commentTarget.ts)
+  const pinCommentTarget = useCallback((view: EditorView) => {
+    const target = commentTarget(view.state);
+    return pinInsertKey(yText, String(target.to), target.from < target.to ? target.from : undefined);
+  }, [yText]);
   const handleRequestAddComment = useCallback(() => {
     if (isMobile) {
       const view = editorViewRef.current;
       if (!view) return;
       commentSheetEpochRef.current++;
-      setPendingCommentAction({ type: 'add', key: pinInsertKey(yText, String(view.state.selection.main.head)) });
+      setPendingCommentAction({ type: 'add', key: pinCommentTarget(view) });
       openDrawer('comments');
       return;
     }
     manager.expand('comment-margin');
     commentsLayerRef.current?.openAddForm();
-  }, [manager.expand, isMobile, openDrawer]);
+  }, [manager.expand, isMobile, openDrawer, pinCommentTarget]);
 
   // Track suggestion mode from editor state
   useEffect(() => {
@@ -340,15 +347,20 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     });
   }, [editorView, isSourceMode, isSuggestionMode]);
 
-  const handleCommentClick = useCallback((absFrom: number) => {
+  const handleCommentClick = useCallback((absFrom: number, opts?: { fromText?: boolean }) => {
     if (isMobile) {
+      // A tap on commented text is for editing it; its badge opens the thread
+      if (opts?.fromText) return;
       commentSheetEpochRef.current++;
       setPendingCommentAction({ type: 'focus', key: String(absFrom) });
       openDrawer('comments');
       return;
     }
     manager.expand('comment-margin');
-    commentsLayerRef.current?.toggleFocus(String(absFrom));
+    // A click in commented text opens its thread (it also places the cursor);
+    // the badge toggles it
+    if (opts?.fromText) commentsLayerRef.current?.focusThread(String(absFrom));
+    else commentsLayerRef.current?.toggleFocus(String(absFrom));
   }, [manager.expand, isMobile, openDrawer]);
 
   // Track editor focus on mobile — drives the nav-bar ↔ edit-toolbar swap.
@@ -458,16 +470,19 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         const segments = pathToSegments(currentFilePath);
         if (segments.length === 0) return null;
         return createPortal(
-          // Folders keep their names; a long file name is cut with an ellipsis
-          // (full path in the tooltip) instead of running under the controls.
-          <span className="flex min-w-0 text-sm text-gray-600" title={segments.join(' › ')}>
+          // Notion's breadcrumb: each folder and the page, "/" between them;
+          // long names are cut with an ellipsis (full path in the tooltip)
+          // instead of running under the controls.
+          <nav className="lens-breadcrumb" aria-label="Breadcrumb" title={segments.join(' / ')}>
             {segments.map((seg, i) => (
-              <span key={i} className={i === segments.length - 1 ? 'min-w-0 truncate' : 'shrink-0 whitespace-nowrap'}>
-                {i > 0 && <span className="mx-0.5">›</span>}
-                {seg}
-              </span>
+              <Fragment key={i}>
+                {i > 0 && <span className="lens-crumb-separator" aria-hidden="true">/</span>}
+                <span className="lens-crumb">
+                  <span className="lens-crumb-name">{seg}</span>
+                </span>
+              </Fragment>
             ))}
-          </span>,
+          </nav>,
           breadcrumbTarget
         );
       })()}
@@ -543,15 +558,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       <div id="editor-area" className="flex-1 flex min-h-0">
         {/* Editor fills remaining space */}
         <div id="editor" className="flex-1 flex flex-col min-w-0 bg-white" style={{ minWidth: 250 }}>
-          <div className="max-w-[700px] mx-auto w-full">
-            <div className="px-6 pt-5 pb-1">
-              <DocumentTitle currentDocId={currentDocId} />
-            </div>
-            <div className="mx-6 border-b border-gray-200" />
-          </div>
           <SyncedFileBanner />
-          {showPanelHost && createPortal(
+          {createPortal(
             <>
+              <DocumentTitle currentDocId={currentDocId} />
               {showJevCheck && (
                 <PanelErrorBoundary name="Jev check workbench" resetKey={currentDocId}>
                   <JevCheckPanel ytext={yText} />
@@ -568,7 +578,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
                 </PanelErrorBoundary>
               )}
             </>,
-            conceptPanelHost,
+            pageTopHost,
           )}
           {isSourceMode && isSuggestionMode && (
             <SourceSuggestionBanner />
@@ -603,7 +613,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         />
         <div
           id="comment-margin"
-          className={`overflow-hidden flex-shrink-0 relative ${commentMarginCollapsed ? '' : 'border-l border-gray-100 bg-gray-50/50'}`}
+          className="overflow-hidden flex-shrink-0 relative"
           style={{ width: commentMarginCollapsed ? 0 : Math.max(320, manager.getWidth('comment-margin')) }}
         >
           {editorView && (
@@ -618,7 +628,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onEdit={callbacks.onEdit}
               onDelete={callbacks.onDelete}
               onAddComment={callbacks.onAddComment}
-              getInsertKey={editorView ? () => pinInsertKey(yText, String(editorView.state.selection.main.head)) : undefined}
+              getInsertKey={editorView ? () => pinCommentTarget(editorView) : undefined}
             />
           )}
         </div>
@@ -700,7 +710,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onEdit={callbacks.onEdit}
               onDelete={callbacks.onDelete}
               onAddComment={canWrite ? callbacks.onAddComment : undefined}
-              getInsertKey={editorView && canWrite ? () => pinInsertKey(yText, String(editorView.state.selection.main.head)) : undefined}
+              getInsertKey={editorView && canWrite ? () => pinCommentTarget(editorView) : undefined}
             />
           </MobileDrawer>
 

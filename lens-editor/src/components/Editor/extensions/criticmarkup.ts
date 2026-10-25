@@ -50,9 +50,11 @@ export const commentOffsetTranslator = Facet.define<
  * Receives the absolute Y.Text offset (already passed through
  * commentOffsetTranslator). Unlike the other facets in this file, this one
  * defines no `combine` — the facet value is the array of all registrations
- * and each one is invoked.
+ * and each one is invoked. `fromText`: the click was on the text the comment
+ * is on (its highlight), which also places the cursor, so it opens the thread
+ * rather than toggling it.
  */
-export const commentClickCallback = Facet.define<(absFrom: number) => void>();
+export const commentClickCallback = Facet.define<(absFrom: number, opts?: { fromText?: boolean }) => void>();
 
 // Author context - can be set externally
 let currentAuthor = 'anonymous';
@@ -362,6 +364,14 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           if (!isNaN(absFrom)) {
             view.state.facet(commentClickCallback).forEach((cb) => cb(absFrom));
           }
+        } else {
+          // Text a comment is on opens its thread, as in Notion; the click
+          // still places the cursor
+          const commented = target.closest<HTMLElement>('.cm-comment-target');
+          const absFrom = parseInt(commented?.dataset.commentFrom ?? '', 10);
+          if (commented && !isNaN(absFrom) && view.state.selection.main.empty) {
+            view.state.facet(commentClickCallback).forEach((cb) => cb(absFrom, { fromText: true }));
+          }
         }
       });
     }
@@ -528,11 +538,21 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           deco: Decoration.mark({ class: 'cm-hidden-syntax' }),
         });
 
-        // Content (between delimiters)
+        // Content (between delimiters). A highlight a comment follows,
+        // {==text==}{>>comment<<}, is the text the comment is on: Notion's
+        // comment marking, which opens and lights up with its thread (the
+        // comments layer sets data-comment-focused on data-comment-from)
+        const next = ranges[ri + 1];
+        const commentOn = range.type === 'highlight' && next?.type === 'comment' && next.from === range.to;
         decorations.push({
           from: range.contentFrom,
           to: range.contentTo,
-          deco: Decoration.mark({ class: className }),
+          deco: commentOn
+            ? Decoration.mark({
+              class: `${className} cm-comment-target`,
+              attributes: { 'data-comment-from': String(translateOffset(next.from)) },
+            })
+            : Decoration.mark({ class: className }),
         });
 
         // Closing delimiter

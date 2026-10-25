@@ -28,11 +28,25 @@ function buildCommentMarkup(content: string): string {
 }
 
 /**
- * Insert a new comment at `pos` in the Y.Text.
+ * Insert a new comment at `pos` in the Y.Text. With `highlightFrom`, the
+ * text from there to `pos` is what the comment is on: it is wrapped in a
+ * highlight the comment follows, {==text==}{>>comment<<}, as a CriticMarkup
+ * comment on a span is written. Returns where the comment starts (its
+ * thread's key).
  */
-export function insertCommentInYText(ytext: Y.Text, content: string, pos: number): void {
+export function insertCommentInYText(ytext: Y.Text, content: string, pos: number, highlightFrom?: number): number {
   const markup = buildCommentMarkup(content);
-  ytext.insert(pos, markup);
+  if (highlightFrom == null || highlightFrom >= pos) {
+    ytext.insert(pos, markup);
+    return pos;
+  }
+  const wrap = () => {
+    ytext.insert(pos, `==}${markup}`);
+    ytext.insert(highlightFrom, '{==');
+  };
+  if (ytext.doc) ytext.doc.transact(wrap);
+  else wrap();
+  return pos + 6;
 }
 
 /**

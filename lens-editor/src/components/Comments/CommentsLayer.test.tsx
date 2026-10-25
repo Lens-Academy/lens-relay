@@ -170,11 +170,11 @@ describe('a reply being written while others edit', () => {
     };
     const { rerender } = render(<CommentsLayer threads={[thread({ key: '100' })]} {...props} />);
     fireEvent.click(screen.getByRole('button', { name: /^reply$/i }));
-    const box = screen.getByPlaceholderText(/write a reply/i);
+    const box = screen.getByPlaceholderText(/reply…/i);
     fireEvent.change(box, { target: { value: 'half-written' } });
 
     rerender(<CommentsLayer threads={[thread({ key: '109' })]} {...props} />);
 
-    expect(screen.getByPlaceholderText(/write a reply/i)).toHaveValue('half-written');
+    expect(screen.getByPlaceholderText(/reply…/i)).toHaveValue('half-written');
   });
 });

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 
 interface AddCommentFormProps {
   onSubmit: (content: string) => void;
@@ -11,10 +11,15 @@ interface AddCommentFormProps {
   initialValue?: string;
 }
 
+/**
+ * Notion's comment box: a borderless field that grows with its text, with
+ * Cancel and a round blue send arrow (named by `submitLabel`). Enter sends,
+ * Shift+Enter starts a new line, Escape cancels.
+ */
 export function AddCommentForm({
   onSubmit,
   onCancel,
-  placeholder = 'Add a comment...',
+  placeholder = 'Add a comment…',
   submitLabel = 'Add',
   autoFocus = true,
   initialValue = '',
@@ -29,6 +34,14 @@ export function AddCommentForm({
       textareaRef.current.setSelectionRange(len, len);
     }
   }, [autoFocus]);
+
+  // Grow with the text
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
 
   const handleSubmit = () => {
     const trimmed = text.trim();
@@ -48,31 +61,40 @@ export function AddCommentForm({
     }
   };
 
+  const canSend = text.trim() !== '';
+
   return (
-    <div className="add-comment-form p-3 bg-gray-50 border-t border-gray-200">
+    <div className="add-comment-form lens-comment-form">
       <textarea
         ref={textareaRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
-        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        rows={3}
+        className="lens-comment-input"
+        rows={1}
       />
-      <div className="flex justify-end gap-2 mt-2">
+      <div className="lens-comment-form-buttons">
         <button
           type="button"
           onClick={() => onCancel(text)}
-          className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800"
+          className="lens-comment-cancel"
         >
           Cancel
         </button>
         <button
           type="button"
           onClick={handleSubmit}
-          className="px-3 py-1 text-sm text-white bg-blue-600 rounded hover:bg-blue-700"
+          className="lens-comment-send"
+          data-ready={canSend ? '' : undefined}
+          aria-label={submitLabel}
+          title={submitLabel}
         >
-          {submitLabel}
+          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+            <circle cx="12" cy="12" r="12" fill="currentColor" />
+            <path d="M12 17V7.5M7.75 11.5 12 7.25l4.25 4.25" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="sr-only">{submitLabel}</span>
         </button>
       </div>
     </div>

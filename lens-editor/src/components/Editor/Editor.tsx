@@ -11,7 +11,8 @@ import {
 } from '@codemirror/view';
 import { EditorState, Prec } from '@codemirror/state';
 import { defaultKeymap } from '@codemirror/commands';
-import { indentOnInput, indentUnit, syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldKeymap } from '@codemirror/language';
+import { indentOnInput, indentUnit, syntaxHighlighting, bracketMatching, foldKeymap } from '@codemirror/language';
+import { editorTheme, markdownHighlightStyle } from './editorTheme';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { completionKeymap } from '@codemirror/autocomplete';
@@ -83,7 +84,7 @@ interface EditorProps {
   onNavigate?: (docId: string) => void;
   onRequestAddComment?: () => void;
   /** Fires when a comment badge is clicked, with the absolute Y.Text offset. */
-  onCommentClick?: (absFrom: number) => void;
+  onCommentClick?: (absFrom: number, opts?: { fromText?: boolean }) => void;
   metadata?: FolderMetadata;
   currentFilePath?: string;
   getFolderDoc?: () => Y.Doc | null;
@@ -267,7 +268,11 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         label: 'Add Comment',
         shortcut: 'Ctrl+Shift+M',
         action: () => {
-          view.dispatch({ selection: { anchor: clickPos } });
+          // Right-clicked in a selection: the comment is on that text
+          const sel = view.state.selection.main;
+          if (sel.empty || clickPos < sel.from || clickPos > sel.to) {
+            view.dispatch({ selection: { anchor: clickPos } });
+          }
           view.focus();
           onRequestAddCommentRef.current?.();
         },
@@ -407,7 +412,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         dropCursor(),
         EditorState.allowMultipleSelections.of(true),
         indentOnInput(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(markdownHighlightStyle, { fallback: true }),
         bracketMatching(),
         closeBrackets(),
         rectangularSelection(),
@@ -478,7 +483,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
             ]),
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
         criticMarkupExtension({ canAcceptReject }),
-        commentClickCallback.of((absFrom) => onCommentClickRef.current?.(absFrom)),
+        commentClickCallback.of((absFrom, opts) => onCommentClickRef.current?.(absFrom, opts)),
         harperLinter,
         ...(!readOnly && getFolderDoc
           ? [imagePasteExtension({ getFolderDoc, getCurrentFilePath })]
@@ -505,43 +510,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
             return { top: 0, left: 0, right: window.innerWidth, bottom: bottom - (coarse ? 52 : 0) };
           },
         }),
-        EditorView.theme({
-          '&': {
-            height: '100%',
-            fontSize: '16px',
-            lineHeight: '1.5',
-            color: '#222222',
-            outline: 'none',
-          },
-          '&.cm-focused': {
-            outline: 'none',
-          },
-          '.cm-scroller': {
-            fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-            overflow: 'auto',
-            lineHeight: '1.5',
-          },
-          '.cm-content': {
-            padding: '16px 24px 170px',
-            maxWidth: '700px',
-            marginLeft: 'auto',
-            marginRight: 'auto',
-          },
-          '.cm-line': {
-            lineHeight: '1.5',
-          },
-          // Hide gutters (fold markers only, no line numbers)
-          '.cm-gutters': {
-            display: 'none',
-          },
-          // Remove underline from headings (override defaultHighlightStyle)
-          '.tok-heading': {
-            textDecoration: 'none !important',
-          },
-          '.cm-line .tok-heading': {
-            textDecoration: 'none !important',
-          },
-        }),
+        editorTheme,
         // Notify parent of document changes (for ToC + comment margin updates)
         ...(onDocChange ? [EditorView.updateListener.of((update) => {
           if (update.docChanged) { onDocChange(); return; }
