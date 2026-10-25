@@ -25,8 +25,9 @@ import {
   Decoration,
   drawSelection,
   WidgetType,
+  keymap,
 } from '@codemirror/view';
-import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin } from './criticmarkup';
+import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin, criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
 import { markdownTableCompartment, markdownTableExtension } from './markdownTable';
 import { createLinkElement } from './linkElement';
 import { pastedLinkField } from './pasteLink';
@@ -35,7 +36,8 @@ import { listHangingIndent } from './listHangingIndent';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
-import { RangeSetBuilder, Compartment, EditorSelection, StateField } from '@codemirror/state';
+import { RangeSetBuilder, Compartment, EditorSelection, StateField, Prec, Facet } from '@codemirror/state';
+import type { EditorState } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { wikilinkMetadataChanged } from './wikilinkEffects';
 import { noteEmbeds } from './noteEmbed';
@@ -93,8 +95,10 @@ const HASHTAG_EXCLUDED_NODES = new Set([
  * Set via livePreview() function parameter
  */
 export interface WikilinkContext {
-  onClick: (pageName: string) => void;
-  onOpenNewTab?: (pageName: string) => void;
+  /** `create`: an unresolved link may create its file (not in embed cards,
+   *  whose links are relative to a file the context does not know) */
+  onClick: (pageName: string, create?: boolean) => void;
+  onOpenNewTab?: (pageName: string, create?: boolean) => void;
   isResolved: (pageName: string) => boolean;
 }
 
@@ -119,6 +123,13 @@ export function updateImageEmbedContext(context: ImageEmbedContext | undefined) 
 
 export { wikilinkMetadataChanged } from './wikilinkEffects';
 
+/** True in an embed card's editor, whose links must not create files. */
+const inEmbedCard = Facet.define<boolean, boolean>({ combine: (values) => values.some(Boolean) });
+
+function linksCreate(view: EditorView): boolean {
+  return !view.state.facet(inEmbedCard);
+}
+
 /**
  * WikilinkWidget - Renders wikilinks as clickable internal links
  * Uses module-scoped wikilinkContext for navigation and resolution checking
@@ -135,7 +146,8 @@ class WikilinkWidget extends WidgetType {
     this.resolved = resolved;
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
+    const create = linksCreate(view);
     const span = document.createElement('span');
     span.className = 'cm-wikilink-widget';
 
@@ -150,16 +162,16 @@ class WikilinkWidget extends WidgetType {
       e.preventDefault();
       if (!wikilinkContext) return;
       if (e.ctrlKey || e.metaKey) {
-        wikilinkContext.onOpenNewTab?.(this.pageName);
+        wikilinkContext.onOpenNewTab?.(this.pageName, create);
       } else {
-        wikilinkContext.onClick(this.pageName);
+        wikilinkContext.onClick(this.pageName, create);
       }
     };
     span.onmousedown = (e) => { if (e.button === 1) e.preventDefault(); };
     span.onauxclick = (e) => {
       if (e.button === 1) {
         e.preventDefault();
-        wikilinkContext?.onOpenNewTab?.(this.pageName);
+        wikilinkContext?.onOpenNewTab?.(this.pageName, create);
       }
     };
     return span;
@@ -1239,6 +1251,62 @@ export const sourceReadOnlyCompartment = new Compartment();
 const livePreviewTheme = EditorView.theme({});
 
 /**
+ * The target of the [[wikilink]] at pos (without its |alias), or null. For a
+ * cursor, a position right after `]]` is on the link; for a click (`clicked`),
+ * only the character after pos counts.
+ */
+export function wikilinkTargetAt(state: EditorState, pos: number, clicked = false): string | null {
+  for (const side of clicked ? [1] as const : [1, -1] as const) {
+    for (let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, side); node; node = node.parent) {
+      if (node.name !== 'Wikilink') continue;
+      const content = node.getChild('WikilinkContent');
+      if (!content) return null;
+      const raw = state.doc.sliceString(content.from, content.to);
+      const pipe = raw.indexOf('|');
+      return pipe === -1 ? raw : raw.substring(0, pipe);
+    }
+  }
+  return null;
+}
+
+/**
+ * Following a wikilink shown as its raw text (the cursor is in it, or source
+ * mode), where the widget's click handlers are not: Mod-Enter on it and
+ * Mod-click open it in a new tab, creating the file if it doesn't exist.
+ */
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+
+const wikilinkFollow = [
+  Prec.high(keymap.of([{
+    key: 'Mod-Enter',
+    run: (view) => {
+      const head = view.state.selection.main.head;
+      const target = wikilinkTargetAt(view.state, head);
+      if (!target || !wikilinkContext?.onOpenNewTab) return false;
+      // On a suggestion a reviewer may accept, Mod-Enter accepts it (criticMarkupKeymap)
+      const { from, to } = view.state.selection.main;
+      if (view.state.facet(canAcceptRejectFacet)
+        && view.state.field(criticMarkupField, false)?.some((r) => from <= r.to && to >= r.from)) return false;
+      wikilinkContext.onOpenNewTab(target, linksCreate(view));
+      return true;
+    },
+  }])),
+  EditorView.domEventHandlers({
+    mousedown: (e, view) => {
+      // Mod as in keymaps: on a Mac Ctrl-click is the context menu
+      if (e.button !== 0 || !(IS_MAC ? e.metaKey : e.ctrlKey) || !wikilinkContext?.onOpenNewTab) return false;
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      const target = pos === null ? null : wikilinkTargetAt(view.state, pos, true);
+      if (!target) return false;
+      // Not a second cursor (Mod-click's default): follow the link
+      e.preventDefault();
+      wikilinkContext.onOpenNewTab(target, linksCreate(view));
+      return true;
+    },
+  }),
+];
+
+/**
  * Live preview extension with all necessary components
  *
  * Includes:
@@ -1256,6 +1324,8 @@ export function livePreview(context?: WikilinkContext, { embeds = true }: { embe
     frontmatterField, // StateField outside compartment (survives source mode toggle)
     obsidianCommentRangesField,
     listHangingIndent, // wrapped list rows align with the item text in both modes
+    wikilinkFollow, // in both modes
+    inEmbedCard.of(!embeds),
     // embeds: false inside an embed card, which never nests another
     livePreviewCompartment.of([livePreviewPlugin, ...(embeds ? [noteEmbeds] : []), obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
   ];

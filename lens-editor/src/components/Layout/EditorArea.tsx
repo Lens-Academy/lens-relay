@@ -7,6 +7,7 @@ import { useYDoc } from '../../lib/ydoc-provider';
 import * as Y from 'yjs';
 import { criticMarkupField, suggestionModeField } from '../Editor/extensions/criticmarkup';
 import { sourceReadOnlyCompartment } from '../Editor/extensions/livePreview';
+import { createLinkedDoc } from '../../lib/wikilink-create';
 import { SourceSuggestionBanner } from '../SourceSuggestionBanner/SourceSuggestionBanner';
 import { SyncedFileBanner } from '../SyncedFileBanner/SyncedFileBanner';
 import { parseThreads } from '../../lib/criticmarkup-parser';
@@ -111,7 +112,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const routerLocation = useLocation();
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
-  const { metadata, onNavigate, folderDocs } = useNavigation();
+  const { metadata, onNavigate, folderDocs, folderNames } = useNavigation();
   const { canWrite, canEdit, canPromote, folderUuid, isAllFolders } = useAuth();
   const { manager, headerStage } = useSidebar();
   const { isMobile, activeDrawer, openDrawer, closeDrawer, toggleDrawer, editorFocused, setEditorFocused, setDocPanelsAvailable, setDiscussionAvailable } = useMobile();
@@ -264,6 +265,14 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const folderName = fp.split('/').filter(Boolean)[0];
     return folderName ? (folderDocsRef.current.get(folderName) ?? null) : null;
   }, []);
+
+  const folderNamesRef = useRef(folderNames);
+  folderNamesRef.current = folderNames;
+  const createLinkedDocInFolder = useCallback(
+    (target: Parameters<typeof createLinkedDoc>[0]) =>
+      createLinkedDoc(target, folderDocsRef.current, folderNamesRef.current),
+    [],
+  );
 
   // The page header (icon and title), then the Concepts panel, for the files
   // the concept-row rules name, and the concept graph header, for concept
@@ -597,6 +606,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               metadata={metadata}
               currentFilePath={currentFilePath}
               getFolderDoc={getFolderDoc}
+              folderNames={folderNames}
+              createLinkedDoc={createLinkedDocInFolder}
               initialSuggestionMode={isSuggestionMode}
             />
           </div>

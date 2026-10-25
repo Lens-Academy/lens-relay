@@ -10,7 +10,9 @@ import {
   countClass,
   getTextWithClass,
 } from '../../../test/codemirror-helpers';
-import { livePreview, toggleSourceMode, updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
+import { livePreview, toggleSourceMode, updateWikilinkContext, wikilinkMetadataChanged, wikilinkTargetAt } from './livePreview';
+import { runScopeHandlers } from '@codemirror/view';
+import { criticMarkupExtension } from './criticmarkup';
 import { parseCalloutHeader } from './callouts';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
@@ -443,7 +445,7 @@ describe('livePreview - wikilinks', () => {
     const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
     expect(widget.textContent).toBe('the alias');
     widget.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    expect(onClick).toHaveBeenCalledWith('My Page#Heading');
+    expect(onClick).toHaveBeenCalledWith('My Page#Heading', true);
   });
 
   it('widget falls back to the target when the alias is empty or blank', () => {
@@ -546,7 +548,7 @@ describe('livePreview - wikilinks', () => {
     const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
     expect(widget).not.toBeNull();
     widget.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
-    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page', true);
     expect(onClick).not.toHaveBeenCalled();
   });
 
@@ -563,7 +565,7 @@ describe('livePreview - wikilinks', () => {
     const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
     expect(widget).not.toBeNull();
     widget.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true }));
-    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page', true);
     expect(onClick).not.toHaveBeenCalled();
   });
 
@@ -580,7 +582,7 @@ describe('livePreview - wikilinks', () => {
     const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
     expect(widget).not.toBeNull();
     widget.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, button: 1 }));
-    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page', true);
     expect(onClick).not.toHaveBeenCalled();
   });
 
@@ -597,7 +599,7 @@ describe('livePreview - wikilinks', () => {
     const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
     expect(widget).not.toBeNull();
     widget.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    expect(onClick).toHaveBeenCalledWith('My Page');
+    expect(onClick).toHaveBeenCalledWith('My Page', true);
     expect(onOpenNewTab).not.toHaveBeenCalled();
   });
 
@@ -1488,5 +1490,61 @@ describe('livePreview - callouts', () => {
     const { view, cleanup: c } = createTestEditor(doc, doc.length);
     cleanup = c;
     expect(getTextWithClass(view, 'cm-callout-title')).toEqual(['Warning']);
+  });
+});
+
+describe('livePreview - following a raw wikilink', () => {
+  let cleanup: () => void;
+  afterEach(() => {
+    if (cleanup) cleanup();
+    updateWikilinkContext(undefined);
+  });
+
+  it('finds the target at a position, without the alias, ends included', () => {
+    const content = 'see [[../Notes/Idea|the idea]] here';
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+    const from = content.indexOf('[[');
+    const to = content.indexOf(']]') + 2;
+    expect(wikilinkTargetAt(view.state, from + 3)).toBe('../Notes/Idea');
+    expect(wikilinkTargetAt(view.state, to)).toBe('../Notes/Idea');
+    expect(wikilinkTargetAt(view.state, to, true)).toBeNull();
+    expect(wikilinkTargetAt(view.state, 1)).toBeNull();
+  });
+
+  it('Mod-Enter in a wikilink opens it in a new tab', () => {
+    const onOpenNewTab = vi.fn();
+    const content = 'a [[Missing Page]] b';
+    const { view, cleanup: c } = createTestEditor(content, 6, {
+      onClick: () => {}, onOpenNewTab, isResolved: () => false,
+    });
+    cleanup = c;
+    const handled = runScopeHandlers(view, new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }), 'editor');
+    expect(handled).toBe(true);
+    expect(onOpenNewTab).toHaveBeenCalledWith('Missing Page', true);
+  });
+
+  it('Mod-Enter in a wikilink inside a suggestion is left to accepting it', () => {
+    const onOpenNewTab = vi.fn();
+    const content = 'a {++see [[Topic]]++} b';
+    const { view, cleanup: c } = createTestEditor(content, content.indexOf('Topic') + 1, {
+      onClick: () => {}, onOpenNewTab, isResolved: () => false,
+    }, [criticMarkupExtension()]);
+    cleanup = c;
+    const handled = runScopeHandlers(view, new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }), 'editor');
+    expect(handled).toBe(true);
+    expect(onOpenNewTab).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe('a see [[Topic]] b');
+  });
+
+  it('Mod-Enter outside a wikilink is left to other bindings', () => {
+    const onOpenNewTab = vi.fn();
+    const { view, cleanup: c } = createTestEditor('a [[Page]] b', 0, {
+      onClick: () => {}, onOpenNewTab, isResolved: () => true,
+    });
+    cleanup = c;
+    const handled = runScopeHandlers(view, new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }), 'editor');
+    expect(handled).toBe(false);
+    expect(onOpenNewTab).not.toHaveBeenCalled();
   });
 });

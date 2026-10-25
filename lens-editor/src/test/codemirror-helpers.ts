@@ -1,4 +1,4 @@
-import { EditorState, Prec } from '@codemirror/state';
+import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
@@ -19,7 +19,8 @@ import { markdownFormattingKeymap } from '../components/Editor/extensions/markdo
 export function createTestEditor(
   content: string,
   cursorPos: number,
-  wikilinkContext?: WikilinkContext
+  wikilinkContext?: WikilinkContext,
+  extraExtensions: Extension[] = []
 ): { view: EditorView; cleanup: () => void } {
   const state = EditorState.create({
     doc: content,
@@ -27,6 +28,7 @@ export function createTestEditor(
     extensions: [
       markdown({ extensions: [WikilinkExtension, TaskList, Autolink] }),
       livePreview(wikilinkContext),
+      ...extraExtensions,
     ],
   });
 
