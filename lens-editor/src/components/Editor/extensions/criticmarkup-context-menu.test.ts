@@ -2,6 +2,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createCriticMarkupEditor } from '../../../test/codemirror-helpers';
 import { getContextMenuItems } from './criticmarkup-context-menu';
+import { acceptChangeAtCursor } from './criticmarkup-commands';
 
 describe('CriticMarkup Context Menu', () => {
   let cleanup: (() => void) | undefined;
@@ -101,5 +102,26 @@ describe('CriticMarkup Context Menu', () => {
 
       expect(view.state.doc.toString()).toBe('hello world end');
     });
+  });
+});
+
+describe('Resolve Comment', () => {
+  const comment = '{>>{"author":"ann","timestamp":1}@@why?<<}';
+  const doc = `We {==ship it==}${comment} soon.`;
+
+  it('is offered on commented text, and removes the comment and the highlight', () => {
+    const { view, cleanup } = createCriticMarkupEditor(doc, doc.indexOf('ship') + 1);
+    const items = getContextMenuItems(view);
+    expect(items.map((i) => i.label)).toEqual(['Resolve Comment']);
+    items[0].action();
+    expect(view.state.doc.toString()).toBe('We ship it soon.');
+    cleanup();
+  });
+
+  it('accepting the highlight also removes its comment', () => {
+    const { view, cleanup } = createCriticMarkupEditor(doc, doc.indexOf('ship') + 1);
+    acceptChangeAtCursor(view);
+    expect(view.state.doc.toString()).toBe('We ship it soon.');
+    cleanup();
   });
 });

@@ -26,6 +26,16 @@ export function CommentIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Notion's resolve icon: a tick in a circle */
+function ResolveIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.25" />
+      <path d="m5.25 8.25 1.9 1.9 3.6-3.9" />
+    </svg>
+  );
+}
+
 function clipText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
@@ -84,6 +94,7 @@ function AnchorLine({ info, thread, actions }: { info: ThreadAnchorInfo; thread:
 export function CommentCard(props: CommentCardProps): ReactElement {
   const { thread, number, focused, onFocus, onReply, onEdit, onDelete, actions } = props;
   const resolved = thread.resolved;
+  const canResolve = !resolved && actions?.onResolve != null;
 
   const [showReplyForm, setShowReplyForm] = useState(false);
 
@@ -109,8 +120,9 @@ export function CommentCard(props: CommentCardProps): ReactElement {
       data-resolved={resolved ? '' : undefined}
       onClick={handleCardClick}
     >
-      {/* Number, as on the comment's marker in the text */}
-      {(number != null || resolved) && (
+      {/* Number, as on the comment's marker in the text, and Notion's
+          resolve tick at the top right */}
+      {(number != null || resolved || canResolve) && (
         <div className="lens-comment-card-top">
           {number != null && (
             <span className="lens-comment-number" title={`Comment ${number}`}>
@@ -119,6 +131,17 @@ export function CommentCard(props: CommentCardProps): ReactElement {
             </span>
           )}
           {resolved && <span className="lens-comment-resolved">Resolved</span>}
+          {canResolve && (
+            <button
+              type="button"
+              className="lens-comment-resolve"
+              title="Resolve"
+              aria-label="Resolve"
+              onClick={stop(() => actions?.onResolve?.(thread))}
+            >
+              <ResolveIcon />
+            </button>
+          )}
         </div>
       )}
       {thread.anchor && <AnchorLine info={thread.anchor} thread={thread} actions={actions} />}
@@ -151,11 +174,6 @@ export function CommentCard(props: CommentCardProps): ReactElement {
             className="lens-comment-action"
           >
             Reply
-          </button>
-        )}
-        {!resolved && actions?.onResolve && (
-          <button type="button" className={LINK_BUTTON} onClick={stop(() => actions.onResolve!(thread))}>
-            Resolve
           </button>
         )}
         {resolved && (

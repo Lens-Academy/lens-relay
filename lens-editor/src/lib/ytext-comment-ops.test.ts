@@ -6,6 +6,7 @@ import {
   insertCommentInYText,
   replyInYText,
   deleteRangeInYText,
+  removeThreadInYText,
   editRangeContentInYText,
   isOwnRange,
 } from './ytext-comment-ops';
@@ -104,5 +105,21 @@ describe('ytext-comment-ops', () => {
     // calls decodeCommentContent before display. We assert the round trip
     // recovers the original.
     expect(decodeCommentContent(range.content)).toBe('line one\nline two\\with-backslash');
+  });
+});
+
+describe('removeThreadInYText', () => {
+  it('removes the thread and its highlight, keeping the highlighted text', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    setCurrentAuthor('alice');
+    ytext.insert(0, 'We plan to ship it soon.');
+    insertCommentInYText(ytext, 'why?', 'We plan to ship it'.length, 'We plan to '.length);
+    const thread = parseThreads(parse(ytext.toString()))[0];
+    replyInYText(ytext, 'because', thread.to);
+
+    const ranges = parse(ytext.toString());
+    removeThreadInYText(ytext, ranges, parseThreads(ranges)[0].comments);
+    expect(ytext.toString()).toBe('We plan to ship it soon.');
   });
 });

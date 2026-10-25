@@ -1,6 +1,8 @@
 // src/components/Editor/extensions/criticmarkup-context-menu.ts
 import type { EditorView } from '@codemirror/view';
-import { findRangeAtPosition, findRangesInSelection, acceptChangeAtCursor, rejectChangeAtCursor } from './criticmarkup-commands';
+import { findRangeAtPosition, findRangesInSelection, acceptChangeAtCursor, rejectChangeAtCursor, resolveCommentAt } from './criticmarkup-commands';
+import { canAcceptRejectFacet, criticMarkupField } from './criticmarkup';
+import { commentThreadAt } from '../../../lib/criticmarkup-parser';
 
 export interface ContextMenuItem {
   label: string;
@@ -39,6 +41,13 @@ export function getContextMenuItems(view: EditorView, atPosition?: number): Cont
 
   if (!range) {
     return [];
+  }
+
+  // A comment, or the text it highlights: resolving removes both, keeping
+  // the text (for those who may accept changes)
+  if (commentThreadAt(view.state.field(criticMarkupField), pos).length > 0) {
+    if (!view.state.facet(canAcceptRejectFacet)) return [];
+    return [{ label: 'Resolve Comment', action: () => resolveCommentAt(view, pos) }];
   }
 
   // If we're checking a click position different from cursor,

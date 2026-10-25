@@ -41,7 +41,7 @@ export function PresencePanel() {
   const overflowCount = others.length - MAX_VISIBLE_AVATARS;
 
   return (
-    <div className="flex items-center">
+    <div className="flex items-center px-1">
       {/* Self avatar — click to edit display name */}
       {editing ? (
         <input
@@ -57,7 +57,7 @@ export function PresencePanel() {
       ) : (
         <button
           onClick={startEditing}
-          className="relative w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-medium ring-2 ring-blue-500 group cursor-pointer"
+          className="lens-avatar group cursor-pointer"
           style={{ backgroundColor: self.color }}
           title={`${self.name} (click to edit)`}
         >
@@ -73,7 +73,7 @@ export function PresencePanel() {
       {visibleOthers.map((user) => (
         <div
           key={user.clientId}
-          className="relative w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-medium -ml-2 ring-2 ring-white group"
+          className="lens-avatar group"
           style={{ backgroundColor: user.color }}
         >
           {user.name.charAt(0).toUpperCase()}
@@ -87,7 +87,7 @@ export function PresencePanel() {
       {/* Overflow indicator */}
       {overflowCount > 0 && (
         <div
-          className="relative w-8 h-8 rounded-full flex items-center justify-center text-gray-600 text-xs font-medium bg-gray-200 -ml-2 ring-2 ring-white group"
+          className="lens-avatar lens-avatar-more group"
         >
           +{overflowCount}
           {/* Tooltip */}

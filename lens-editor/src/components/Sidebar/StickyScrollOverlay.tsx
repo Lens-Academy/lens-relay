@@ -439,6 +439,9 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
     const sameIds = currentIds.length === prevIds.length &&
       currentIds.every((id, i) => id === prevIds[i]);
 
+    // A shadow under the headers while rows scroll beneath them (index.css)
+    container.classList.toggle('is-stuck', headers.length > 0);
+
     if (sameIds && headers.length > 0) {
       // Position + chevron update (common case during smooth scroll)
       let maxBottom = 0;
@@ -547,6 +550,7 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
     <div
       ref={containerRef}
       onClick={handleClick}
+      className="lens-tree-sticky-stack"
       style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, pointerEvents: 'none', overflow: 'hidden', height: 0 }}
     />
   );

@@ -25,11 +25,11 @@ export const editorTheme = EditorView.theme({
     overflow: 'auto',
     lineHeight: '1.5',
   },
-  // Notion's text column: 704px of text (760 minus the padding and
-  // CodeMirror's line insets)
+  // The text column: 644px of text (700 minus the padding and CodeMirror's
+  // line insets), a little narrower than Notion's 708px for shorter lines
   '.cm-content': {
     padding: '16px 24px 170px',
-    maxWidth: '760px',
+    maxWidth: '700px',
     marginLeft: 'auto',
     marginRight: 'auto',
   },
@@ -65,16 +65,17 @@ export const editorTheme = EditorView.theme({
 const syntaxColor = (color: string) => `var(--lens-syntax-${color.slice(1)}, ${color})`;
 
 /**
- * Syntax styles for markdown pages: CodeMirror's defaults, but headings and
- * bold at Notion's semibold (600), and headings not underlined. With the
- * defaults, bold went from 600 to 700 while the cursor was in it (live
- * preview's .cm-strong is 600), and headings were 700 inside their 600 class.
- * Colours are tokens with the defaults as fallbacks, for dark mode.
+ * Syntax styles for markdown pages: CodeMirror's defaults, but bold at
+ * Notion's semibold (600), and headings in their level's weight (index.css)
+ * and not underlined. With the defaults, bold went from 600 to 700 while the
+ * cursor was in it (live preview's .cm-strong is 600), and headings were 700
+ * inside their class. Colours are tokens with the defaults as fallbacks, for
+ * dark mode.
  */
 export const markdownHighlightStyle = HighlightStyle.define(
   defaultHighlightStyle.specs.map((spec) => {
     const themed = spec.color ? { ...spec, color: syntaxColor(spec.color) } : spec;
-    if (spec.tag === tags.heading) return { ...themed, fontWeight: '600', textDecoration: 'none' };
+    if (spec.tag === tags.heading) return { ...themed, fontWeight: 'inherit', textDecoration: 'none' };
     if (spec.tag === tags.strong) return { ...themed, fontWeight: '600' };
     return themed;
   }),

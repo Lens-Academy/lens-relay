@@ -88,6 +88,7 @@ vi.mock('../SuggestionModeToggle/SuggestionModeToggle', () => ({
 
 vi.mock('../SourceModeToggle/SourceModeToggle', () => ({
   SourceModeToggle: () => <div data-testid="mock-source-toggle">Source Mode</div>,
+  SourceModeChip: () => null,
 }));
 
 vi.mock('../DebugYMapPanel', () => ({
@@ -155,38 +156,49 @@ describe('EditorArea', () => {
     document.body.removeChild(headerControls);
   });
 
-  it('renders TableOfContents in sidebar', () => {
+  it('has the backlinks in the right sidebar, and the table of contents on the page', () => {
     const { container } = renderWithProviders(<EditorArea currentDocId="test-doc" />);
 
-    const tocPanel = container.querySelector('.toc-panel');
-    expect(tocPanel).toBeInTheDocument();
+    const sidebar = container.querySelector('#right-sidebar');
+    expect(sidebar?.querySelector('[data-testid="mock-backlinks-panel"]')).toBeInTheDocument();
+    expect(sidebar?.querySelector('.toc-panel')).toBeNull();
   });
 
   it('renders panels with correct layout structure', () => {
     const { container } = renderWithProviders(<EditorArea currentDocId="test-doc" />);
 
-    expect(container.querySelector('.toc-panel')).toBeInTheDocument();
+    // The page area, a container the table of contents' dashes measure
+    expect(container.querySelector('.lens-page-area')).toBeInTheDocument();
 
     // Check that main uses resizable panel layout
     const main = container.querySelector('main');
     expect(main).toBeInTheDocument();
   });
 
-  it('places workflow navigation after source controls and before the user badge', () => {
+  it('keeps the mode and who is here in the top bar, and the page settings in the page menu', async () => {
+    const user = userEvent.setup();
     const headerControls = document.createElement('div');
     headerControls.id = 'header-controls';
-    document.body.appendChild(headerControls);
+    const headerMenu = document.createElement('div');
+    headerMenu.id = 'header-menu';
+    document.body.append(headerControls, headerMenu);
 
     renderWithProviders(<EditorArea currentDocId="test-doc" />);
 
-    const source = screen.getByTestId('mock-source-toggle');
-    const menu = screen.getByRole('button', { name: /open workflows menu/i });
-    const presence = screen.getByTestId('mock-presence-panel');
+    expect(headerControls).toContainElement(screen.getByTestId('mock-presence-panel'));
+    expect(headerControls).toContainElement(screen.getByTestId('mock-suggestion-toggle'));
+    const menuButton = screen.getByRole('button', { name: /open workflows menu/i });
+    expect(headerMenu).toContainElement(menuButton);
+    expect(screen.queryByTestId('mock-source-toggle')).toBeNull();
 
-    expect(source.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(menu.compareDocumentPosition(presence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.click(menuButton);
+    expect(screen.getByTestId('mock-source-toggle')).toBeInTheDocument();
+    expect(screen.getByRole('menuitemcheckbox', { name: /spellcheck/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /authorship/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /review suggestions/i })).toBeInTheDocument();
 
-    document.body.removeChild(headerControls);
+    headerControls.remove();
+    headerMenu.remove();
   });
 
   it('checks production status using the repo-relative path for Lens Edu files', async () => {

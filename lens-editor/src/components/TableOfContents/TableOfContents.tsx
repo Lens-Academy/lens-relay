@@ -1,10 +1,10 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EditorView } from '@codemirror/view';
 import {
   useHeadings,
   scrollToHeading,
   normalizeHeadingLevels,
-  useActiveHeading,
+  useHeadingInView,
 } from './useHeadings';
 import type { NormalizedHeading } from './useHeadings';
 
@@ -13,158 +13,127 @@ interface TableOfContentsProps {
   stateVersion?: number;  // Incremented on doc changes - triggers re-extraction
 }
 
-const INDENT_SIZE = 12;
+/** A dash's length by heading level, as Notion's: longer for higher levels */
+const DASH_WIDTHS = [18, 13, 9];
 
-const HEADING_STYLE = 'text-xs font-normal text-gray-700';
+/** The headings to pick from, indented by level, the one being read in blue */
+function OutlineList({ headings, active, onPick }: {
+  headings: NormalizedHeading[];
+  active: number;
+  onPick: (heading: NormalizedHeading) => void;
+}) {
+  return (
+    <ul className="lens-outline-list">
+      {headings.map((heading, index) => (
+        <li key={`${heading.from}-${index}`}>
+          <button
+            type="button"
+            className={`lens-outline-item${index === active ? ' is-active' : ''}`}
+            style={{ paddingLeft: 8 + (heading.displayLevel - 1) * 12 }}
+            aria-current={index === active ? 'location' : undefined}
+            title={heading.text}
+            onClick={() => onPick(heading)}
+          >
+            {heading.text}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
+/** The page's headings as a list: the phone's outline drawer */
 export function TableOfContents({ view, stateVersion }: TableOfContentsProps) {
   // stateVersion triggers re-render, not directly used in computation
   void stateVersion;
 
-  const headings = useHeadings(view);
-  const normalized = normalizeHeadingLevels(headings);
-  const activeIndex = useActiveHeading(view, headings);
-  const activeRef = useRef<HTMLLIElement | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
-
-  const toggleCollapse = useCallback((from: number) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(from)) {
-        next.delete(from);
-      } else {
-        next.add(from);
-      }
-      return next;
-    });
-  }, []);
-
-  // Auto-scroll the active heading into view within the TOC panel
-  useEffect(() => {
-    if (activeRef.current) {
-      activeRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
-  }, [activeIndex]);
-
-  const handleClick = useCallback(
-    (heading: NormalizedHeading) => {
-      if (view) {
-        scrollToHeading(view, heading);
-      }
-    },
-    [view],
-  );
-
-  // Compute visibility and hasChildren
-  const visibleIndices: number[] = [];
-  const hasChildren = new Set<number>();
-
-  // First pass: determine which headings have children
-  for (let i = 0; i < normalized.length; i++) {
-    if (i + 1 < normalized.length && normalized[i + 1].displayLevel > normalized[i].displayLevel) {
-      hasChildren.add(i);
-    }
-  }
-
-  // Second pass: compute visibility using hideBelow threshold
-  {
-    let hideBelow = Infinity;
-    for (let i = 0; i < normalized.length; i++) {
-      const level = normalized[i].displayLevel;
-      if (level <= hideBelow) {
-        // This item is visible — reset threshold
-        hideBelow = Infinity;
-        visibleIndices.push(i);
-        // If this visible item is collapsed, hide everything deeper
-        if (collapsed.has(normalized[i].from)) {
-          hideBelow = level;
-        }
-      }
-      // else: level > hideBelow → hidden, skip
-    }
-  }
+  const headings = normalizeHeadingLevels(useHeadings(view));
+  const active = useHeadingInView(view, headings);
 
   if (!view) {
-    return (
-      <div className="toc-panel p-3 text-sm text-gray-500">
-        No document open
-      </div>
-    );
+    return <div className="toc-panel lens-outline-empty">No document open</div>;
   }
 
-  if (normalized.length === 0) {
-    return (
-      <div className="toc-panel p-3 text-sm text-gray-500">
-        No headings in document
-      </div>
-    );
+  if (headings.length === 0) {
+    return <div className="toc-panel lens-outline-empty">No headings in document</div>;
   }
 
   return (
-    <div className="toc-panel">
-      <h3 className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-200">
-        Table of Contents
-      </h3>
-      <ul className="py-2">
-        {visibleIndices.map((index) => {
-          const heading = normalized[index];
-          const isActive = index === activeIndex;
-          const isParent = hasChildren.has(index);
-          const isCollapsed = collapsed.has(heading.from);
-          const guideCount = heading.displayLevel - 1;
+    <nav className="toc-panel" aria-label="Table of contents">
+      <div className="lens-outline-label">Contents</div>
+      <OutlineList headings={headings} active={active} onPick={(heading) => scrollToHeading(view, heading)} />
+    </nav>
+  );
+}
 
-          // Build vertical guide line spans
-          const guides = [];
-          for (let g = 0; g < guideCount; g++) {
-            guides.push(
-              <span
-                key={g}
-                className="flex-shrink-0 relative self-stretch"
-                style={{ width: INDENT_SIZE }}
-              >
-                <span className="absolute left-[5px] -top-1.5 -bottom-1.5 w-px bg-gray-300" />
-              </span>
-            );
-          }
+/**
+ * Notion's table of contents on the page: a dash per heading at the right
+ * edge, the section being read darker; over them, the headings to go to.
+ * Not shown for fewer than two headings, nor where the page is too narrow
+ * for it beside the text (index.css).
+ */
+export function PageOutline({ view, stateVersion }: TableOfContentsProps) {
+  void stateVersion;
 
-          return (
-            <li
-              key={`${heading.from}-${index}`}
-              ref={isActive ? activeRef : null}
-              className={[
-                `flex items-center py-1.5 pr-3 cursor-pointer transition-colors duration-150 ${HEADING_STYLE}`,
-                isActive ? 'bg-gray-100' : 'hover:bg-gray-50',
-              ].join(' ')}
-              title={heading.text}
-              onClick={() => handleClick(heading)}
-            >
-              {guides}
-              {isParent ? (
-                <svg
-                  className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-150 flex-shrink-0 ${isCollapsed ? '' : 'rotate-90'}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleCollapse(heading.from);
-                  }}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 5l7 7-7 7"
-                  />
-                </svg>
-              ) : (
-                <span className="w-3.5 flex-shrink-0" />
-              )}
-              <span className="truncate ml-1">{heading.text}</span>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
+  const headings = normalizeHeadingLevels(useHeadings(view));
+  const active = useHeadingInView(view, headings);
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+
+  if (!view || headings.length < 2) return null;
+
+  const show = () => {
+    window.clearTimeout(closeTimer.current);
+    setOpen(true);
+  };
+  // A moment's grace, so the pointer can cross from the dashes to the list
+  const hideSoon = () => {
+    window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => setOpen(false), 150);
+  };
+
+  return (
+    <nav
+      className="lens-outline"
+      aria-label="Table of contents"
+      onMouseEnter={show}
+      onMouseLeave={hideSoon}
+      onFocus={show}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        className="lens-outline-dashes"
+        aria-label="Show the table of contents"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {headings.map((heading, index) => (
+          <span
+            key={`${heading.from}-${index}`}
+            className={`lens-outline-dash${index === active ? ' is-active' : ''}`}
+            style={{ width: DASH_WIDTHS[Math.min(heading.displayLevel, DASH_WIDTHS.length) - 1] }}
+          />
+        ))}
+      </button>
+      {open && (
+        <div className="lens-outline-panel">
+          <OutlineList
+            headings={headings}
+            active={active}
+            onPick={(heading) => {
+              setOpen(false);
+              scrollToHeading(view, heading);
+            }}
+          />
+        </div>
+      )}
+    </nav>
   );
 }

@@ -361,7 +361,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
       )}
       {outOfDateBanner}
       <div className="flex-1 flex overflow-hidden">
-        <div className="w-[420px] min-w-[420px] border-r-2 border-gray-200 bg-[#fbfaf7] overflow-y-auto p-4">
+        <div className="w-[420px] min-w-[420px] border-r-2 border-gray-200 bg-[var(--lens-sidebar-bg)] overflow-y-auto p-4">
           {isCourseMode ? (
             <>
               <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-3 pb-2 border-b border-gray-200">
@@ -443,7 +443,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
           {commentsVisible && activeYText && (
             <div
               className="w-[320px] shrink-0 relative border-l border-gray-200"
-              style={{ background: '#faf8f3' }}
+              style={{ background: 'var(--lens-sidebar-bg)' }}
             >
               <CommentsLayer
                 ref={commentsLayerRef}
@@ -457,6 +457,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
                 onDelete={callbacks.onDelete}
                 onAddComment={callbacks.onAddComment}
                 getInsertKey={() => commentInsertPosRef.current != null ? pinInsertKey(effectiveYText, String(commentInsertPosRef.current)) : null}
+                actions={canEdit ? { onResolve: callbacks.onResolve } : undefined}
               />
             </div>
           )}

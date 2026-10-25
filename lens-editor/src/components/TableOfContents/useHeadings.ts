@@ -1,7 +1,6 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { EditorView } from '@codemirror/view';
 import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
-import { StateEffect } from '@codemirror/state';
 import { flashHeadingLine } from '../Editor/extensions/headingFlash';
 import type { EditorState } from '@codemirror/state';
 
@@ -26,8 +25,26 @@ const HEADING_TYPES: Record<string, number> = {
 };
 
 /**
- * Extract headings from CodeMirror editor state.
- * Iterates syntax tree to find ATXHeading nodes.
+ * A heading's text as it reads: without its markdown (emphasis, code, links
+ * and wikilinks, highlights and suggestions)
+ */
+export function plainHeadingText(text: string): string {
+  return text
+    .replace(/\{>>[\s\S]*?<<\}|\{--[\s\S]*?--\}/g, '')
+    .replace(/\{~~[\s\S]*?~>([\s\S]*?)~~\}/g, '$1')
+    .replace(/\{(\+\+|==)([\s\S]*?)(\+\+|==)\}/g, '$2')
+    .replace(/!?\[\[([^\]|]*?)(?:\|([^\]]*))?\]\]/g, (_, target: string, alias?: string) => alias ?? target.split('/').pop()!.replace(/#.*/, ''))
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__|~~|==|`)/g, '')
+    .replace(/(^|\W)[*_](?=\S)(.+?)(?<=\S)[*_](?=\W|$)/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Extract headings from CodeMirror editor state: the page's own ATX
+ * headings, not those inside lists or quotes (a "- ##### Label" item), as
+ * Notion's table of contents lists its heading blocks.
  */
 export function extractHeadings(state: EditorState): Heading[] {
   const headings: Heading[] = [];
@@ -36,7 +53,7 @@ export function extractHeadings(state: EditorState): Heading[] {
   tree.iterate({
     enter(node) {
       const level = HEADING_TYPES[node.name];
-      if (level !== undefined) {
+      if (level !== undefined && node.node.parent?.name === 'Document') {
         // Skip HeaderMark (# characters) to get just the text
         let textFrom = node.from;
 
@@ -56,7 +73,7 @@ export function extractHeadings(state: EditorState): Heading[] {
           } while (cursor.nextSibling());
         }
 
-        const text = state.doc.sliceString(textFrom, node.to).trim();
+        const text = plainHeadingText(state.doc.sliceString(textFrom, node.to));
         if (text) {
           headings.push({
             level,
@@ -178,7 +195,8 @@ export function useHeadings(view: EditorView | null): Heading[] {
 }
 
 /**
- * Scroll to a heading position in the editor.
+ * Scroll to a heading position in the editor: the heading near the top of
+ * the page, as Notion's table of contents scrolls.
  */
 export function scrollToHeading(view: EditorView, heading: Heading) {
   const scrollDOM = view.scrollDOM;
@@ -187,7 +205,7 @@ export function scrollToHeading(view: EditorView, heading: Heading) {
   view.dispatch({
     selection: { anchor: heading.from },
     effects: [
-      EditorView.scrollIntoView(heading.from, { y: 'center' }),
+      EditorView.scrollIntoView(heading.from, { y: 'start', yMargin: 48 }),
       flashHeadingLine.of(heading.from),
     ],
   });
@@ -227,82 +245,65 @@ export function normalizeHeadingLevels(headings: Heading[]): NormalizedHeading[]
 }
 
 /**
- * Hook that tracks which heading the cursor is under.
- * Finds the last heading at or before the cursor position.
- * Returns the index of the active heading (or -1 if none).
+ * The heading of the section being read: the last one whose top is at or
+ * above `probe` (a line near the top of the page), else the first. `tops`
+ * are the headings' tops, in the same coordinates as `probe`.
  */
-/**
- * Cursor listeners per editor view. Each view gets one update listener,
- * installed on first use, that calls the hooks mounted on it; mounting and
- * unmounting a hook (the mobile outline drawer remounts on every open) only
- * changes this set. Reinstalling the listener whenever the headings changed
- * dispatched a transaction after every edit, other people's included, and
- * that transaction made CodeMirror lose its scroll anchor: text added above
- * the viewport pushed the page down.
- */
-const selectionListeners = new WeakMap<EditorView, Set<() => void>>();
-
-function onSelectionChange(view: EditorView, callback: () => void): () => void {
-  let callbacks = selectionListeners.get(view);
-  if (!callbacks) {
-    const set = new Set<() => void>();
-    callbacks = set;
-    selectionListeners.set(view, set);
-    view.dispatch({
-      effects: StateEffect.appendConfig.of(EditorView.updateListener.of((update) => {
-        if (update.selectionSet) set.forEach((fn) => fn());
-      })),
-    });
-  }
-  callbacks.add(callback);
-  return () => callbacks.delete(callback);
+export function headingInView(tops: number[], probe: number): number {
+  let active = tops.length > 0 ? 0 : -1;
+  tops.forEach((top, i) => {
+    if (top <= probe) active = i;
+  });
+  return active;
 }
 
-export function useActiveHeading(view: EditorView | null, headings: Heading[]): number {
-  const [activeIndex, setActiveIndex] = useState(-1);
-
-  const updateActive = useCallback(() => {
-    if (!view || headings.length === 0) {
-      setActiveIndex(-1);
-      return;
-    }
-
-    const cursorPos = view.state.selection.main.head;
-    let active = -1;
-
-    // Find the last heading at or before the cursor position
-    for (let i = 0; i < headings.length; i++) {
-      if (headings[i].from <= cursorPos) {
-        active = i;
-      } else {
-        break;
-      }
-    }
-
-    // If cursor is before the first heading, highlight the first one
-    if (active === -1 && headings.length > 0) {
-      active = 0;
-    }
-
-    setActiveIndex(active);
-  }, [view, headings]);
-
-  // Recomputed when the headings change, and on cursor moves through the
-  // per-view listener, which reads the latest updateActive from the ref.
-  const updateActiveRef = useRef(updateActive);
-
+/**
+ * The index of the heading whose section is in view, which Notion's table
+ * of contents marks: it follows scrolling, and edits that move the
+ * headings. It only reads the layout. Dispatching here (a cursor listener
+ * did) made CodeMirror lose its scroll anchor, so text added above the
+ * viewport pushed the page down.
+ */
+export function useHeadingInView(view: EditorView | null, headings: Heading[]): number {
+  const [active, setActive] = useState(-1);
+  const headingsRef = useRef(headings);
   useLayoutEffect(() => {
-    updateActiveRef.current = updateActive;
-  }, [updateActive]);
-
-  useEffect(() => {
-    updateActive();
-  }, [updateActive]);
+    headingsRef.current = headings;
+  });
+  const positions = headings.map((h) => h.from).join(',');
 
   useEffect(() => {
     if (!view) return;
-    return onSelectionChange(view, () => updateActiveRef.current());
-  }, [view]);
+    const scroller = view.scrollDOM;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const list = headingsRef.current;
+      if (list.length === 0 || !view.dom.isConnected) {
+        setActive(-1);
+        return;
+      }
+      const rect = scroller.getBoundingClientRect();
+      // A quarter of the way down the page; at the end of the page, its
+      // bottom, so the last sections can be marked too
+      const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+      const probe = atEnd ? rect.bottom : rect.top + scroller.clientHeight / 4;
+      const docTop = view.documentTop;
+      const end = view.state.doc.length;
+      setActive(headingInView(list.map((h) => docTop + view.lineBlockAt(Math.min(h.from, end)).top), probe));
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    schedule();
+    scroller.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    return () => {
+      scroller.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [view, positions]);
 
-  return activeIndex;
+  return active;
 }

@@ -606,6 +606,8 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       const doc = view.state.doc;
       /** Whether line `n` exists and has text: a block boundary without a blank line. */
       const hasText = (n: number) => n >= 1 && n <= doc.lines && doc.line(n).text.trim() !== '';
+      // Text that isn't a heading, whose own padding spaces it from a list
+      const hasProse = (n: number) => hasText(n) && !/^ {0,3}#{1,6}(\s|$)/.test(doc.line(n).text);
 
       // Iterate syntax tree within visible ranges only (performance)
       for (const { from, to } of view.visibleRanges) {
@@ -648,11 +650,13 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               });
               // Add line decoration for heading top spacing (margin-top doesn't work on inline spans).
               // Notion keeps 16px between blocks, which a blank line gives; where a
-              // heading touches text above or below, its own padding gives it (index.css)
+              // heading touches text above or below, its own padding gives it
+              // (index.css). Under another heading it keeps its usual space
+              // above, and that heading none below.
               const headingLine = view.state.doc.lineAt(node.from);
               let headingCls = `cm-heading-line ${HEADING_CLASSES[node.name]}-line`;
-              if (hasText(headingLine.number - 1)) headingCls += ' cm-heading-after-text';
-              if (hasText(headingLine.number + 1)) headingCls += ' cm-heading-before-text';
+              if (hasProse(headingLine.number - 1)) headingCls += ' cm-heading-after-text';
+              if (hasProse(headingLine.number + 1)) headingCls += ' cm-heading-before-text';
               decorations.push({
                 from: headingLine.from,
                 to: headingLine.from,
@@ -957,11 +961,21 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             if ((node.name === 'BulletList' || node.name === 'OrderedList') && node.node.parent?.name === 'Document') {
               const first = doc.lineAt(node.from);
               const last = doc.lineAt(node.to);
-              if (hasText(first.number - 1)) {
+              if (hasProse(first.number - 1)) {
                 decorations.push({ from: first.from, to: first.from, deco: Decoration.line({ class: 'cm-list-after-text' }) });
               }
-              if (hasText(last.number + 1)) {
+              if (hasProse(last.number + 1)) {
                 decorations.push({ from: last.from, to: last.from, deco: Decoration.line({ class: 'cm-list-before-text' }) });
+              }
+            }
+
+            // Lines of one paragraph (Enter, no blank line between): in Notion
+            // each Enter starts a new block, 16px below the last (index.css)
+            if (node.name === 'Paragraph' && node.node.parent?.name === 'Document' && !inFrontmatter(view, node.from)) {
+              const last = doc.lineAt(node.to).number;
+              for (let n = doc.lineAt(node.from).number; n < last; n++) {
+                const line = doc.line(n);
+                decorations.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'cm-text-before-text' }) });
               }
             }
 
