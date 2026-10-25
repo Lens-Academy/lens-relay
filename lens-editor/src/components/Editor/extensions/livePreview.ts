@@ -9,7 +9,7 @@
  * - # markers hidden when cursor not on heading line
  * - Bold/italic text shows formatted when cursor moves away
  * - Asterisks/underscores hidden when cursor not on that text
- * - Links render as clickable blue underlined text
+ * - Links render as clickable underlined text, web links with an external-link icon
  * - Inline code shows with distinct background styling
  * - Bullet list markers replaced with dot (•) widget
  * - Checklists rendered as interactive checkboxes with toggle
@@ -139,7 +139,8 @@ class WikilinkWidget extends WidgetType {
 }
 
 /**
- * LinkWidget - Renders links as clickable blue underlined text
+ * LinkWidget - Renders links as clickable underlined text, with an external-link
+ * icon after links to the web (linkElement.ts)
  */
 class LinkWidget extends WidgetType {
   private text: string;
