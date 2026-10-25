@@ -65,7 +65,9 @@ export function useEdgeSwipe({
       const dx = e.touches[0].clientX - startX;
       const dy = e.touches[0].clientY - startY;
       if (Math.abs(dx) < threshold || Math.abs(dx) < 2.5 * Math.abs(dy)) return;
-      if (scrollsSideways(startTarget, dx)) return;
+      // Decided once per gesture: a swipe that began as a sideways scroll stays one, even after
+      // the scroller reaches its end mid-gesture (Assay, #195).
+      if (scrollsSideways(startTarget, dx)) { tracking = false; return; }
       fired = true;
       if (dx > 0) onSwipeRight?.();
       else onSwipeLeft?.();
