@@ -11,7 +11,6 @@ import {
   getTextWithClass,
 } from '../../../test/codemirror-helpers';
 import { livePreview, toggleSourceMode, updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
-import { setFrontmatterCollapsed } from './frontmatter';
 import { parseCalloutHeader } from './callouts';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
@@ -222,18 +221,20 @@ describe('livePreview - horizontal rules', () => {
     expect(hasClass(view, 'cm-hr-line')).toBe(false);
   });
 
-  it('leaves frontmatter --- delimiters to the properties, shown or hidden', () => {
+  it('leaves frontmatter --- delimiters to the frontmatter bar, collapsed or expanded', () => {
     const doc = '---\ntitle: Notes\n---\n\nBody\n\n---\n\nEnd';
     const { view, cleanup: c } = createTestEditor(doc, doc.length);
     cleanup = c;
 
-    // Shown: the delimiters are frontmatter lines, not dividers
-    expect(countClass(view, 'cm-frontmatter-line')).toBe(3);
+    // Collapsed: only the body's rule is a divider
+    expect(hasClass(view, 'cm-frontmatter-bar')).toBe(true);
     expect(countClass(view, 'cm-hr-line')).toBe(1);
 
-    // Hidden: only the body's rule is a divider
-    view.dispatch({ effects: setFrontmatterCollapsed.of(true) });
-    expect(hasClass(view, 'cm-frontmatter-bar')).toBe(true);
+    // Expanded: the delimiters are frontmatter lines, still not dividers
+    const bar = view.contentDOM.querySelector('.cm-frontmatter-bar') as HTMLElement;
+    bar.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(hasClass(view, 'cm-frontmatter-header')).toBe(true);
+    expect(countClass(view, 'cm-frontmatter-line')).toBe(3);
     expect(countClass(view, 'cm-hr-line')).toBe(1);
     expect(view.state.doc.toString()).toBe(doc);
   });
@@ -348,11 +349,13 @@ describe('livePreview - hashtags', () => {
     const { view, cleanup: c } = createTestEditor(content, content.length);
     cleanup = c;
 
+    const bar = view.contentDOM.querySelector('.cm-frontmatter-bar') as HTMLElement;
+    bar.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     moveCursor(view, content.indexOf('#metadata'));
     view.requestMeasure();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(view.contentDOM.querySelector('.cm-frontmatter-row')).not.toBeNull();
+    expect(view.contentDOM.querySelector('.cm-frontmatter-header')).not.toBeNull();
     const tags = Array.from(view.contentDOM.querySelectorAll('.cm-hashtag'));
     expect(tags.map((tag) => tag.textContent)).toEqual(['#tag']);
   });

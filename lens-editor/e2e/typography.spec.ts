@@ -89,30 +89,6 @@ test.describe('Typography', () => {
     expect(await page.evaluate(() => document.querySelector('.lens-doc-title')!.closest('.cm-content') !== null)).toBe(true);
   });
 
-  test('properties are rows 38px apart: a 14px grey label, the value 168px after its icon', async ({ page }) => {
-    await expect(page.locator('.cm-frontmatter-row')).toHaveCount(4);
-    await expect(page.locator('.cm-frontmatter-key').first()).toHaveCSS('font-size', '14px');
-    await expect(page.locator('.cm-frontmatter-key').first()).toHaveCSS('color', 'rgb(125, 122, 117)');
-    const { gap, valueOffset } = await page.evaluate(() => {
-      const rows = [...document.querySelectorAll('.cm-frontmatter-row')];
-      const icon = rows[0].querySelector('.cm-frontmatter-icon')!.getBoundingClientRect().left;
-      // The first value's first letter ("Draft")
-      const walker = document.createTreeWalker(rows[0], NodeFilter.SHOW_TEXT);
-      let node = walker.nextNode();
-      while (node && !node.textContent!.includes('Draft')) node = walker.nextNode();
-      const range = document.createRange();
-      const at = node!.textContent!.indexOf('Draft');
-      range.setStart(node!, at);
-      range.setEnd(node!, at + 1);
-      return {
-        gap: rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top,
-        valueOffset: range.getBoundingClientRect().left - icon,
-      };
-    });
-    expect(gap).toBe(38);
-    expect(Math.abs(valueOffset - 168)).toBeLessThan(1);
-  });
-
   test("text a comment is on is marked in Notion's yellow", async ({ page }) => {
     const target = page.locator('.cm-comment-target');
     await expect(target).toHaveText('raises our chances the most');

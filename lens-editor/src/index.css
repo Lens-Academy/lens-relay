@@ -18,8 +18,21 @@
   --lens-placeholder: rgba(21, 14, 0, 0.286);
   --lens-icon: #383836;
   --lens-icon-secondary: #8e8b86;
+  /* The frontmatter bar and box (main's look, frontmatter.ts) */
+  --lens-fm-bg: #f9fafb;
+  --lens-fm-hover: #f3f4f6;
+  --lens-fm-border: #e5e7eb;
+  --lens-fm-line-bg: rgba(249, 250, 251, 0.85);
+  --lens-fm-muted: #9ca3af;
+  --lens-fm-key: #6b7280;
+  --lens-fm-colon: #d1d5db;
+  --lens-fm-value: #374151;
+  --lens-fm-badge-text: #92400e;
+  --lens-fm-badge-bg: #fef3c7;
+  --lens-fm-error-text: #991b1b;
+  --lens-fm-error-bg: #fef2f2;
+  --lens-fm-error-border: #fecaca;
   --lens-divider: rgba(28, 19, 1, 0.11);
-  --lens-properties-divider: rgba(55, 53, 47, 0.09);
   --lens-link-underline: rgba(55, 53, 47, 0.4);
   --lens-mention-underline: rgba(55, 53, 47, 0.25);
   --lens-hover-bg: rgba(33, 27, 23, 0.05);
@@ -78,8 +91,20 @@
   --lens-placeholder: rgba(255, 252, 235, 0.306);
   --lens-icon: #e6e5e3;
   --lens-icon-secondary: #ada9a3;
+  --lens-fm-bg: #202020;
+  --lens-fm-hover: #2a2a29;
+  --lens-fm-border: #383836;
+  --lens-fm-line-bg: rgba(255, 255, 255, 0.03);
+  --lens-fm-muted: #7d7a75;
+  --lens-fm-key: #9b9893;
+  --lens-fm-colon: #5f5e59;
+  --lens-fm-value: #e1dfdb;
+  --lens-fm-badge-text: #f5c05b;
+  --lens-fm-badge-bg: rgba(255, 205, 75, 0.18);
+  --lens-fm-error-text: #ff9e95;
+  --lens-fm-error-bg: #3e2423;
+  --lens-fm-error-border: #6e3531;
   --lens-divider: rgba(255, 255, 235, 0.1);
-  --lens-properties-divider: rgba(255, 255, 255, 0.094);
   --lens-link-underline: rgba(255, 255, 255, 0.282);
   --lens-mention-underline: rgba(255, 255, 255, 0.2);
   --lens-hover-bg: rgba(255, 255, 255, 0.055);
@@ -148,69 +173,18 @@
 }
 
 /* Page header (DocumentTitle.tsx) at the top of the document, which it
-   scrolls with: Notion's page without a cover. The icon is 96px down, or
-   without one the row where "Add icon" shows is 80px down (each less the
-   editor's 16px top padding); the title is 12px under an icon, 4px under the
-   row, and 24px above the text, or 8px above properties. */
+   scrolls with, as Notion's does: space above the title, and 24px between it
+   and the text */
 .lens-page-header {
-  padding-bottom: 24px;
+  padding: 40px 0 24px;
   /* Normal text flow inside the editor, which keeps white space; and the
      title box's own width (its default columns) must not widen the editor
      past a phone's screen, as for the Concepts panel */
   white-space: normal;
   contain: inline-size;
 }
-.cm-has-properties .lens-page-header {
-  padding-bottom: 8px;
-}
-
-/* Page icon: Notion's 78px emoji, which people who can edit click to change */
-.lens-page-icon {
-  display: block;
-  margin: 80px 0 12px 2px;
-  padding: 0 4px;
-  font-size: 78px;
-  line-height: 1.1;
-  border-radius: 6px;
-}
-.lens-page-icon:not(:disabled):hover {
-  background: var(--lens-hover-bg);
-  cursor: pointer;
-}
-/* "Add icon", shown while the pointer is over the header, as in Notion; its
-   row's space is always kept */
-.lens-page-controls {
-  display: flex;
-  height: 28px;
-  margin: 64px 0 4px -2px;
-  opacity: 0;
-  transition: opacity 100ms;
-}
-.lens-page-header:hover .lens-page-controls,
-.lens-page-controls:focus-within {
-  opacity: 1;
-}
-@media (hover: none) {
-  .lens-page-controls { opacity: 1; }
-}
-.lens-page-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 8px;
-  font-size: 14px;
-  color: var(--lens-text-tertiary);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.lens-page-control:hover {
-  background: var(--lens-hover-bg);
-}
-/* Phones: Notion's smaller header */
 @media not all and (min-width: 500px) {
-  .lens-page-icon { margin-top: 24px; font-size: 64px; }
-  .lens-page-controls { margin-top: 12px; }
+  .lens-page-header { padding-top: 16px; }
 }
 
 /* "Show on Lensacademy.org" and "Open in Course Editor" beside the title */
@@ -225,8 +199,7 @@
   text-decoration: underline;
 }
 
-/* Notion-style UI pieces: a popover menu, its buttons, labels and search
-   input (the emoji picker; menus can share them) */
+/* Notion-style UI pieces: a popover menu, its buttons, labels and an input */
 @layer components {
   .lens-popover {
     background: var(--lens-popover-bg);
@@ -314,17 +287,6 @@
   }
   .lens-input:focus {
     box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.57), 0 0 0 2px rgba(35, 131, 226, 0.2);
-  }
-  .lens-emoji-button {
-    width: 32px;
-    height: 32px;
-    font-size: 24px;
-    line-height: 32px;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-  .lens-emoji-button:hover {
-    background: var(--lens-hover-bg);
   }
 }
 
@@ -809,14 +771,64 @@
   opacity: 0.7;
 }
 
-/* Frontmatter as Notion's page properties (extensions/frontmatter.ts): a
-   34px row per key, 4px apart, the key in grey after its icon in Notion's
-   160px label column and the value after it, at 14px. The opening --- is a
-   sliver above the rows and the closing --- is the divider under them.
-   .cm-content .cm-line beats CodeMirror's own line padding. */
+/* Frontmatter — bar (collapsed state + expanded header). Colours are tokens
+   (--lens-fm-*), for dark mode */
+.cm-frontmatter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background-color: var(--lens-fm-bg);
+  border: 1px solid var(--lens-fm-border);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cm-frontmatter-bar:hover {
+  background-color: var(--lens-fm-hover);
+}
+
+.cm-frontmatter-chevron {
+  color: var(--lens-fm-muted);
+  font-size: 11px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.cm-frontmatter-chevron-open {
+  transform: rotate(90deg);
+}
+
+.cm-frontmatter-label {
+  color: var(--lens-fm-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Frontmatter — pending-suggestions badge on the collapsed bar */
+.cm-frontmatter-suggestions-badge {
+  color: var(--lens-fm-badge-text);
+  background-color: var(--lens-fm-badge-bg);
+  border-radius: 9999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* Frontmatter — expanded header (widget above raw text) */
+.cm-frontmatter-header {
+  border-radius: 6px 6px 0 0;
+  border-bottom: none;
+}
+
+/* Frontmatter — expanded line decorations on raw text */
 .cm-frontmatter-line {
-  font-size: 14px;
-  line-height: 21px;
+  background-color: var(--lens-fm-line-bg);
+  font-size: 13px;
+  /* Reset CM's default .cm-line left padding so all frontmatter lines
+     align at 0; key-value lines override with inline padding for wrapping */
+  padding-left: 0 !important;
   /* Override any markdown styling within frontmatter */
   font-weight: normal !important;
   font-style: normal !important;
@@ -824,76 +836,41 @@
 }
 
 /* Kill bold/italic/underline on all children within frontmatter lines */
-.cm-frontmatter-line span:not(.cm-frontmatter-bad-indent) {
+.cm-frontmatter-line span {
   font-weight: normal !important;
   font-style: normal !important;
   text-decoration: none !important;
 }
 
-/* font-size 0: no room kept for text, whose baseline is lower than 2px */
-.cm-content .cm-line.cm-frontmatter-open { font-size: 0; line-height: 2px; }
-.cm-content .cm-line.cm-frontmatter-row { padding-top: 9px; padding-bottom: 8px; }
-/* A key whose value is the list under it, and the list's lines */
-.cm-content .cm-line.cm-frontmatter-row-items { padding-bottom: 2px; }
-.cm-content .cm-line.cm-frontmatter-more { padding-top: 2px; padding-bottom: 2px; }
-.cm-content .cm-line.cm-frontmatter-more-last { padding-bottom: 8px; }
-
-/* The divider under the properties: 12px from the last row and from the
-   text after it (with the blank line that usually follows, Notion's 28px) */
-.cm-content .cm-line.cm-frontmatter-close {
-  position: relative;
-  line-height: 25px;
-  background-image: linear-gradient(var(--lens-properties-divider), var(--lens-properties-divider));
-  background-origin: content-box;
-  background-position: center;
-  background-size: 100% 1px;
-  background-repeat: no-repeat;
+.cm-frontmatter-line-first {
+  border-top: 1px solid var(--lens-fm-border);
 }
 
-/* Hide --- delimiters, and a row's ": ", quotes and list dashes while the
-   cursor is not on it */
-.cm-frontmatter-delimiter,
-.cm-frontmatter-hidden {
+.cm-frontmatter-line-last {
+  border-bottom: 1px solid var(--lens-fm-border);
+  border-radius: 0 0 6px 6px;
+}
+
+/* Hide --- delimiters */
+.cm-frontmatter-delimiter {
   font-size: 0;
-  line-height: 0;
 }
 
-/* Label: the key in Notion's secondary grey, after its 16px icon at
-   Notion's 1.2 scale */
+
+/* Key name and incomplete key (no colon yet) */
 .cm-frontmatter-key,
 .cm-frontmatter-key-incomplete {
-  color: var(--lens-text-secondary);
+  color: var(--lens-fm-key);
 }
-.cm-frontmatter-icon {
-  display: inline-block;
-  width: 19.2px;
-  height: 19.2px;
-  margin-right: 6px;
-  vertical-align: -4.5px;
-  color: var(--lens-icon-secondary);
-}
-.cm-frontmatter-icon svg { display: block; }
 
-/* The raw ": " and list dashes on the row being edited */
+/* Colon + space */
 .cm-frontmatter-colon {
-  color: var(--lens-text-tertiary);
+  color: var(--lens-fm-colon);
 }
 
-/* Notion's "Empty" in a property without a value */
-.cm-frontmatter-empty {
-  color: var(--lens-text-tertiary);
-}
-
-/* A list item under a key: Notion's multi-select pill */
-.cm-frontmatter-pill {
-  padding: 2px 6px;
-  border-radius: 4px;
-  background-color: var(--lens-pill-bg);
-}
-
-/* Continuation lines (multi-line values) */
+/* Continuation lines (YAML lists, multi-line values) */
 .cm-frontmatter-value-continuation {
-  color: var(--lens-text);
+  color: var(--lens-fm-value);
 }
 
 /* List item with wrong indentation (must be exactly 2 spaces before dash) */
@@ -903,80 +880,13 @@
   text-underline-offset: 3px;
 }
 
-/* "Hide properties", on the divider while the pointer is over the
-   properties (always on touch screens) */
-.cm-frontmatter-hide {
-  position: absolute;
-  top: 50%;
-  right: 2px;
-  transform: translateY(-50%);
-  height: 22px;
-  padding: 0 6px;
-  font-size: 12px;
-  line-height: 22px;
-  color: var(--lens-text-tertiary);
-  background-color: var(--lens-page-bg);
-  border-radius: 6px;
-  cursor: pointer;
-  user-select: none;
-  opacity: 0;
-  transition: opacity 100ms;
-}
-.cm-frontmatter-hide:hover {
-  background-image: linear-gradient(var(--lens-hover-bg), var(--lens-hover-bg));
-}
-.cm-frontmatter-line:hover ~ .cm-frontmatter-close .cm-frontmatter-hide,
-.cm-frontmatter-close:hover .cm-frontmatter-hide {
-  opacity: 1;
-}
-@media (hover: none) {
-  .cm-frontmatter-hide { opacity: 1; }
-}
-
-/* Hidden properties: Notion's "N more properties" row, which shows them */
-.cm-frontmatter-bar-row {
-  padding: 2px 0 10px;
-}
-.cm-frontmatter-bar {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 8px 0 6px;
-  font-size: 14px;
-  color: var(--lens-text-secondary);
-  border-radius: 6px;
-  cursor: pointer;
-  user-select: none;
-}
-.cm-frontmatter-bar:hover {
-  background-color: var(--lens-hover-bg);
-}
-.cm-frontmatter-chevron {
-  display: inline-flex;
-  justify-content: center;
-  width: 19.2px;
-  color: var(--lens-icon-secondary);
-}
-
-/* Pending suggestions in the hidden properties: Notion's orange tag */
-.cm-frontmatter-suggestions-badge {
-  height: 20px;
-  padding: 0 6px;
-  font-size: 12px;
-  line-height: 20px;
-  color: #d27b2d;
-  background-color: rgba(224, 101, 1, 0.129);
-  border-radius: 4px;
-}
-
 /* Frontmatter error tooltip */
 .cm-frontmatter-tooltip {
   padding: 4px 8px;
   font-size: 12px;
-  color: #991b1b;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
+  color: var(--lens-fm-error-text);
+  background: var(--lens-fm-error-bg);
+  border: 1px solid var(--lens-fm-error-border);
   border-radius: 4px;
 }
 
@@ -1789,8 +1699,8 @@ html, body {
   background-color: var(--lens-hover-bg);
 }
 
-/* Notion's breadcrumb (EditorArea): each folder and the page with its icon,
-   "/" between them */
+/* Notion's breadcrumb (EditorArea): each folder and the page, "/" between
+   them */
 .lens-breadcrumb {
   display: flex;
   align-items: center;
@@ -1812,17 +1722,6 @@ html, body {
 .lens-crumb:last-child {
   min-width: 0;
   max-width: 240px;
-}
-.lens-crumb-icon {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  font-size: 16.2px;
-  line-height: 1;
-  color: var(--lens-sidebar-icon);
 }
 .lens-crumb-name {
   min-width: 0;
@@ -1887,38 +1786,30 @@ html, body {
   line-height: 1;
   color: var(--lens-sidebar-icon);
 }
-.lens-tree-glyph,
-.lens-tree-chevron {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: opacity 150ms;
+/* A folder's icon (treeLayout.ts): its front flap tilts open while the folder
+   is open, and starts to while the pointer is over a closed one */
+.lens-folder-flap {
+  transform-box: fill-box;
+  transform-origin: 0% 100%;
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.lens-tree-chevron {
-  position: absolute;
-  inset: -1px 0;
-  color: var(--lens-icon-secondary);
-  border-radius: 4px;
-  opacity: 0;
+.lens-tree-row:hover .lens-tree-icon.is-folder:not(.is-open) .lens-folder-flap {
+  transform: skewX(-6deg) scaleY(0.95);
 }
-.lens-tree-chevron svg,
+.lens-tree-icon.is-open .lens-folder-flap {
+  transform: skewX(-14deg) scaleY(0.88);
+}
 .lens-tree-section-chevron svg {
   transform: rotate(-90deg);
   transition: transform 150ms;
 }
-.lens-tree-chevron.is-open svg,
 .lens-tree-section-chevron.is-open svg {
   transform: none;
 }
 /* Sticky folder headers update without animating */
-.lens-tree-snap svg {
+.lens-tree-snap svg,
+.lens-tree-snap .lens-folder-flap {
   transition: none;
-}
-.lens-tree-row:hover .lens-tree-icon.is-folder .lens-tree-glyph {
-  opacity: 0;
-}
-.lens-tree-row:hover .lens-tree-icon.is-folder .lens-tree-chevron {
-  opacity: 1;
 }
 .lens-tree-name {
   min-width: 0;

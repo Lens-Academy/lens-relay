@@ -3,7 +3,7 @@ import type { TreeApi, NodeApi } from 'react-arborist';
 import type { TreeNode } from '../../lib/tree-utils';
 import { useFileTreeContext } from './FileTreeContext';
 import type { TemplateOption } from '../../lib/templates';
-import { CHEVRON_SVG, FOLDER_ICON_SVG, TREE_ROW_HEIGHT, folderIcon, treeItemPadding } from './treeLayout';
+import { CHEVRON_SVG, FOLDER_ICON_SVG, TREE_ROW_HEIGHT, treeItemPadding } from './treeLayout';
 
 const ROW_HEIGHT = TREE_ROW_HEIGHT;
 const MAX_STICKY_DEPTH = 5;
@@ -53,7 +53,6 @@ interface ComputedHeader {
   level: number;
   isOpen: boolean;
   top: number;
-  data: TreeNode;
 }
 
 function computeStickyHeaders(
@@ -126,7 +125,6 @@ function computeStickyHeaders(
       level: ancestor.level,
       isOpen: ancestor.isOpen,
       top,
-      data: ancestor.data,
     });
   }
 
@@ -139,8 +137,6 @@ interface RowHolder {
   root: HTMLDivElement;
   item: HTMLDivElement;
   icon: HTMLSpanElement;
-  glyph: HTMLSpanElement;
-  chevron: HTMLSpanElement;
   sectionChevron: HTMLSpanElement;
   nameSpan: HTMLSpanElement;
   createWrapper: HTMLDivElement;
@@ -169,7 +165,7 @@ function createMenuItem(label: string): HTMLButtonElement {
 
 /**
  * A sticky folder header, built like a FileTreeNode row (the lens-tree-*
- * classes in index.css): the folder's icon, a chevron in its place on hover,
+ * classes in index.css): the folder's icon (open, since its rows are below),
  * the name, and the create button. A shared folder is a section label.
  */
 function createRowElement(
@@ -193,16 +189,10 @@ function createRowElement(
   item.className = 'lens-tree-item';
   root.appendChild(item);
 
+  // No transitions: imperative updates must snap, not animate
   const icon = document.createElement('span');
-  icon.className = 'lens-tree-icon is-folder';
-  const glyph = document.createElement('span');
-  glyph.className = 'lens-tree-glyph';
-  icon.appendChild(glyph);
-  // Chevron (no transition — imperative updates must snap, not animate)
-  const chevron = document.createElement('span');
-  chevron.className = 'lens-tree-chevron lens-tree-snap';
-  chevron.innerHTML = CHEVRON_SVG;
-  icon.appendChild(chevron);
+  icon.className = 'lens-tree-icon is-folder lens-tree-snap';
+  icon.innerHTML = FOLDER_ICON_SVG;
   item.appendChild(icon);
 
   // Name span
@@ -362,14 +352,13 @@ function createRowElement(
   createMenu.appendChild(newFolderButton);
   document.body.appendChild(createMenu);
 
-  return { root, item, icon, glyph, chevron, sectionChevron, nameSpan, createWrapper, createButton, createMenu, newFileButton, templatesButton, templatesList, newFolderButton };
+  return { root, item, icon, sectionChevron, nameSpan, createWrapper, createButton, createMenu, newFileButton, templatesButton, templatesList, newFolderButton };
 }
 
 // ── React component (thin shell — all scroll work is imperative) ────
 
 export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
-  const { onCreateDocument, onCreateFolder, getTemplates, onCreateFromTemplate, pageIcons } = useFileTreeContext();
-  const pageIconsRef = useRef(pageIcons);
+  const { onCreateDocument, onCreateFolder, getTemplates, onCreateFromTemplate } = useFileTreeContext();
   const containerRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<RowHolder[]>([]);
   const prevIdsRef = useRef<string[]>([]);
@@ -455,7 +444,7 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
       let maxBottom = 0;
       for (let i = 0; i < headers.length; i++) {
         rows[i].root.style.transform = `translateY(${headers[i].top}px)`;
-        rows[i].chevron.classList.toggle('is-open', headers[i].isOpen);
+        rows[i].icon.classList.toggle('is-open', headers[i].isOpen);
         rows[i].sectionChevron.classList.toggle('is-open', headers[i].isOpen);
         maxBottom = Math.max(maxBottom, headers[i].top + ROW_HEIGHT);
       }
@@ -476,18 +465,15 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
         row.root.dataset.nodeId = h.id;
         row.root.dataset.nodePath = h.path;
 
-        // Indent, or a section label for a shared folder; the folder's icon
+        // Indent, or a section label for a shared folder
         const section = h.level === 0;
         row.item.style.paddingLeft = `${treeItemPadding(h.level)}px`;
         row.item.classList.toggle('is-section', section);
         row.icon.style.display = section ? 'none' : '';
         row.sectionChevron.style.display = section ? '' : 'none';
-        const emoji = folderIcon(h.data, pageIconsRef.current);
-        if (emoji) row.glyph.textContent = emoji;
-        else row.glyph.innerHTML = FOLDER_ICON_SVG;
 
-        // Chevron (no transition — snaps immediately)
-        row.chevron.classList.toggle('is-open', h.isOpen);
+        // Open or closed (no transition — snaps immediately)
+        row.icon.classList.toggle('is-open', h.isOpen);
         row.sectionChevron.classList.toggle('is-open', h.isOpen);
 
         // Name
@@ -508,13 +494,6 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
 
     container.style.height = `${Math.max(0, maxBottom)}px`;
   }, [treeApi]);
-
-  // Page icons come and go (lib/pageIcons): redraw the headers with them
-  useEffect(() => {
-    pageIconsRef.current = pageIcons;
-    prevIdsRef.current = [];
-    updateDOM();
-  }, [pageIcons, updateDOM]);
 
   // Attach scroll listener + measure scrollbar
   useEffect(() => {

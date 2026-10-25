@@ -5,7 +5,7 @@ import { FileTreeContextMenu, shouldSuppressTreeClick } from './FileTreeContextM
 import { useFileTreeContext } from './FileTreeContext';
 import { useDragTarget } from './FileTree';
 import { CreateMenu } from './CreateMenu';
-import { CHEVRON_SVG, FOLDER_ICON_SVG, PAGE_ICON_SVG, folderIcon, treeItemPadding } from './treeLayout';
+import { CHEVRON_SVG, FOLDER_ICON_SVG, PAGE_ICON_SVG, treeItemPadding } from './treeLayout';
 
 export function FileTreeNode({
   node,
@@ -106,10 +106,9 @@ export function FileTreeNode({
     }
   };
 
-  // Notion's sidebar item (index.css): the page's emoji, or a default icon,
-  // in a fixed slot before the name; a folder's turns into a chevron on hover.
-  // The shared folders at the top are section labels.
-  const emoji = isFolder ? folderIcon(node.data, ctx.pageIcons) : node.data.docId ? ctx.pageIcons?.get(node.data.docId) : undefined;
+  // Notion's sidebar item (index.css): a page's or folder's icon in a fixed
+  // slot before the name; a folder's icon opens as the folder does. The
+  // shared folders at the top are section labels.
   const itemClass = `lens-tree-item${isSharedFolderRoot ? ' is-section' : ''}${isActive ? ' is-active' : ''}${isDropTarget ? ' is-drop-target' : ''}`;
 
   const content = (
@@ -150,14 +149,10 @@ export function FileTreeNode({
     >
       <div className={itemClass} style={{ paddingLeft: treeItemPadding(depth) }}>
         {!isSharedFolderRoot && (
-          <span className={`lens-tree-icon${isFolder ? ' is-folder' : ''}`}>
-            {emoji
-              ? <span className="lens-tree-glyph">{emoji}</span>
-              : <span className="lens-tree-glyph" dangerouslySetInnerHTML={{ __html: isFolder ? FOLDER_ICON_SVG : PAGE_ICON_SVG }} />}
-            {isFolder && (
-              <span className={`lens-tree-chevron${node.isOpen ? ' is-open' : ''}`} dangerouslySetInnerHTML={{ __html: CHEVRON_SVG }} />
-            )}
-          </span>
+          <span
+            className={`lens-tree-icon${isFolder ? ' is-folder' : ''}${isFolder && node.isOpen ? ' is-open' : ''}`}
+            dangerouslySetInnerHTML={{ __html: isFolder ? FOLDER_ICON_SVG : PAGE_ICON_SVG }}
+          />
         )}
 
         {/* Name or edit input */}

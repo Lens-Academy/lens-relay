@@ -58,8 +58,6 @@ import { utf8ByteToUtf16Offset } from '../../lib/text-offsets';
 import { resolveAnchorYFromView, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
-import { breadcrumbIcons, usePageIcons } from '../../lib/pageIcons';
-import { FOLDER_ICON_SVG, PAGE_ICON_SVG } from '../Sidebar/treeLayout';
 import { getPromotionStatus, type PromotionStatusResponse } from '../../lib/promotion-api';
 import { editorPathToPromotionPath } from '../../lib/promotion-paths';
 import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
@@ -197,9 +195,6 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const uuid = currentDocId.slice(RELAY_ID.length + 1);
     return findPathByUuid(uuid, metadata) ?? undefined;
   }, [currentDocId, metadata]);
-  // The breadcrumb's icons (lib/pageIcons)
-  const pageIcons = usePageIcons(folderDocs);
-  const crumbIcons = useMemo(() => breadcrumbIcons(currentFilePath ?? '', metadata, pageIcons), [currentFilePath, metadata, pageIcons]);
   const canUsePromotion = canPromote && (isAllFolders || folderUuid === EDU_FOLDER_ID);
   const promotionFilePath = useMemo(
     () => canUsePromotion ? editorPathToPromotionPath(currentFilePath) : null,
@@ -475,17 +470,14 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         const segments = pathToSegments(currentFilePath);
         if (segments.length === 0) return null;
         return createPortal(
-          // Notion's breadcrumb: each folder and the page with its icon, "/"
-          // between them; long names are cut with an ellipsis (full path in
-          // the tooltip) instead of running under the controls.
+          // Notion's breadcrumb: each folder and the page, "/" between them;
+          // long names are cut with an ellipsis (full path in the tooltip)
+          // instead of running under the controls.
           <nav className="lens-breadcrumb" aria-label="Breadcrumb" title={segments.join(' / ')}>
             {segments.map((seg, i) => (
               <Fragment key={i}>
                 {i > 0 && <span className="lens-crumb-separator" aria-hidden="true">/</span>}
                 <span className="lens-crumb">
-                  {crumbIcons[i]
-                    ? <span className="lens-crumb-icon">{crumbIcons[i]}</span>
-                    : <span className="lens-crumb-icon" dangerouslySetInnerHTML={{ __html: i === segments.length - 1 ? PAGE_ICON_SVG : FOLDER_ICON_SVG }} />}
                   <span className="lens-crumb-name">{seg}</span>
                 </span>
               </Fragment>

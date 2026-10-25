@@ -9,7 +9,6 @@ import type { TreeNode } from '../../lib/tree-utils';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useNavigation } from '../../contexts/NavigationContext';
-import { usePageIcons } from '../../lib/pageIcons';
 import { useAuth } from '../../contexts/AuthContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
@@ -35,7 +34,6 @@ export function Sidebar() {
 
   // Get metadata from NavigationContext (needed early for doc ID resolution)
   const { metadata, folderDocs, folderNames, onNavigate, justCreatedRef } = useNavigation();
-  const pageIcons = usePageIcons(folderDocs);
   const { canWrite, canDelete } = useAuth();
 
   // Derive active doc ID from URL path (first segment is the doc UUID — may be short)
@@ -468,7 +466,6 @@ export function Sidebar() {
                     getTemplates,
                     onCreateFromTemplate: canWrite ? handleInstantCreate : undefined,
                     onOpenNewTab: handleOpenNewTab,
-                    pageIcons,
                     activeDocId,
                   }}
                 >
