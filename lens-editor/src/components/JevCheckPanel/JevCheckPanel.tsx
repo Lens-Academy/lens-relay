@@ -20,6 +20,7 @@ import { BandList, Histogram, Percentiles, Summary, type Labeler } from './Resul
 import { labelBody } from '../../lib/jev-labels';
 import { useLabels } from './useLabels';
 import { CountInput } from './CountInput';
+import { RunChips, type RunEntry } from './RunChips';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import type { Para, Run } from './types';
 import { DEFAULT_PRESENTATION, describe, isDefault, LEVELS, presentationBlock, type Level, type Presentation } from '../../lib/jev-presentation';
@@ -83,8 +84,11 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const [kinds, setKinds] = useView(ytext, text, 'kinds', [] as string[]);
   const viewCourses = readView(text).courses, viewKinds = readView(text).kinds;
   const [running, setRunning] = useState(false);
-  // The newest run, the run to compare it with, and what that comparison is called.
-  const [result, setResult] = useState<{ run: Run; base?: { label: string; run: Run } } | null>(null);
+  // Every run of this visit, each with the run it is compared with; the newest is shown unless a
+  // chip picks another (Lauren, 2026-10-26: toggle between runs of the same sample).
+  const [runs, setRuns] = useState<RunEntry[]>([]);
+  const [shown, setShown] = useState<number | null>(null);
+  const result = runs.length ? runs[shown ?? runs.length - 1] : null;
   const [band, setBand] = useState<Band | null>(null);
   const [showSent, setShowSent] = useState(false);
   const [sent, setSent] = useState<Batch | undefined>();
@@ -99,10 +103,13 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
     setRunning(true); setErr(null);
     try {
       const sample = pool.slice(0, n);
+      const key = sample.map((u) => u.id).join('\n');
       // Each check as it would be asked: the draft and the live check may differ in presentation.
       const [r, l] = await Promise.all([ask(c, sample, pres), draft ? ask(live, sample, live.presentation) : null]);
       setSent(r.first);
-      setResult((old) => ({ run: r, base: l ? { label: 'live', run: l } : old ? { label: 'was', run: old.run } : undefined }));
+      const mine = { ...r, sample: key }, draftRun = !!draft;
+      setRuns((rs) => [...rs, { run: mine, draft: draftRun, base: l ? { label: 'live', run: { ...l, sample: key } } : rs.length ? { label: 'was', run: rs[rs.length - 1].run } : undefined }]);
+      setShown(null);
     } catch (e) { setErr((e as Error).message); } finally { setRunning(false); }
   }
 
@@ -226,6 +233,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
             <div className="mb-2 rounded border border-violet-300 bg-violet-50 px-2 py-1 text-[13px] text-violet-900">
               Experiment: the platform does not ask this way. It asks about each paragraph alone, so scores here can differ from what agents will see after Save.</div>
           )}
+          <RunChips runs={runs} shown={shown ?? runs.length - 1} onShow={(i) => { setShown(i === runs.length - 1 ? null : i); setBand(null); }} />
           {!!latest.leftOut && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-[13px] text-amber-900">
             {latest.leftOut} sampled paragraph{latest.leftOut === 1 ? '' : 's'} not asked: the platform found nothing to ask about there in the file as it is now (usually it changed since the corpus was built).</div>}
           {!!latest.tooLong && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-[13px] text-amber-900">

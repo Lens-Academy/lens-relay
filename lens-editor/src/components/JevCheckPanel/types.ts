@@ -8,5 +8,5 @@ export interface CorpusMeta { title: string; taken: string; commit: string; sour
 /** A unit of a run and jev's p(yes). `text` is for display; `words`, when the platform built the
  *  run, are all of them (text is cut at 600 characters), and `answerKey` what jev was shown. */
 export interface Scored extends Para { p: number; words?: string; answerKey?: string }
-export interface Run { check: JevCheck; scored: Scored[]; cached: number; unit?: Level; pres?: string; platform?: boolean; tooLong?: number; leftOut?: number }
+export interface Run { check: JevCheck; scored: Scored[]; cached: number; unit?: Level; pres?: string; platform?: boolean; tooLong?: number; leftOut?: number; sample?: string }
 export type Colormap = (p: number) => string;
