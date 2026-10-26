@@ -180,7 +180,11 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   // (truncated hints, the can't-save line) would otherwise widen CodeMirror's content to their
   // full length, 700 px on a phone (Lauren, 2026-10-25).
   return (
-    <section className="mx-0 my-4 rounded-lg sm:mx-6 border border-gray-200 bg-white text-sm shadow-sm [contain:inline-size]" data-testid="jev-check-panel"
+    // Wider than the 580 px text column where the window allows (Lauren, 2026-10-26): the page area
+    // is a CSS container (lens-page, index.css), so the panel takes its width less a margin, up to
+    // 1100 px, never less than the column, and stays centred on the column.
+    <section className="relative left-1/2 my-4 -translate-x-1/2 rounded-lg border border-gray-200 bg-white text-sm shadow-sm [contain:inline-size]" data-testid="jev-check-panel"
+      style={{ width: 'max(100%, min(1100px, 100cqw - 64px))' }}
       onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); run(); } }}>
       <EditableText.Provider value={latestText}>
       <header className="flex items-baseline justify-between border-b border-gray-100 px-4 py-2.5">
