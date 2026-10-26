@@ -16,6 +16,18 @@ export function treeItemPadding(level: number): number {
   return 8 + Math.max(0, level - 1) * TREE_INDENT;
 }
 
+/**
+ * Where an item's guide lines run: one per folder it is inside (below the
+ * section labels), down the middle of that folder's icon, so what a folder
+ * holds hangs from it. In px from the row's left edge (the item is inset 8px).
+ */
+export function treeGuides(level: number): number[] {
+  return Array.from({ length: Math.max(0, level - 1) }, (_, i) => 8 + treeItemPadding(i + 1) + 11);
+}
+
+/** Notion's "more" icon: three dots */
+export const MORE_SVG = '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="3.5" cy="8" r="1.25"/><circle cx="8" cy="8" r="1.25"/><circle cx="12.5" cy="8" r="1.25"/></svg>';
+
 /** A page's icon: Notion's document glyph */
 export const PAGE_ICON_SVG = '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">'
   + '<path d="M5.5 2.75h6.1L15 6.15v10.1a1 1 0 0 1-1 1H5.5a1 1 0 0 1-1-1V3.75a1 1 0 0 1 1-1Z" stroke-linejoin="round"/>'

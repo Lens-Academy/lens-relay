@@ -2410,6 +2410,9 @@ html, body {
 .lens-tree-row {
   padding-bottom: 1px;
 }
+.lens-tree-row {
+  --lens-tree-guide: var(--lens-border);
+}
 .lens-tree-item {
   display: flex;
   align-items: center;
@@ -2417,6 +2420,7 @@ html, body {
   margin: 0 8px;
   padding-right: 4px;
   font-size: 14px;
+  font-weight: 500;
   line-height: 20px;
   color: var(--lens-sidebar-text);
   border-radius: 6px;
@@ -2431,9 +2435,46 @@ html, body {
 }
 .lens-tree-item.is-active,
 .lens-tree-row:hover .lens-tree-item.is-active {
-  font-weight: 500;
   color: var(--lens-text);
   background-color: var(--lens-pressed-bg);
+}
+/* A folder's icon gives way to a chevron on hover, as Notion's: pointing
+   right while closed, down while open */
+.lens-tree-glyph {
+  display: flex;
+  transition: opacity 120ms ease;
+}
+.lens-tree-chevron {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lens-icon-secondary);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.lens-tree-chevron svg {
+  transform: rotate(-90deg);
+  transition: transform 160ms ease;
+}
+.lens-tree-icon.is-open .lens-tree-chevron svg {
+  transform: none;
+}
+@media (hover: hover) {
+  .lens-tree-row:hover .lens-tree-icon.is-folder .lens-tree-glyph { opacity: 0; }
+  .lens-tree-row:hover .lens-tree-icon.is-folder .lens-tree-chevron { opacity: 1; }
+}
+/* What a folder holds eases in as it opens, one item after another */
+@keyframes lens-tree-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+}
+.lens-tree-row.is-entering .lens-tree-item {
+  animation: lens-tree-enter 200ms cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 18ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lens-tree-row.is-entering .lens-tree-item { animation: none; }
 }
 .lens-tree-item.is-drop-target {
   background-color: var(--lens-bg-blue);
