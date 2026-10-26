@@ -227,7 +227,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
               Experiment: the platform does not ask this way. It asks about each paragraph alone, so scores here can differ from what agents will see after Save.</div>
           )}
           {!!latest.leftOut && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-[13px] text-amber-900">
-            {latest.leftOut} sampled paragraph{latest.leftOut === 1 ? '' : 's'} left out: changed in the file since the corpus was built.</div>}
+            {latest.leftOut} sampled paragraph{latest.leftOut === 1 ? '' : 's'} not asked: the platform found nothing to ask about there in the file as it is now (usually it changed since the corpus was built).</div>}
           {!!latest.tooLong && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-[13px] text-amber-900">
             {latest.tooLong} left out: jev refused them as too long (the whole file is too big for jev here).</div>}
           {latest.pres && <div className="mb-1 text-[12px] text-gray-500">{latest.pres}

@@ -12,7 +12,8 @@ export function useLabels(checkId: string | undefined) {
     let live = true;
     fetch(`/api/jev/judgements?check_id=${encodeURIComponent(checkId)}`, { headers: relayHeaders({}) })
       .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d.error); return d.judgements as Label[]; })
-      .then((js) => { if (live) { setLabels(js); setError(null); } }, (e: Error) => live && setError(`labels: ${e.message}`));
+      // Keep labels added before the list arrived (they have no id yet) (Assay, #195).
+      .then((js) => { if (live) { setLabels((ls) => [...js, ...ls.filter((l) => l.id === undefined)]); setError(null); } }, (e: Error) => live && setError(`labels: ${e.message}`));
     return () => { live = false; };
   }, [checkId]);
   const add = useCallback(async (l: Label) => {
