@@ -596,10 +596,10 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       const codeLines = new Set<number>();
       const doc = view.state.doc;
       // The empty line the cursor is on, just made by Enter or with no text
-      // under it: drawn as the line of text it is about to be (full height,
-      // what is above and below it spaced as from text now), so nothing moves
-      // when typing starts, as in Notion. Not a blank line between blocks the
-      // cursor only passes, which keeps its 16px.
+      // under it: drawn as the line of text it is about to be (full height, a
+      // heading above it spaced as from text), so nothing moves when typing
+      // starts. Not a blank line between paragraphs the cursor only passes,
+      // which keeps its 16px.
       const pendingLine = (() => {
         const { main } = selection;
         if (!main.empty) return -1;
@@ -613,12 +613,6 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         }
         return line.number;
       })();
-      /** The kind of top-level block at `pos`: Paragraph, ATXHeading2, BulletList... */
-      const topBlockAt = (pos: number) => {
-        let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(pos, 1);
-        while (node?.parent && node.parent.name !== 'Document') node = node.parent;
-        return node?.name;
-      };
       /** Whether line `n` exists and has text: a block boundary without a blank line. */
       const hasText = (n: number) =>
         n === pendingLine || (n >= 1 && n <= doc.lines && doc.line(n).text.trim() !== '');
@@ -978,51 +972,6 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               }
             }
 
-            // A top-level list right after or before text (no blank line between):
-            // Notion's 16px between blocks comes from the list's own padding
-            if ((node.name === 'BulletList' || node.name === 'OrderedList') && node.node.parent?.name === 'Document') {
-              const first = doc.lineAt(node.from);
-              const last = doc.lineAt(node.to);
-              if (hasProse(first.number - 1)) {
-                decorations.push({ from: first.from, to: first.from, deco: Decoration.line({ class: 'cm-list-after-text' }) });
-              }
-              if (hasProse(last.number + 1)) {
-                decorations.push({ from: last.from, to: last.from, deco: Decoration.line({ class: 'cm-list-before-text' }) });
-              }
-            }
-
-            // Lines of one paragraph (Enter, no blank line between): in Notion
-            // each Enter starts a new block, 16px below the last (index.css)
-            if (node.name === 'Paragraph' && node.node.parent?.name === 'Document' && !inFrontmatter(view, node.from)) {
-              const last = doc.lineAt(node.to).number;
-              const comments = view.state.field(criticMarkupField, false) ?? [];
-              // A line whose break is inside a comment, hidden with it
-              // (criticmarkup.ts), runs on into the next: the drawn line
-              // starts at the first of them, and takes the gap
-              let runStart: number | null = null;
-              // Its last line too, when the cursor's new line follows it
-              const end = pendingLine === last + 1 ? last + 1 : last;
-              for (let n = doc.lineAt(node.from).number; n < end; n++) {
-                const line = doc.line(n);
-                const start: number = runStart ?? line.from;
-                if (comments.some((r) => r.type === 'comment' && r.from <= line.to && r.to > line.to)) {
-                  runStart = start;
-                  continue;
-                }
-                runStart = null;
-                decorations.push({ from: start, to: start, deco: Decoration.line({ class: 'cm-text-before-text' }) });
-                if (start !== line.from) continue;
-                // CodeMirror takes the page's line height, which it guesses
-                // every line not drawn by, from the first short line of plain
-                // text, padding and all: this one would give 40px, not 24px,
-                // and its guesses would be so far off that its measuring never
-                // settled. A mark, styling nothing, makes it pass over the line.
-                if (line.length > 0 && line.length <= 20) {
-                  decorations.push({ from: line.from, to: line.to, deco: Decoration.mark({ class: 'cm-gap-text' }) });
-                }
-              }
-            }
-
             // Numbers of numbered lists sit in a column, as Notion's do, so their
             // text lines up with bulleted lists' (index.css)
             if (node.name === 'ListMark' && node.node.parent?.parent?.name === 'OrderedList') {
@@ -1175,18 +1124,13 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         });
       }
 
-      // Blank lines between blocks draw at Notion's 16px gap between paragraphs
-      // rather than as a full row (index.css), except inside code and
-      // frontmatter, and the cursor's new line (pendingLine)
+      // Blank lines are the space between paragraphs, 16px rather than a full
+      // row (index.css), except inside code and frontmatter, and the cursor's
+      // new line (pendingLine)
       for (const { from, to } of view.visibleRanges) {
         for (let pos = from; pos <= to; ) {
           const line = doc.lineAt(pos);
           pos = line.to + 1;
-          if (line.number === pendingLine && pendingLine < doc.lines && topBlockAt(doc.line(pendingLine + 1).from) === 'Paragraph') {
-            // Text under the new line: the two will be one paragraph, so it
-            // takes the gap between its lines
-            decorations.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'cm-text-before-text' }) });
-          }
           if (line.text.trim() === '' && line.number !== pendingLine && !codeLines.has(line.number) && !inFrontmatter(view, line.from)) {
             decorations.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'cm-blank-line' }) });
           }
