@@ -112,3 +112,14 @@ Each question has a proposed answer. Silence on a question means the proposed an
    people saw at that time.
 5. **Who may open history?** The proposed answer is anyone with a Lens Edu link, including view-only
    links. The same history is already public on GitHub.
+
+## Lauren's feedback on the first version (2026-10-26, held until after standup)
+
+Lauren said "I like it as an initial version" and gave these four points, quoted exactly:
+
+- "like gdocs, related groups of changes"
+- "show formatted markdown, if possible closer to how editor sees it"
+- "in the history list, show how many things changed in a given row, and a preview of what the first one was"
+- "lots of "unknown" in the history, seems slightly distracting"
+
+Status: not started. The first version ships as a ready pull request before these.
