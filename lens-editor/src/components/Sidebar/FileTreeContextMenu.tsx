@@ -42,7 +42,7 @@ export function FileTreeContextMenu({
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content
-          className="bg-white rounded shadow-lg py-1 min-w-[160px] z-50"
+          className="lens-popover p-1 min-w-[180px] z-50"
           // The portal is a React child of the tree row, so item clicks bubble
           // through the React tree to react-arborist's row onClick — which
           // selects the row and navigates, killing the rename/move/delete
@@ -51,7 +51,7 @@ export function FileTreeContextMenu({
         >
           {!isSharedFolderRoot && (
             <ContextMenu.Item
-              className="px-3 py-1.5 text-sm hover:bg-gray-100 cursor-pointer outline-none"
+              className="lens-menu-item lens-menu-item-compact text-sm cursor-pointer outline-none data-[highlighted]:bg-[var(--lens-hover-bg)]"
               onSelect={onRename}
             >
               Rename
@@ -59,7 +59,7 @@ export function FileTreeContextMenu({
           )}
           {!isFolder && (
             <ContextMenu.Item
-              className="px-3 py-1.5 text-sm hover:bg-gray-100 cursor-pointer outline-none"
+              className="lens-menu-item lens-menu-item-compact text-sm cursor-pointer outline-none data-[highlighted]:bg-[var(--lens-hover-bg)]"
               onSelect={onMove}
             >
               Move to...
@@ -67,9 +67,9 @@ export function FileTreeContextMenu({
           )}
           {!isSharedFolderRoot && onDelete && (
             <>
-              <ContextMenu.Separator className="h-px bg-gray-200 my-1" />
+              <ContextMenu.Separator className="lens-menu-divider" />
               <ContextMenu.Item
-                className="px-3 py-1.5 text-sm text-red-600 hover:bg-gray-100 cursor-pointer outline-none"
+                className="lens-menu-item lens-menu-item-compact text-sm !text-[#eb5757] cursor-pointer outline-none data-[highlighted]:bg-[var(--lens-hover-bg)]"
                 onSelect={onDelete}
               >
                 {isFolder ? 'Delete Folder' : 'Delete'}
