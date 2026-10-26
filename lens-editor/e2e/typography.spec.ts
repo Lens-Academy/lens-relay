@@ -50,16 +50,17 @@ test.describe('Typography', () => {
     expect(body).toMatchObject({ fontSize: '16px', lineHeight: '24px', color: 'rgb(44, 44, 43)', fontWeight: '400' });
   });
 
-  test('headings are 30, 24, 20 and 18px, all semibold', async ({ page }) => {
-    expect(await styleOf(page, 'Q4 operating plan')).toMatchObject({ fontSize: '30px', fontWeight: '600' });
-    expect(await styleOf(page, 'Key results')).toMatchObject({ fontSize: '24px', fontWeight: '600' });
-    expect(await styleOf(page, 'Notes from the meeting')).toMatchObject({ fontSize: '20px', fontWeight: '600' });
+  test('headings are 30, 24, 20 and 18px in Source Serif 4, the large ones medium', async ({ page }) => {
+    expect(await styleOf(page, 'Q4 operating plan')).toMatchObject({ fontSize: '30px', fontWeight: '500' });
+    expect(await styleOf(page, 'Key results')).toMatchObject({ fontSize: '24px', fontWeight: '500' });
+    expect(await styleOf(page, 'Notes from the meeting')).toMatchObject({ fontSize: '20px', fontWeight: '500' });
     expect(await styleOf(page, 'Numbers')).toMatchObject({ fontSize: '18px', fontWeight: '600' });
+    expect((await styleOf(page, 'Key results')).fontFamily).toMatch(/^"Source Serif 4 Variable"/);
   });
 
-  test('a heading stays semibold while the cursor is on it', async ({ page }) => {
+  test('a heading keeps its weight while the cursor is on it', async ({ page }) => {
     await cursorAt(page, 'Key results');
-    expect(await styleOf(page, 'Key results')).toMatchObject({ fontSize: '24px', fontWeight: '600' });
+    expect(await styleOf(page, 'Key results')).toMatchObject({ fontSize: '24px', fontWeight: '500' });
   });
 
   test('bold is semibold, and stays so while the cursor is in it', async ({ page }) => {
@@ -68,10 +69,11 @@ test.describe('Typography', () => {
     expect((await styleOf(page, 'main risks')).fontWeight).toBe('600');
   });
 
-  test('the title is 40px bold and starts in line with the text', async ({ page }) => {
+  test('the title is 40px in the serif and starts in line with the text', async ({ page }) => {
     const title = page.locator('.lens-doc-title');
     await expect(title).toHaveCSS('font-size', '40px');
-    await expect(title).toHaveCSS('font-weight', '700');
+    await expect(title).toHaveCSS('font-weight', '500');
+    await expect(title).toHaveCSS('font-family', /^"Source Serif 4 Variable"/);
     const [titleLeft, textLeft] = await page.evaluate(() => {
       const t = document.querySelector('.lens-doc-title')!;
       const view = (window as unknown as { __view: View }).__view;

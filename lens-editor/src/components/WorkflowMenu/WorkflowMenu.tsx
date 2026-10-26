@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -122,7 +122,12 @@ function ThemeIcon({ value }: { value: ThemeSetting }) {
   );
 }
 
-export function WorkflowMenu() {
+/**
+ * Notion's page menu (•••) at the right end of the top bar: on a document,
+ * that page's settings (`children`) first; then the workflow pages, and
+ * the appearance.
+ */
+export function WorkflowMenu({ children }: { children?: ReactNode }) {
   const { setting: themeSetting } = useTheme();
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 8 });
@@ -185,10 +190,10 @@ export function WorkflowMenu() {
         aria-label="Open workflows menu"
         className="lens-icon-button"
       >
-        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <circle cx="12" cy="5" r="1.75" />
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <circle cx="5" cy="12" r="1.75" />
           <circle cx="12" cy="12" r="1.75" />
-          <circle cx="12" cy="19" r="1.75" />
+          <circle cx="19" cy="12" r="1.75" />
         </svg>
       </button>
 
@@ -196,9 +201,15 @@ export function WorkflowMenu() {
         <div
           ref={menuRef}
           role="menu"
-          className="lens-popover fixed z-[1200] p-1"
-          style={{ top: position.top, left: position.left, width: 'min(280px, calc(100vw - 16px))' }}
+          className="lens-popover fixed z-[1200] p-1 overflow-y-auto"
+          style={{ top: position.top, left: position.left, width: 'min(280px, calc(100vw - 16px))', maxHeight: `calc(100dvh - ${position.top + 8}px)` }}
         >
+          {children && (
+            <>
+              <div className="space-y-px">{children}</div>
+              <div className="lens-menu-divider" />
+            </>
+          )}
           <div className="space-y-px">
             {workflows.map(item => {
               const active = location.pathname === item.path;

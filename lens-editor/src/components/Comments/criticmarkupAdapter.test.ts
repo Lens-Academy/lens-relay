@@ -135,3 +135,34 @@ describe('a new comment while others edit', () => {
     expect(ytext.toString().startsWith('a{>>')).toBe(true);
   });
 });
+
+describe('a comment and the text it highlights go together', () => {
+  function highlighted() {
+    const { ytext } = makeDoc('We ship it soon.');
+    // "ship it" highlighted, with a comment and a reply
+    ytext.insert('We ship it'.length, '==}');
+    ytext.insert('We '.length, '{==');
+    const end = 'We {==ship it==}'.length;
+    insertWithMetadata(ytext, end, 'ann', 1716553200000, 'why?');
+    insertWithMetadata(ytext, ytext.toString().indexOf(' soon'), 'bo', 1716553300000, 'because');
+    return ytext;
+  }
+
+  it('resolving removes the thread and the highlight, keeping the text', () => {
+    const ytext = highlighted();
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', true));
+    act(() => { result.current.callbacks.onResolve(result.current.threads[0]); });
+    expect(ytext.toString()).toBe('We ship it soon.');
+  });
+
+  it("deleting the thread's last comment removes the highlight; deleting a reply keeps it", () => {
+    const ytext = highlighted();
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', true));
+    act(() => { result.current.callbacks.onDelete(result.current.threads[0].replies[0]); });
+    expect(ytext.toString()).toContain('We {==ship it==}{>>');
+    expect(ytext.toString()).toContain('@@why?<<} soon.');
+    expect(ytext.toString()).not.toContain('because');
+    act(() => { result.current.callbacks.onDelete(result.current.threads[0].root); });
+    expect(ytext.toString()).toBe('We ship it soon.');
+  });
+});

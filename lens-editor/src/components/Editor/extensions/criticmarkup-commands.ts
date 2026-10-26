@@ -1,7 +1,7 @@
 // src/components/Editor/extensions/criticmarkup-commands.ts
 import type { EditorView, KeyBinding } from '@codemirror/view';
 import { criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
-import type { CriticMarkupRange } from '../../../lib/criticmarkup-parser';
+import { commentThreadAt, withLinkedComments, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 /**
  * Find the CriticMarkup range containing the given position.
@@ -139,6 +139,16 @@ export function surgicalChangesFor(
 }
 
 /**
+ * The changes for acting on `ranges`, with the comment threads and
+ * highlights linked to them: a comment's highlight goes with its thread
+ * (withLinkedComments).
+ */
+function changesFor(view: EditorView, ranges: CriticMarkupRange[], action: 'accept' | 'reject'): CmChange[] {
+  return withLinkedComments(view.state.field(criticMarkupField), ranges)
+    .flatMap(r => surgicalChangesFor(view, r, action));
+}
+
+/**
  * Accept CriticMarkup changes. If a non-collapsed selection exists,
  * accepts all ranges overlapping the selection. Otherwise accepts
  * the single range at cursor position.
@@ -147,14 +157,14 @@ export function surgicalChangesFor(
 export function acceptChangeAtCursor(view: EditorView): boolean {
   const selected = findRangesInSelection(view);
   if (selected.length > 0) {
-    view.dispatch({ changes: selected.flatMap(r => surgicalChangesFor(view, r, 'accept')) });
+    view.dispatch({ changes: changesFor(view, selected, 'accept') });
     return true;
   }
 
   const range = findRangeAtCursor(view);
   if (!range) return false;
 
-  view.dispatch({ changes: surgicalChangesFor(view, range, 'accept') });
+  view.dispatch({ changes: changesFor(view, [range], 'accept') });
   return true;
 }
 
@@ -167,14 +177,26 @@ export function acceptChangeAtCursor(view: EditorView): boolean {
 export function rejectChangeAtCursor(view: EditorView): boolean {
   const selected = findRangesInSelection(view);
   if (selected.length > 0) {
-    view.dispatch({ changes: selected.flatMap(r => surgicalChangesFor(view, r, 'reject')) });
+    view.dispatch({ changes: changesFor(view, selected, 'reject') });
     return true;
   }
 
   const range = findRangeAtCursor(view);
   if (!range) return false;
 
-  view.dispatch({ changes: surgicalChangesFor(view, range, 'reject') });
+  view.dispatch({ changes: changesFor(view, [range], 'reject') });
+  return true;
+}
+
+/**
+ * Resolve the comment at `pos` (in its thread, or in the text it
+ * highlights): remove the thread and the highlight, keeping the text.
+ * Returns false when there is no comment there.
+ */
+export function resolveCommentAt(view: EditorView, pos: number): boolean {
+  const thread = commentThreadAt(view.state.field(criticMarkupField), pos);
+  if (thread.length === 0) return false;
+  view.dispatch({ changes: changesFor(view, thread, 'accept') });
   return true;
 }
 

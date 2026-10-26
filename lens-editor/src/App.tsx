@@ -647,13 +647,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                     <div id="header-breadcrumb" className="flex min-w-0" />
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
-                    <div id="header-controls" className="flex items-center gap-2" />
-                    {/* On a document route EditorArea places the workflows menu
-                        among its own controls; the start page and the workflow
-                        pages get it here. Decided by route, not by whether
-                        EditorArea is mounted, so opening or switching documents
-                        never flashes a second menu */}
-                    {!onDocRoute && <WorkflowMenu />}
+                    <div id="header-controls" className="flex items-center gap-1" />
                     {/* Comments and the right sidebar belong to a document route,
                         or to a page that registers its own comments control
                         (HtmlEditor on a desktop; on a phone the bottom bar has
@@ -680,6 +674,13 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                       </svg>
                     </button>}
                     <div id="header-discussion-toggle" className="flex" />
+                    {/* Notion's page menu (•••), last: on a document route
+                        EditorArea places it here with the page's settings; the
+                        start page and the workflow pages get it here. Decided by
+                        route, not by whether EditorArea is mounted, so opening
+                        or switching documents never flashes a second menu */}
+                    <div id="header-menu" className="flex" />
+                    {!onDocRoute && <WorkflowMenu />}
                   </div>
                 </header>
                 <div className="flex-1 min-h-0">

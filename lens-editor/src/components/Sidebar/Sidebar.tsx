@@ -21,7 +21,7 @@ import { findTemplates, prepareTemplateText, type TemplateOption } from '../../l
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 import { renamePreservingExtension } from '../../lib/filename-utils';
-import { SegmentedToggle, type SegmentedValue } from '../SegmentedToggle';
+import type { SegmentedValue } from '../SegmentedToggle';
 import { CourseTree } from './CourseTree/CourseTree';
 import { persistedChoice } from '../../lib/persisted-pref';
 
@@ -355,23 +355,34 @@ export function Sidebar() {
 
   return (
     <aside className="lens-sidebar-panel w-full h-full flex flex-col">
-      {/* Header with search */}
-      <div className="px-2 pt-1 pb-2 space-y-2">
+      {/* Notion's sidebar top: a search row, then the Files and Course tabs */}
+      <div className="px-2 pt-1 pb-1">
         <SearchInput
           ref={searchInputRef}
           value={searchTerm}
           onChange={setSearchTerm}
-          placeholder="Search..."
+          placeholder="Search"
         />
-        <SegmentedToggle
-          leftLabel="Files"
-          rightLabel="Course"
-          value={view === 'course' ? 'right' : 'left'}
-          onChange={handleViewChange}
-          ariaLabel="Sidebar view"
-          leftTitle="Browse the shared folders"
-          rightTitle="Browse the open course as a tree"
-        />
+        <div role="group" aria-label="Sidebar view" className="lens-sidebar-tabs">
+          <button
+            type="button"
+            aria-pressed={view !== 'course'}
+            title="Browse the shared folders"
+            onClick={() => handleViewChange('left')}
+            className={`lens-sidebar-tab${view !== 'course' ? ' is-active' : ''}`}
+          >
+            Files
+          </button>
+          <button
+            type="button"
+            aria-pressed={view === 'course'}
+            title="Browse the open course as a tree"
+            onClick={() => handleViewChange('right')}
+            className={`lens-sidebar-tab${view === 'course' ? ' is-active' : ''}`}
+          >
+            Course
+          </button>
+        </div>
       </div>
 
       {/* Tree content or search results */}
@@ -397,10 +408,10 @@ export function Sidebar() {
           <>
             {/* File name filter input */}
             {folderDocs.size > 0 && (
-              <div className="px-2 pb-1.5">
+              <div className="px-2 pb-1">
                 <div className="relative">
                   <svg
-                    className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--lens-text-tertiary)]"
+                    className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--lens-sidebar-icon)]"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -412,8 +423,8 @@ export function Sidebar() {
                     type="text"
                     value={fileFilter}
                     onChange={(e) => setFileFilter(e.target.value)}
-                    placeholder="Filter files..."
-                    className="lens-input w-full pl-7 pr-6 h-7 text-xs"
+                    placeholder="Filter files"
+                    className="lens-sidebar-field w-full pl-8 pr-6 h-7 text-xs"
                   />
                   {fileFilter && (
                     <button

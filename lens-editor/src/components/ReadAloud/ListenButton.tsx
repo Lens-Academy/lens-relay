@@ -31,11 +31,9 @@ export function ListenButton({ engine, onStart }: {
       aria-pressed={open}
       title={open ? 'Close read-aloud' : 'Listen: read this page aloud'}
       aria-label="Listen"
-      className={`flex items-center gap-1.5 px-2 py-1 rounded-md border disabled:opacity-40 ${
-        open ? 'border-[#e6b988] bg-[#fdf3e3] hover:bg-[#fbe9cf] text-[#8a5410]' : 'border-gray-300 bg-white hover:bg-gray-50 text-gray-600'
-      }`}
+      className={`lens-icon-button disabled:opacity-40${open ? ' is-on' : ''}`}
     >
-      <Icon name="headphones" className="w-4 h-4" />
+      <Icon name="headphones" className="w-[18px] h-[18px]" />
     </button>
   );
 }

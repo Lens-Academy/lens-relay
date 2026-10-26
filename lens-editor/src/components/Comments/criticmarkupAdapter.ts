@@ -3,18 +3,22 @@ import { useMemo, useSyncExternalStore } from 'react';
 import * as Y from 'yjs';
 import type { ThreadView, MessageView, ThreadKey } from './types';
 import { useCommentsFromText } from './useCommentsFromText';
-import type { CommentThread, CriticMarkupRange } from '../../lib/criticmarkup-parser';
+import { parse, parseThreads, type CommentThread, type CriticMarkupRange } from '../../lib/criticmarkup-parser';
 import {
   insertCommentInYText,
   replyInYText,
   editRangeContentInYText,
   deleteRangeInYText,
+  removeThreadInYText,
 } from '../../lib/ytext-comment-ops';
 
 export interface AdapterCallbacks {
   onReply: (thread: ThreadView, body: string) => void;
   onEdit: (message: MessageView, newBody: string) => void;
+  /** Deleting a thread's last message also removes its highlight */
   onDelete: (message: MessageView) => void;
+  /** Removes the thread and its highlight, keeping the text (Notion's resolve) */
+  onResolve: (thread: ThreadView) => void;
   /** Returns the new thread's key, when it differs from `key` (a highlight was added) */
   onAddComment: (key: ThreadKey, body: string) => ThreadKey | void;
 }
@@ -28,6 +32,13 @@ function messageIdFor(range: CriticMarkupRange): string {
   const a = range.metadata?.author ?? '';
   const t = range.metadata?.timestamp != null ? String(range.metadata.timestamp) : '';
   return a && t ? `${a}|${t}` : `pos:${range.from}`;
+}
+
+/** The thread a message is in, as the Y.Text is now (its offsets may have moved since the render) */
+function liveThread(ytext: Y.Text, messageId: string): { ranges: CriticMarkupRange[]; thread: CommentThread } | null {
+  const ranges = parse(ytext.toString());
+  const thread = parseThreads(ranges).find((t) => t.comments.some((c) => messageIdFor(c) === messageId));
+  return thread ? { ranges, thread } : null;
 }
 
 function useYTextString(yText: Y.Text): string {
@@ -142,9 +153,18 @@ export function useThreadsFromYText(
         editRangeContentInYText(yText, range, body);
       },
       onDelete(message) {
-        const range = rangeByMessageId.get(message.id);
+        const live = liveThread(yText, message.id);
+        if (live?.thread.comments.length === 1) {
+          removeThreadInYText(yText, live.ranges, live.thread.comments);
+          return;
+        }
+        const range = live?.thread.comments.find((c) => messageIdFor(c) === message.id) ?? rangeByMessageId.get(message.id);
         if (!range) return;
         deleteRangeInYText(yText, range);
+      },
+      onResolve(thread) {
+        const live = liveThread(yText, thread.root.id);
+        if (live) removeThreadInYText(yText, live.ranges, live.thread.comments);
       },
       onAddComment(key, body) {
         const at = insertPos(yText, key);

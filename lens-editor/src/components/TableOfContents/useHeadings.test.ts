@@ -1,8 +1,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { normalizeHeadingLevels, useActiveHeading } from './useHeadings';
+import { markdown } from '@codemirror/lang-markdown';
+import { ensureSyntaxTree } from '@codemirror/language';
+import { extractHeadings, headingInView, normalizeHeadingLevels, plainHeadingText, useHeadingInView } from './useHeadings';
 import type { Heading } from './useHeadings';
 
 /** Helper: build minimal Heading[] from raw levels */
@@ -68,7 +70,38 @@ describe('normalizeHeadingLevels', () => {
   }
 });
 
-describe('useActiveHeading', () => {
+describe('extractHeadings', () => {
+  it("lists the page's headings as they read, not those inside lists", () => {
+    const state = EditorState.create({
+      doc: '# **One**\n- ##### **Actions done:**\n\t- x\n\n## See [[Docs/Q4 Plan|the plan]] and `code`',
+      extensions: [markdown()],
+    });
+    // The whole document, however long parsing takes on a busy machine
+    ensureSyntaxTree(state, state.doc.length, 10_000);
+    expect(extractHeadings(state).map((h) => h.text)).toEqual(['One', 'See the plan and code']);
+  });
+});
+
+describe('plainHeadingText', () => {
+  it('drops emphasis, links, highlights and suggestions', () => {
+    expect(plainHeadingText('**Actions done:**')).toBe('Actions done:');
+    expect(plainHeadingText('Read [the source](https://x.org) and [[Lens/Plans/Q4 Plan]]')).toBe('Read the source and Q4 Plan');
+    expect(plainHeadingText('A *really* {==new==}{>>a comment<<} {++plan++}{--old--}')).toBe('A really new plan');
+    expect(plainHeadingText('snake_case_name stays')).toBe('snake_case_name stays');
+  });
+});
+
+describe('headingInView', () => {
+  it('is the last heading at or above the line, else the first', () => {
+    expect(headingInView([100, 400, 900], 450)).toBe(1);
+    expect(headingInView([100, 400, 900], 400)).toBe(1);
+    expect(headingInView([100, 400, 900], 50)).toBe(0);
+    expect(headingInView([100, 400, 900], 2000)).toBe(2);
+    expect(headingInView([], 100)).toBe(-1);
+  });
+});
+
+describe('useHeadingInView', () => {
   const doc = '# One\n\ntext\n\n# Two\n\nmore';
   let view: EditorView | null = null;
   afterEach(() => {
@@ -76,45 +109,18 @@ describe('useActiveHeading', () => {
     view = null;
   });
 
-  it('dispatches nothing when the headings change', () => {
+  it('dispatches nothing, also when the headings change', () => {
     // An extra transaction after an edit makes CodeMirror lose its scroll
     // anchor, so a remote edit above the viewport moved the page.
     view = new EditorView({ state: EditorState.create({ doc }), parent: document.body });
     const editor = view;
-    const { rerender } = renderHook(({ headings }) => useActiveHeading(editor, headings), {
+    const dispatch = vi.spyOn(editor, 'dispatch');
+    const { rerender, unmount } = renderHook(({ headings }) => useHeadingInView(editor, headings), {
       initialProps: { headings: headingsFromLevels([1, 1]) },
     });
-    const dispatch = vi.spyOn(editor, 'dispatch');
     rerender({ headings: headingsFromLevels([1, 1]) });
     rerender({ headings: headingsFromLevels([1, 2, 1]) });
+    unmount();
     expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it('follows the cursor with the latest headings', () => {
-    view = new EditorView({ state: EditorState.create({ doc }), parent: document.body });
-    const editor = view;
-    const { result, rerender } = renderHook(({ headings }) => useActiveHeading(editor, headings), {
-      initialProps: { headings: headingsFromLevels([1]) },
-    });
-    // headingsFromLevels puts heading i at i * 100
-    rerender({ headings: headingsFromLevels([1, 1, 1]) });
-    act(() => editor.dispatch({ selection: { anchor: 0 } }));
-    expect(result.current).toBe(0);
-    act(() => editor.dispatch({ changes: { from: doc.length, insert: ' '.repeat(300) }, selection: { anchor: 250 } }));
-    expect(result.current).toBe(2);
-  });
-
-  it('stops listening when unmounted and keeps one editor listener across remounts', () => {
-    view = new EditorView({ state: EditorState.create({ doc: doc + ' '.repeat(300) }), parent: document.body });
-    const editor = view;
-    const headings = headingsFromLevels([1, 1, 1]);
-    const first = renderHook(() => useActiveHeading(editor, headings));
-    first.unmount();
-    const dispatch = vi.spyOn(editor, 'dispatch');
-    const second = renderHook(() => useActiveHeading(editor, headings));
-    expect(dispatch).not.toHaveBeenCalled();
-    act(() => editor.dispatch({ selection: { anchor: 250 } }));
-    expect(second.result.current).toBe(2);
-    expect(first.result.current).toBe(0);
   });
 });

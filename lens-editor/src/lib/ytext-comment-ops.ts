@@ -9,7 +9,7 @@
 
 import * as Y from 'yjs';
 import { getCurrentAuthor } from '../components/Editor/extensions/criticmarkup';
-import type { CriticMarkupRange } from './criticmarkup-parser';
+import { withLinkedComments, type CriticMarkupRange } from './criticmarkup-parser';
 
 /**
  * Encode user-supplied multi-line content for inline criticmarkup storage.
@@ -66,6 +66,22 @@ export function replyInYText(ytext: Y.Text, content: string, threadEndPos: numbe
 export function deleteRangeInYText(ytext: Y.Text, range: CriticMarkupRange): void {
   ytext.doc!.transact(() => {
     ytext.delete(range.from, range.to - range.from);
+  });
+}
+
+/**
+ * Remove a comment thread (its `comments`, ranges of `ranges`, the Y.Text's
+ * parse) and the highlight it is on, keeping the highlighted text: resolving
+ * a comment, or deleting its last message (withLinkedComments).
+ */
+export function removeThreadInYText(ytext: Y.Text, ranges: CriticMarkupRange[], comments: CriticMarkupRange[]): void {
+  const spans = withLinkedComments(ranges, comments).flatMap((r) =>
+    r.type === 'highlight'
+      ? [{ from: r.from, to: r.contentFrom }, { from: r.contentTo, to: r.to }]
+      : [{ from: r.from, to: r.to }]);
+  ytext.doc!.transact(() => {
+    // Last first, so the earlier offsets still hold
+    for (const span of spans.reverse()) ytext.delete(span.from, span.to - span.from);
   });
 }
 

@@ -15,7 +15,7 @@ function renderWithRole(role: 'edit' | 'suggest' | 'view', ui: React.ReactNode) 
 }
 
 describe('SuggestionModeControl', () => {
-  it('renders the shared editing/suggesting segmented control for edit users', () => {
+  it('shows the mode, and switches it from its menu, for edit users', () => {
     const onChange = vi.fn();
     renderWithRole('edit', (
       <SuggestionModeControl
@@ -24,9 +24,12 @@ describe('SuggestionModeControl', () => {
       />
     ));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Suggesting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mode: Editing' }));
+    expect(screen.getByRole('menuitemradio', { name: /Editing/ })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Suggesting/ }));
 
     expect(onChange).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 
   it('renders the shared locked suggest badge for suggest-only users', () => {
@@ -37,7 +40,8 @@ describe('SuggestionModeControl', () => {
       />
     ));
 
-    expect(screen.getByTitle('Suggest + Comment Only')).toHaveTextContent('Suggest + Comment Only');
+    expect(screen.getByTitle('Suggest + Comment Only')).toHaveTextContent('Suggesting');
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('renders the shared locked read-only badge for view-only users', () => {
@@ -48,6 +52,6 @@ describe('SuggestionModeControl', () => {
       />
     ));
 
-    expect(screen.getByTitle('Read-Only')).toHaveTextContent('Read-Only');
+    expect(screen.getByTitle('Read-Only')).toHaveTextContent('Viewing');
   });
 });

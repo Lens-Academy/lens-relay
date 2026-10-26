@@ -6,9 +6,9 @@ import { markdownHighlightStyle } from './editorTheme';
 const specFor = (style: typeof defaultHighlightStyle, tag: Tag) => style.specs.find((spec) => spec.tag === tag);
 
 describe('markdownHighlightStyle', () => {
-  it('keeps bold and headings semibold, the weight live preview draws them in', () => {
+  it('keeps bold semibold, and headings at their level weight, as live preview draws them', () => {
     expect(specFor(markdownHighlightStyle, tags.strong)?.fontWeight).toBe('600');
-    expect(specFor(markdownHighlightStyle, tags.heading)?.fontWeight).toBe('600');
+    expect(specFor(markdownHighlightStyle, tags.heading)?.fontWeight).toBe('inherit');
   });
 
   it('does not underline headings', () => {
