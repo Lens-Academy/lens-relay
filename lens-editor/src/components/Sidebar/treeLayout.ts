@@ -1,11 +1,12 @@
 /**
- * The file tree's geometry, after Notion's sidebar: 30px items 1px apart, an
- * 8px step per level. Shared by FileTree, its rows and the sticky folder
- * headers, which must line up.
+ * The file tree's geometry, after Notion's sidebar: 30px items 1px apart, a
+ * 16px step per level, so what is inside a folder stands clearly under it.
+ * Shared by FileTree, its rows and the sticky folder headers, which must
+ * line up.
  */
 export const TREE_ROW_HEIGHT = 31;
 export const TREE_ROW_HEIGHT_MOBILE = 40;
-export const TREE_INDENT = 8;
+export const TREE_INDENT = 16;
 
 /**
  * Left padding of an item at a tree level. Level 0 is a shared folder, shown

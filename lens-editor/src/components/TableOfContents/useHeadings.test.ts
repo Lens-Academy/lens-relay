@@ -4,7 +4,7 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree } from '@codemirror/language';
-import { extractHeadings, headingInView, normalizeHeadingLevels, plainHeadingText, useHeadingInView } from './useHeadings';
+import { extractHeadings, headingInView, normalizeHeadingLevels, plainHeadingText, rankHeadingLevels, useHeadingInView } from './useHeadings';
 import type { Heading } from './useHeadings';
 
 /** Helper: build minimal Heading[] from raw levels */
@@ -68,6 +68,14 @@ describe('normalizeHeadingLevels', () => {
       expect(result.map((h) => h.displayLevel)).toEqual(expected);
     });
   }
+});
+
+describe('rankHeadingLevels', () => {
+  it('gives each heading type one level, the highest on the page 1', () => {
+    // An H3 after an H1 and an H3 after an H2 are both level 3
+    const result = rankHeadingLevels(headingsFromLevels([2, 4, 3, 4, 2, 4]));
+    expect(result.map((h) => h.displayLevel)).toEqual([1, 3, 2, 3, 1, 3]);
+  });
 });
 
 describe('extractHeadings', () => {

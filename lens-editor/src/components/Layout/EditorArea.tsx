@@ -604,7 +604,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <div className="lens-page-area flex-1 min-h-0 relative">
             <ReadAloudBar engine={readAloudEngine} />
             {/* Notion's table of contents: dashes at the page's right edge */}
-            {!isMobile && <PageOutline view={editorView} stateVersion={stateVersion} />}
+            {!isMobile && <PageOutline view={editorView} stateVersion={stateVersion} docId={currentDocId} />}
             <Editor
               readOnly={!canWrite}
               canAcceptReject={canEdit}

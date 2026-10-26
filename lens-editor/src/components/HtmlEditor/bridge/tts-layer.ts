@@ -54,17 +54,17 @@ const MAX_UNITS = 5000;
 const BLOCK_PAUSE_S = 0.3;
 
 const HIGHLIGHT_CSS = `
-::highlight(lens-tts-sentence) { background-color: #fde6c8; }
-::highlight(lens-tts-word) { background-color: #e6b988; }
+::highlight(lens-tts-sentence) { background-color: rgba(35, 131, 226, 0.14); }
+::highlight(lens-tts-word) { background-color: rgba(35, 131, 226, 0.32); }
 ::highlight(lens-tts-hover) { background-color: rgba(0, 0, 0, 0.05); }
 html.lens-tts-over-text, html.lens-tts-over-text * { cursor: pointer !important; }
 `;
 
 const SHADOW_CSS = `
-.play { position: absolute; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 9999px;
+.play { position: absolute; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px;
   display: none; align-items: center; justify-content: center; cursor: pointer; pointer-events: auto;
-  background: rgba(255, 255, 255, 0.9); color: #9ca3af; box-shadow: 0 0 0 1px rgba(0,0,0,0.06); }
-.play:hover { color: #b87018; background: #fde6c8; }
+  background: rgba(255, 255, 255, 0.9); color: #8e8b86; box-shadow: 0 0 0 1px rgba(0,0,0,0.06); }
+.play:hover { color: #383836; background: #efeeec; }
 .play svg { width: 11px; height: 11px; fill: currentColor; }
 `;
 
