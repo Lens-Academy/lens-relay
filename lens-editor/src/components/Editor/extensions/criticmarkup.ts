@@ -611,7 +611,9 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           const isPairStart = adjacentPairStart.has(ri);
           const isPairEnd = adjacentPairEnd.has(ri);
 
-          if (!isPairStart) {
+          if (commentOn) {
+            // The text a comment is on: its card resolves it, so no ✓ / ✗ here
+          } else if (!isPairStart) {
             // Normal range or pair-end addition: show button here
             const widgetFrom = isPairEnd ? ranges[ri - 1].from : range.from;
             decorations.push({

@@ -15,8 +15,8 @@ interface TableOfContentsProps {
   stateVersion?: number;  // Incremented on doc changes - triggers re-extraction
 }
 
-/** A dash's length by heading level, longer for higher levels, by more than Notion's */
-const DASH_WIDTHS = [24, 16, 10, 6];
+/** A dash's length by heading level, longer for higher levels */
+const DASH_WIDTHS = [20, 15, 11, 8];
 
 /** The headings to pick from, indented by level, the one being read in blue */
 function OutlineList({ headings, active, onPick, onHide }: {
@@ -164,7 +164,7 @@ export function PageOutline({ view, stateVersion, docId = '' }: TableOfContentsP
                 width: snap(DASH_WIDTHS[level - 1]),
                 height: snap(2),
                 // A little more space above each top-level section
-                marginTop: index > 0 && level === 1 ? snap(5) : undefined,
+                marginTop: index > 0 && level === 1 ? snap(3) : undefined,
               }}
             />
           );

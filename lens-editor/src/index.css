@@ -210,11 +210,20 @@
 
 /* Notion-style UI pieces: a popover menu, its buttons, labels and an input */
 @layer components {
+  /* Menus and popovers open with a short fade and drop, as Notion's */
   .lens-popover {
     background: var(--lens-popover-bg);
     color: var(--lens-text);
     border-radius: 10px;
     box-shadow: var(--lens-popover-shadow);
+    transform-origin: top right;
+    animation: lens-popover-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  @keyframes lens-popover-in {
+    from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lens-popover { animation: none; }
   }
   .lens-menu-button {
     border-radius: 6px;
@@ -1301,10 +1310,7 @@
   transition: background-color 150ms;
 }
 .lens-outline-dash.is-level-1 {
-  background-color: var(--lens-text-tertiary);
-}
-.lens-outline-dash.is-level-3 {
-  background-color: var(--lens-border);
+  background-color: color-mix(in srgb, var(--lens-text-tertiary) 55%, var(--lens-border-strong));
 }
 .lens-outline-dash.is-active {
   background-color: var(--lens-text);
