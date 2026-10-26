@@ -245,6 +245,16 @@ export function normalizeHeadingLevels(headings: Heading[]): NormalizedHeading[]
 }
 
 /**
+ * Levels by heading type: the page's highest heading level is 1, the next 2,
+ * and so on, so every H3 on a page looks alike (the page outline's dashes),
+ * whatever heading it follows.
+ */
+export function rankHeadingLevels(headings: Heading[]): NormalizedHeading[] {
+  const top = Math.min(...headings.map((heading) => heading.level));
+  return headings.map((heading) => ({ ...heading, displayLevel: heading.level - top + 1 }));
+}
+
+/**
  * The heading of the section being read: the last one whose top is at or
  * above `probe` (a line near the top of the page), else the first. `tops`
  * are the headings' tops, in the same coordinates as `probe`.

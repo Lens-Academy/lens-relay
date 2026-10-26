@@ -986,6 +986,16 @@ describe('CriticMarkup Extension', () => {
       expect(view.contentDOM.textContent).not.toContain('a reply');
     });
 
+    it('shows no accept / reject on the text a comment is on, which its card resolves', () => {
+      const doc = 'see {==this part==}{>>on the text<<} and {==plain==} end';
+      const { view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('this part') + 2);
+      cleanup = c;
+      expect(view.contentDOM.querySelector('.cm-criticmarkup-accept')).toBeNull();
+
+      view.dispatch({ selection: { anchor: doc.indexOf('plain') + 2 } });
+      expect(view.contentDOM.querySelector('.cm-criticmarkup-accept')).not.toBeNull();
+    });
+
     it('leaves a highlight without a comment a plain highlight', () => {
       const { view, cleanup: c } = createCriticMarkupEditor('see {==this part==} end', 0);
       cleanup = c;

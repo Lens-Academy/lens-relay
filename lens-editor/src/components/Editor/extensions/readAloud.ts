@@ -23,7 +23,6 @@ import {
   unitForLine,
   type MarkdownReading,
 } from '../../../lib/read-aloud/markdown-reading';
-import { iconNode } from '../../../lib/icons';
 import { readAloudAvailable } from '../../../lib/read-aloud/api';
 
 interface Marks {
@@ -93,7 +92,7 @@ export class ReadAloudController {
     this.button.className = 'cm-read-aloud-line-play';
     this.button.setAttribute('aria-label', 'Read aloud from here');
     this.button.title = 'Read aloud from here';
-    this.button.appendChild(iconNode('play'));
+    this.button.appendChild(playIcon());
     this.button.style.display = 'none';
     // Keep the cursor (and the hidden syntax on its line) where it is.
     this.button.addEventListener('mousedown', e => e.preventDefault());
@@ -247,21 +246,21 @@ export class ReadAloudController {
       this.button.style.display = 'none';
       return;
     }
-    const coords = this.view.coordsAtPos(lineFrom, 1);
+    const coords = firstTextCoords(this.view, lineFrom);
     if (!coords) {
       this.button.style.display = 'none';
       return;
     }
     const scroller = this.view.scrollDOM.getBoundingClientRect();
     const content = this.view.contentDOM.getBoundingClientRect();
-    // Between the authorship strip (line box - 14px, 3px wide) and the text
-    // (line box + 6px): the line box starts at the content's padding edge.
+    // In the margin, 10px left of the text (line box + 6px; the line box
+    // starts at the content's padding edge), level with its first line
     const padLeft = parseFloat(getComputedStyle(this.view.contentDOM).paddingLeft) || 0;
-    const size = 14;
+    const size = 22;
     const lineMid = (coords.top + coords.bottom) / 2;
     this.button.style.display = '';
-    this.button.style.top = `${lineMid - size / 2 - scroller.top + this.view.scrollDOM.scrollTop}px`;
-    this.button.style.left = `${Math.max(0, content.left + padLeft - 10 - scroller.left + this.view.scrollDOM.scrollLeft)}px`;
+    this.button.style.top = `${Math.round(lineMid - size / 2 - scroller.top + this.view.scrollDOM.scrollTop)}px`;
+    this.button.style.left = `${Math.max(0, Math.round(content.left + padLeft + 6 - 10 - size - scroller.left + this.view.scrollDOM.scrollLeft))}px`;
   }
 
   private onMouseDown = (e: MouseEvent) => {
@@ -288,6 +287,32 @@ export class ReadAloudController {
   };
 }
 
+/**
+ * Where a line's text starts: its first character drawn at full height, past
+ * markup hidden at no size (a heading's #, a list's marker), else the line's
+ * start
+ */
+function firstTextCoords(view: EditorView, lineFrom: number) {
+  const line = view.state.doc.lineAt(lineFrom);
+  for (let pos = lineFrom; pos < Math.min(line.to, lineFrom + 24); pos++) {
+    const at = view.coordsAtPos(pos, 1);
+    if (at && at.bottom - at.top > 4) return at;
+  }
+  return view.coordsAtPos(lineFrom, 1);
+}
+
+/** The line button's play mark: a small rounded triangle */
+function playIcon(): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 12 12');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', 'M4 2.6c0-.6.6-.9 1.1-.6l5 3.4c.4.3.4.9 0 1.2l-5 3.4c-.5.3-1.1 0-1.1-.6Z');
+  svg.appendChild(path);
+  return svg;
+}
+
 const readAloudPlugin = ViewPlugin.fromClass(
   class {
     controller: ReadAloudController;
@@ -309,28 +334,36 @@ export function getReadAloud(view: EditorView | null): ReadAloudController | nul
 }
 
 const readAloudTheme = EditorView.baseTheme({
-  // The platform reader's colours (lens-orange-100 sentence, #e6b988 word).
-  '.cm-read-aloud-sentence': { backgroundColor: '#fde6c8', borderRadius: '2px' },
-  '.cm-read-aloud-word': { backgroundColor: '#e6b988', borderRadius: '2px' },
+  // A soft blue for the sentence and a stronger one for the word, with dark values (index.css)
+  '.cm-read-aloud-sentence': { backgroundColor: 'var(--lens-read-sentence, rgba(35, 131, 226, 0.14))', borderRadius: '2px' },
+  '.cm-read-aloud-word': { backgroundColor: 'var(--lens-read-word, rgba(35, 131, 226, 0.32))', borderRadius: '2px' },
   '.cm-read-aloud-hover': { backgroundColor: 'rgba(0, 0, 0, 0.05)', borderRadius: '2px' },
   '.cm-content.cm-read-aloud-over-text': { cursor: 'pointer' },
+  // Notion's block handle: a small grey square button that darkens on hover
   '.cm-read-aloud-line-play': {
     position: 'absolute',
     zIndex: '5',
-    width: '14px',
-    height: '14px',
+    width: '22px',
+    height: '22px',
     padding: '0',
     border: 'none',
-    borderRadius: '9999px',
+    borderRadius: '6px',
     background: 'transparent',
-    color: '#9ca3af',
+    color: 'var(--lens-icon-secondary, #8e8b86)',
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    transition: 'background-color 120ms, color 120ms',
+    animation: 'cm-read-aloud-play-in 140ms ease-out',
   },
-  '.cm-read-aloud-line-play:hover': { color: '#b87018', backgroundColor: '#fde6c8' },
-  '.cm-read-aloud-line-play svg': { width: '9px', height: '9px', fill: 'currentColor' },
+  '.cm-read-aloud-line-play:hover': {
+    color: 'var(--lens-icon, #383836)',
+    backgroundColor: 'var(--lens-hover-bg, rgba(55, 53, 47, 0.06))',
+  },
+  // The triangle a pixel right of centre, where it looks centred
+  '.cm-read-aloud-line-play svg': { width: '12px', height: '12px', fill: 'currentColor', marginLeft: '1px' },
+  '@keyframes cm-read-aloud-play-in': { from: { opacity: '0' } },
 });
 
 export function readAloud(): Extension {

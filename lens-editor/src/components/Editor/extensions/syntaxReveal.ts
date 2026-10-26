@@ -1,9 +1,10 @@
 /**
  * Markdown syntax that live preview shows where the cursor is (a heading's #,
- * a quote's >, ** and _, backticks, a link's [ ](url), [[ ]], ---) eases in
- * rather than popping up. After a click it grows from nothing as it fades
- * in, so the text beside it slides over instead of jumping; after a key it
- * only fades in. The animations are in index.css.
+ * a quote's >, ** and _, backticks, a link's [ ](url), [[ ]], ---, a bullet's
+ * -) eases in rather than popping up. After a click it grows from nothing as
+ * it fades in, so the text beside it slides over instead of jumping; after a
+ * key it only fades in, as does a bullet's - (it takes the place of the •,
+ * so growing would move the text). The animations are in index.css.
  *
  * Each selection move (never an edit) compares the syntax shown before and
  * after, with live preview's own rules (livePreview.ts), and marks what has
@@ -37,9 +38,16 @@ const ELEMENT_MARKS: Record<string, Set<string>> = {
 const REPLACED_LINK = /^\[[^\]]*\]\([^)]*\)$/;
 const REPLACED_IMAGE = /^!\[[^\]]*\]\([^\s)]+(?:\s+"[^"]*")?\)$/;
 
+interface Shown {
+  from: number;
+  to: number;
+  /** Only fades in, even after a click */
+  fade?: boolean;
+}
+
 /** The syntax live preview shows for this selection, by "from:to" */
-function shownSyntax(state: EditorState): Map<string, { from: number; to: number }> {
-  const shown = new Map<string, { from: number; to: number }>();
+function shownSyntax(state: EditorState): Map<string, Shown> {
+  const shown = new Map<string, Shown>();
   const { doc, selection } = state;
   const tree = syntaxTree(state);
   const frontmatter = state.field(frontmatterField, false);
@@ -47,8 +55,8 @@ function shownSyntax(state: EditorState): Map<string, { from: number; to: number
     !!frontmatter?.enabled && frontmatter.range !== null && pos >= frontmatter.range.from && pos <= frontmatter.range.to;
   const touches = (from: number, to: number) => selection.ranges.some((r) => r.to >= from && r.from <= to);
   const oneLine = (from: number, to: number) => to <= doc.lineAt(from).to;
-  const add = (from: number, to: number) => {
-    if (from < to) shown.set(`${from}:${to}`, { from, to });
+  const add = (from: number, to: number, fade?: boolean) => {
+    if (from < to) shown.set(`${from}:${to}`, { from, to, fade });
   };
   const headLine = doc.lineAt(selection.main.head);
 
@@ -94,6 +102,15 @@ function shownSyntax(state: EditorState): Map<string, { from: number; to: number
           if (line.number === headLine.number) {
             // A heading's marks with the space after them
             add(node.from, node.name === 'HeaderMark' ? Math.min(node.to + 1, line.to) : node.to);
+          }
+          return;
+        }
+        if (node.name === 'ListMark') {
+          // A bullet's -, shown while the selection touches it; not a task's,
+          // whose box stays (livePreview.ts)
+          const item = node.node.parent;
+          if (item?.parent?.name === 'BulletList' && !item.getChild('Task') && touches(node.from, node.to)) {
+            add(node.from, node.to, true);
           }
           return;
         }
@@ -154,8 +171,8 @@ const revealPlugin = ViewPlugin.fromClass(
       const pointer = this.pointerDown || Date.now() - this.pointerUpAt < POINTER_GRACE_MS;
       const before = shownSyntax(update.startState);
       const fresh: Range<Decoration>[] = [];
-      for (const [key, { from, to }] of shownSyntax(update.state)) {
-        if (!before.has(key)) fresh.push((pointer ? growMark : fadeMark).range(from, to));
+      for (const [key, { from, to, fade }] of shownSyntax(update.state)) {
+        if (!before.has(key)) fresh.push((pointer && !fade ? growMark : fadeMark).range(from, to));
       }
       if (fresh.length === 0) {
         // A key while syntax grows: the cursor shows again

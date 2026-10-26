@@ -64,6 +64,17 @@ describe('syntax easing in where the cursor goes', () => {
     expect(getTextWithClass(view, 'cm-syntax-fade')).toEqual(['[', ']', '(', 'https://e.org', ')']);
   });
 
+  it("a bullet's - only fades in, even after a click, as it takes the bullet's place", () => {
+    const { view, cleanup: c } = createTestEditor('Text\n\n- one\n- two', 2);
+    cleanup = c;
+
+    view.contentDOM.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    moveCursor(view, 7);
+    document.dispatchEvent(new Event('pointerup'));
+    expect(getTextWithClass(view, 'cm-syntax-fade')).toEqual(['-']);
+    expect(getTextWithClass(view, 'cm-syntax-grow')).toEqual([]);
+  });
+
   it('leaves alone syntax that was showing already', () => {
     const { view, cleanup: c } = createTestEditor('## Title\n\nText', 3);
     cleanup = c;
