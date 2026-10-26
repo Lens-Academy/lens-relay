@@ -269,3 +269,30 @@ describe('jev routes, judgements', () => {
     expect((jev.mock.calls[0][1]!.headers as Record<string, string>)['X-Validation-Key']).toBe('k');
   });
 });
+
+describe('jev routes, the corpus\'s own files', () => {
+  it('asks about a file as the corpus read it, and reads only files the corpus lacks', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jev-snap-'));
+    const corpusPath = join(dir, 'corpus.json');
+    writeFileSync(corpusPath, JSON.stringify({ meta: { title: 't', taken: 'T0' }, rows: [] }));
+    writeFileSync(join(dir, 'corpus-files.json'), JSON.stringify({ taken: 'T0', files: { 'Lens Edu/a.md': '# A as sampled' } }));
+    const readFile = vi.fn(async () => '# live');
+    const { app, jev } = mount({ corpusPath, readFile, platformUrl: 'https://platform.test', platformKey: 'k' });
+    jev.mockImplementation(async () => new Response('{"batches":[],"asked":[]}', { status: 200 }));
+    const units = ['Lens Edu/a.md', 'Lens Edu/b.md'].map((path) => ({ id: path, path, line: 1, text: 'x' }));
+    const res = await app.request('/api/jev/requests', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+      body: JSON.stringify({ question: { instructions: 'q' }, presentation: { context: 'document' }, units }),
+    });
+    expect(res.status).toBe(200);
+    expect(JSON.parse(String(jev.mock.calls[0][1]!.body)).files).toEqual({ 'Lens Edu/a.md': '# A as sampled', 'Lens Edu/b.md': '# live' });
+    expect(readFile).toHaveBeenCalledTimes(1);
+    // Files from another build than the corpus are refused, not mixed in.
+    writeFileSync(join(dir, 'corpus-files.json'), JSON.stringify({ taken: 'T1', files: {} }));
+    const again = await app.request('/api/jev/requests', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+      body: JSON.stringify({ question: { instructions: 'q' }, presentation: { context: 'document' }, units }),
+    });
+    expect(again.status).toBe(502);
+  });
+});

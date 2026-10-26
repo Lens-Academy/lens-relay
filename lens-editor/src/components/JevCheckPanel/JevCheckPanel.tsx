@@ -19,6 +19,7 @@ import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary, type Labeler } from './Results';
 import { labelBody } from '../../lib/jev-labels';
 import { useLabels } from './useLabels';
+import { CountInput } from './CountInput';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import type { Para, Run } from './types';
 import { DEFAULT_PRESENTATION, describe, isDefault, LEVELS, presentationBlock, type Level, type Presentation } from '../../lib/jev-presentation';
@@ -192,8 +193,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
       )}
 
       <div className="flex flex-wrap items-end gap-4 border-t border-gray-100 bg-gray-50/60 px-4 py-2.5 text-[13px] text-gray-600">
-        <label>sample <input type="number" min={1} max={pool?.length ?? 1000} value={n}
-          onChange={(e) => setN(Math.max(1, parseInt(e.target.value || '1', 10)))} className="ml-1 w-20 rounded border border-gray-200 px-1.5 py-0.5" />
+        <label>sample <CountInput value={n} max={pool?.length ?? 1000} onValue={setN} />
           {pool && <span className="text-gray-400"> / {pool.length}</span>}</label>
         <label className="flex min-w-[300px] flex-1 items-center gap-1">percentiles
           <select aria-label="percentile preset" value={PCT_PRESETS.find(([, v]) => v === pctSpec)?.[1] ?? ''} onChange={(e) => e.target.value && setPctSpec(e.target.value)}

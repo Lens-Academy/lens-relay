@@ -130,18 +130,20 @@ export function SourceParagraph({ para }: { para: Para }) {
   };
 
   const long = para.text.length > CUT;
-  const editing = state === 'live' || state === 'connecting';
+  const editing = state === 'live';
+  // The text stays in place until the editor is ready, and the padding never changes, so a click
+  // moves nothing on the page (Lauren, 2026-10-26: the reflow made the next click land elsewhere).
   return (
-    <div ref={box} className={`rounded ${editing ? 'bg-white px-2 py-1 ring-1 ring-sky-200' : ''}`}>
+    <div ref={box} className={`relative -mx-2 -my-1 rounded px-2 py-1 ${editing ? 'bg-white ring-1 ring-sky-200' : ''}`}>
       {!editing && (
-        <div className={`whitespace-pre-wrap text-[13px] leading-relaxed text-gray-800 ${docId && canEdit ? 'cursor-text hover:bg-sky-50' : ''}`}
+        <div className={`whitespace-pre-wrap text-[13px] leading-relaxed text-gray-800 ${state === 'connecting' ? 'opacity-50' : ''} ${docId && canEdit ? 'cursor-text hover:bg-sky-50' : ''}`}
           title={docId && canEdit ? 'Click to edit this paragraph in its source file' : undefined}
-          onClick={() => (docId && canEdit ? void start() : long && setOpen(!open))}>
+          onClick={() => (state === 'connecting' ? undefined : docId && canEdit ? void start() : long && setOpen(!open))}>
           {long && !open ? para.text.slice(0, CUT) + '…' : para.text}
         </div>
       )}
       <div ref={host} className={editing ? 'text-[13px] text-gray-900' : 'hidden'} data-testid="source-paragraph-editor" />
-      {state === 'connecting' && <div className="text-[11px] text-gray-400">opening the source file…</div>}
+      {state === 'connecting' && <div className="pointer-events-none absolute right-1 top-0 rounded bg-white/90 px-1 text-[11px] text-gray-500">opening the source file…</div>}
       {state === 'live' && (
         <div className="mt-1 flex items-center gap-2 text-[11px] text-gray-500">
           <span className="whitespace-nowrap">editing the source file live · Esc closes</span>

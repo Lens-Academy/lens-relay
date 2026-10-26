@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readRelayDocAtPath } from '../add-video/relay-docs.ts';
@@ -20,7 +20,10 @@ import { requireEduShareToken } from '../edit-share-auth.ts';
  * (model, question, text) comes again, so re-running a phrasing is free. Edit share
  * links only; the TypeSafe key stays here. Without JEV_API_KEY every route is 503
  * and the workbench says so. The corpus is built offline (lens docs
- * course-dev-set/live-checks/build_corpus.py) and placed at JEV_CORPUS_PATH.
+ * course-dev-set/live-checks/build_corpus.py) and placed at JEV_CORPUS_PATH, with the text of
+ * every file it read beside it (corpus-files.json, the same build): a run asks about the files
+ * as the corpus read them, so every sampled paragraph is found and runs stay comparable until
+ * the corpus is rebuilt.
  */
 
 export interface JevConfig {
@@ -174,6 +177,21 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
   // in the editor reaches the next Run.
   const readFile = config.readFile ?? (config.filesDir ? readFromDir(config.filesDir) : (p: string) => readRelayDocAtPath(p));
   const fileCache = new Map<string, { at: number; text: string | null }>();
+  // The corpus's own file texts, reloaded when the file changes.
+  let snap: { mtime: number; files: Record<string, string> } | null = null;
+  function corpusFiles(): Record<string, string> {
+    const path = config.corpusPath.replace(/\.json$/, '-files.json');
+    if (!existsSync(path)) return {};
+    const mtime = statSync(path).mtimeMs;
+    if (snap?.mtime !== mtime) {
+      const files = JSON.parse(readFileSync(path, 'utf8'));
+      const corpus = JSON.parse(readFileSync(config.corpusPath, 'utf8'));
+      if (files.taken !== corpus.meta?.taken) throw new Error('the corpus and corpus-files.json are from different builds; rebuild the corpus');
+      snap = { mtime, files: files.files };
+    }
+    return snap.files;
+  }
+
   async function readFiles(paths: string[]): Promise<Record<string, string>> {
     const now = Date.now();
     const todo = paths.filter((p) => !((fileCache.get(p)?.at ?? 0) > now - 60_000));
@@ -211,7 +229,10 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     if (paths.length > MAX_FILES) return c.json({ error: `at most ${MAX_FILES} files at once` }, 400);
     let files: Record<string, string> = {};
     try {
-      if (body.presentation) files = await readFiles(paths);
+      if (body.presentation) {
+        const snapshot = corpusFiles();
+        files = { ...(await readFiles(paths.filter((p) => !(p in snapshot)))), ...Object.fromEntries(paths.filter((p) => p in snapshot).map((p) => [p, snapshot[p]])) };
+      }
     } catch (e) {
       return c.json({ error: `reading files from the relay: ${(e as Error).message}` }, 502);
     }
