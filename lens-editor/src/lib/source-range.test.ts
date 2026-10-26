@@ -35,4 +35,10 @@ describe('paragraphRange', () => {
   it('gives null rather than a wrong range when the words are gone', () => {
     expect(paragraphRange(DOC, 6, 'Something else entirely.')).toBeNull();
   });
+  it('opens the block holding a sentence that starts mid-line (a sentence unit)', () => {
+    const doc = 'intro\n\nassessment-instructions:: Score out of 100. The artifact: during a pause, a lab sends tokens.\nnext line\n\nafter';
+    const r = paragraphRange(doc, 3, 'The artifact: during a pause, a lab sends tokens.')!;
+    expect(doc.slice(r.from, r.to)).toBe('assessment-instructions:: Score out of 100. The artifact: during a pause, a lab sends tokens.\nnext line');
+    expect(paragraphRange(doc, 1, 'The artifact: during a pause, a lab sends tokens.')).toEqual(r);
+  });
 });

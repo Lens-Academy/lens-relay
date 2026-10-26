@@ -1,7 +1,9 @@
 // A result paragraph that opens, on click, as a live editor of its range in the source file:
 // edits and comments made here are edits and comments in that file. One paragraph is live at
-// a time across the tab (lib/embed-docs.ts); Escape or a click outside closes it.
-import { useCallback, useEffect, useRef, useState } from 'react';
+// a time across the tab (lib/embed-docs.ts); Escape or a click outside closes it, and so does
+// focus leaving it for nowhere, which is what Escape does under Vimium (it takes the key).
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { EditableText } from './editable';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
@@ -29,7 +31,9 @@ const theme = EditorView.theme({
 
 export function SourceParagraph({ para }: { para: Para }) {
   const { metadata } = useNavigation();
-  const { canEdit } = useAuth();
+  const { canEdit: mayEdit } = useAuth();
+  const editableHere = useContext(EditableText);
+  const canEdit = mayEdit && editableHere;
   const { displayName } = useDisplayName();
   const nameRef = useRef(displayName);
   useEffect(() => { nameRef.current = displayName; }, [displayName]);
@@ -39,7 +43,7 @@ export function SourceParagraph({ para }: { para: Para }) {
   const [owner] = useState(() => ({}));
   const host = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
-  const live = useRef<{ view: EditorView; detach: () => void; onOutside: (e: MouseEvent) => void } | null>(null);
+  const live = useRef<{ view: EditorView; detach: () => void; stop: () => void } | null>(null);
   const unmounted = useRef(false);
   const docId = metadata?.['/' + para.path]?.id;
 
@@ -47,7 +51,7 @@ export function SourceParagraph({ para }: { para: Para }) {
     const cur = live.current;
     live.current = null;
     if (cur) {
-      document.removeEventListener('mousedown', cur.onOutside, true);
+      cur.stop();
       cur.detach();
       cur.view.destroy();
     }
@@ -87,9 +91,28 @@ export function SourceParagraph({ para }: { para: Para }) {
         ],
       }),
     });
-    const onOutside = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) closeLive(owner); };
-    document.addEventListener('mousedown', onOutside, true);
-    live.current = { view, detach, onOutside };
+    // A click in here may move focus to no element; it is not a close while the button is down.
+    let pressed = false;
+    const onDown = (e: MouseEvent) => {
+      if (box.current?.contains(e.target as Node)) pressed = true; else closeLive(owner);
+    };
+    const onUp = () => setTimeout(() => { pressed = false; }, 0);
+    // Focus gone to no element, while this window keeps it and no click is in progress.
+    const onFocusOut = () => setTimeout(() => {
+      if (pressed || !document.hasFocus()) return;
+      const to = document.activeElement;
+      if (!to || to === document.body) closeLive(owner);
+    }, 0);
+    const el = box.current!;
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('mouseup', onUp, true);
+    el.addEventListener('focusout', onFocusOut);
+    const stop = () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('mouseup', onUp, true);
+      el.removeEventListener('focusout', onFocusOut);
+    };
+    live.current = { view, detach, stop };
     setState('live');
     requestAnimationFrame(() => view.focus());
   }, [docId, canEdit, owner, ended, para]);
@@ -110,18 +133,20 @@ export function SourceParagraph({ para }: { para: Para }) {
   };
 
   const long = para.text.length > CUT;
-  const editing = state === 'live' || state === 'connecting';
+  const editing = state === 'live';
+  // The text stays in place until the editor is ready, and the padding never changes, so a click
+  // moves nothing on the page (Lauren, 2026-10-26: the reflow made the next click land elsewhere).
   return (
-    <div ref={box} className={`rounded ${editing ? 'bg-white px-2 py-1 ring-1 ring-sky-200' : ''}`}>
+    <div ref={box} className={`relative -mx-2 -my-1 rounded px-2 py-1 ${editing ? 'bg-white ring-1 ring-sky-200' : ''}`}>
       {!editing && (
-        <div className={`whitespace-pre-wrap text-[13px] leading-relaxed text-gray-800 ${docId && canEdit ? 'cursor-text hover:bg-sky-50' : ''}`}
+        <div className={`whitespace-pre-wrap text-[13px] leading-relaxed text-gray-800 ${state === 'connecting' ? 'opacity-50' : ''} ${docId && canEdit ? 'cursor-text hover:bg-sky-50' : ''}`}
           title={docId && canEdit ? 'Click to edit this paragraph in its source file' : undefined}
-          onClick={() => (docId && canEdit ? void start() : long && setOpen(!open))}>
+          onClick={() => (state === 'connecting' ? undefined : docId && canEdit ? void start() : long && setOpen(!open))}>
           {long && !open ? para.text.slice(0, CUT) + '…' : para.text}
         </div>
       )}
       <div ref={host} className={editing ? 'text-[13px] text-gray-900' : 'hidden'} data-testid="source-paragraph-editor" />
-      {state === 'connecting' && <div className="text-[11px] text-gray-400">opening the source file…</div>}
+      {state === 'connecting' && <div className="pointer-events-none absolute right-1 top-0 rounded bg-white/90 px-1 text-[11px] text-gray-500">opening the source file…</div>}
       {state === 'live' && (
         <div className="mt-1 flex items-center gap-2 text-[11px] text-gray-500">
           <span className="whitespace-nowrap">editing the source file live · Esc closes</span>

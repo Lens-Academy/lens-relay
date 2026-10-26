@@ -1,6 +1,8 @@
 // A jev check file (Lens Edu/Checks/*.md) and the arithmetic the check workbench shows.
 // The frontmatter fields mirror lens-platform core/course_checks/checks.py `Check`.
 import { parse as parseYaml, parseDocument, visit } from 'yaml';
+import { refProblem, unitNames } from './jev-keys';
+import { isDefault, parsePresentation, presentationBlock, type Presentation } from './jev-presentation';
 
 export interface JevCheck {
   id: string;
@@ -11,6 +13,7 @@ export interface JevCheck {
   question: string;
   criteria: { true: string; false: string } | null;
   enabled: boolean;  // false while a new check is being written; the platform skips it
+  presentation: Presentation;  // how jev is shown the file (lib/jev-presentation.ts); default when absent
 }
 
 const CHECKS_DIR = '/Lens Edu/Checks/';
@@ -45,30 +48,39 @@ export function parseCheck(text: string): JevCheck {
     model: typeof fm.model === 'string' ? fm.model : DEFAULT_MODEL,
     fail_at: num('fail_at', 0.8), pass_below: num('pass_below', 0.5),
     question: need('question'), criteria, enabled: fm.enabled !== false,
+    presentation: parsePresentation(fm.presentation),
   };
 }
 
 /** "[0, 0.01, 1]" or "9 even" (both ends included). */
+/** The lower half of the percentile stops (each 0 to 0.5); percentileRows mirrors them. */
 export function parsePercentiles(spec: string): number[] {
-  const s = spec.trim();
-  const even = s.match(/^(\d+)\s+even$/);
-  if (even) {
-    const n = parseInt(even[1], 10);
-    if (n < 2) throw new Error('"N even" needs N >= 2');
-    return Array.from({ length: n }, (_, i) => i / (n - 1));
-  }
   let xs: unknown;
-  try { xs = JSON.parse(s); } catch { throw new Error('use a list like [0, 0.5, 1] or "9 even"'); }
-  if (!Array.isArray(xs) || !xs.every((x) => typeof x === 'number' && x >= 0 && x <= 1)) {
-    throw new Error('percentiles are numbers from 0 to 1');
+  try { xs = JSON.parse(spec.trim()); } catch { throw new Error('use a list like [0, 0.1, 0.5]'); }
+  if (!Array.isArray(xs) || !xs.length || !xs.every((x) => typeof x === 'number' && x >= 0 && x <= 0.5)) {
+    throw new Error('stops are numbers from 0 to 0.5; the upper half mirrors them');
   }
-  return xs as number[];
+  return [...new Set(xs as number[])].sort((a, b) => a - b);
 }
 
-export function percentileRows<T extends { p: number }>(items: T[], ps: number[]): { at: number; item: T }[] {
+/** The items at the stops `half` (each 0 to 0.5) and their mirror images (1 - stop), Lauren's
+ *  design, 2026-10-22: in from both ends, each stop takes index floor(n * stop), or the next
+ *  index not yet taken, so a small sample shows distinct items and a big one the true
+ *  percentiles. A stop that reaches the middle (within 0.6 of n/2) is shown once. */
+export function percentileRows<T extends { p: number }>(items: T[], half: number[]): { at: number; item: T }[] {
   const sorted = [...items].sort((a, b) => a.p - b.p);
-  if (!sorted.length) return [];
-  return ps.map((at) => ({ at, item: sorted[Math.round(at * (sorted.length - 1))] }));
+  const n = sorted.length;
+  const lo: { at: number; idx: number }[] = [];
+  const mid: { at: number; idx: number }[] = [];
+  for (const at of half) {
+    const idx = Math.max(lo.length ? lo[lo.length - 1].idx + 1 : 0, Math.floor(n * at));
+    if (n - 1 - idx > idx) { lo.push({ at, idx }); continue; }
+    if (idx < n && Math.abs(idx - n / 2) <= 0.6) mid.push({ at, idx });
+    break;
+  }
+  const taken = new Set([...lo, ...mid].map((r) => r.idx));
+  const hi = [...lo].reverse().map((r) => ({ at: Math.round((1 - r.at) * 1e9) / 1e9, idx: n - 1 - r.idx })).filter((r) => !taken.has(r.idx));
+  return [...lo, ...mid, ...hi].map(({ at, idx }) => ({ at, item: sorted[idx] }));
 }
 
 export function histogram(ps: number[], bins: number): number[] {
@@ -112,7 +124,7 @@ export function shares(check: JevCheck, ps: number[]): Record<Band, number> {
 // Drafts. A check file may carry a `draft:` block in its frontmatter holding only the fields
 // being tried; the draft check is the live one with those fields overlaid. The block lives in
 // the file, so it survives a closed tab and reaches git like every other edit.
-const DRAFTABLE = ['question', 'criteria', 'model', 'fail_at', 'pass_below'];
+const DRAFTABLE = ['question', 'criteria', 'model', 'fail_at', 'pass_below', 'presentation'];
 
 /** Edit the frontmatter as a YAML document; `f` returning false means no change, and the text comes back untouched. */
 function editFrontmatter(text: string, f: (doc: ReturnType<typeof parseDocument>) => boolean | void): string {
@@ -133,7 +145,8 @@ export function parseCheckFile(text: string): { live: JevCheck; draft: JevCheck 
   if (bad.length) throw new Error(`draft has fields a check does not: ${bad.join(', ')}`);
   const merged: Record<string, unknown> = { ...fm, ...d, criteria: d.criteria ? { ...(fm.criteria as object), ...(d.criteria as object) } : fm.criteria };
   delete merged.draft;
-  const head = Object.entries(merged).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n');
+  // A field neither side has stays out (JSON has no undefined; it read as the text "undefined").
+  const head = Object.entries(merged).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n');
   return { live, draft: parseCheck(`---\n${head}\n---\n`) };
 }
 
@@ -148,6 +161,37 @@ export function setDraftField(text: string, path: string[], value: string | numb
       const node = doc.getIn(dpath.slice(0, i)) as { items?: unknown[] } | undefined;
       if (node && node.items?.length === 0) doc.deleteIn(dpath.slice(0, i));
     }
+  });
+}
+
+/** `p` as the draft's presentation (no block for the default), or no draft entry when it
+ *  is the live one. */
+export function setDraftPresentation(text: string, p: Presentation): string {
+  return editFrontmatter(text, (doc) => {
+    // An unreadable live block equals nothing the picker can choose, so the draft is always set.
+    let live: Record<string, unknown> | null | undefined;
+    try { live = presentationBlock(parsePresentation(doc.toJS()?.presentation)); } catch { live = undefined; }
+    const next = presentationBlock(p);
+    if (JSON.stringify(live) === JSON.stringify(next)) {
+      if (!doc.hasIn(['draft', 'presentation'])) return false;
+      doc.deleteIn(['draft', 'presentation']);
+      const d = doc.getIn(['draft']) as { items?: unknown[] } | undefined;
+      if (d && d.items?.length === 0) doc.deleteIn(['draft']);
+    } else doc.setIn(['draft', 'presentation'], doc.createNode(next));
+  });
+}
+
+/** The workbench's view, shared by everyone who opens the file (Lauren, 2026-10-22): a `view:`
+ *  block the platform ignores. */
+export interface View { sample?: number; percentiles?: string; colours?: string; courses?: string[]; kinds?: string[] }
+export function readView(text: string): View {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  try { const v = m ? (parseYaml(m[1]) ?? {}).view : undefined; return v && typeof v === 'object' && !Array.isArray(v) ? v as View : {}; } catch { return {}; }
+}
+export function setView<K extends keyof View>(text: string, key: K, value: View[K]): string {
+  return editFrontmatter(text, (doc) => {
+    if (JSON.stringify(doc.toJS()?.view?.[key]) === JSON.stringify(value)) return false;
+    doc.setIn(['view', key], doc.createNode(value));
   });
 }
 
@@ -216,6 +260,24 @@ function pyyamlLoad(src: string): Record<string, unknown> {
   return (doc.toJS() ?? {}) as Record<string, unknown>;
 }
 
+/** Unit names in the question and criteria that the check's presentation cannot resolve. The
+ *  platform still runs such a check, asking about a key jev is never shown. */
+function wordsProblems(fm: Record<string, unknown>): string[] {
+  let shape: Presentation;
+  try { shape = parsePresentation(fm.presentation); } catch { return []; }
+  const c = fm.criteria as Record<string, unknown> | undefined;
+  const texts: [string, unknown][] = [['the question', fm.question], ...(c && typeof c === 'object' ? [['the "true" criterion', c.true], ['the "false" criterion', c.false]] as [string, unknown][] : [])];
+  return texts.flatMap(([where, t]) => (typeof t !== 'string' ? [] : unitNames(t).flatMap((name) => {
+    const why = refProblem(name, shape);
+    return why ? [`\`${name}\` in ${where}: ${why}`] : [];
+  })));
+}
+/** The subset of platformProblems(text) that is about the words, not about loading the check. */
+export function platformWordProblems(text: string): string[] {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  try { return m ? wordsProblems(pyyamlLoad(m[1])) : []; } catch { return []; }
+}
+
 export function platformProblems(text: string): string[] {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return ['no frontmatter'];
@@ -235,6 +297,14 @@ export function platformProblems(text: string): string[] {
   const c = fm.criteria as Record<string, unknown> | undefined;
   if ('criteria' in fm && !(c && typeof c === 'object' && Object.keys(c).sort().join() === 'false,true' && Object.values(c).every((v) => typeof v === 'string')))
     out.push('criteria must have exactly "true" and "false" texts');
+  if ('presentation' in fm) {
+    try {
+      // Phase 1: the platform builds these requests but its edit runner still asks each paragraph
+      // alone, so a check asked any other way would silently not run (lens-platform #1381).
+      if (!isDefault(parsePresentation(fm.presentation))) out.push('the platform cannot run a check with this presentation yet; try it here, and save it once the runner asks this way');
+    } catch (e) { out.push((e as Error).message); }
+  }
+  out.push(...wordsProblems(fm));
   const s = fm.skip_folders;
   if ('skip_folders' in fm && !(Array.isArray(s) && s.every((v) => typeof v === 'string'))) out.push('skip_folders must be a list of folder names');
   return out;
