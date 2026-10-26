@@ -76,7 +76,8 @@ describe('extractHeadings', () => {
       doc: '# **One**\n- ##### **Actions done:**\n\t- x\n\n## See [[Docs/Q4 Plan|the plan]] and `code`',
       extensions: [markdown()],
     });
-    ensureSyntaxTree(state, state.doc.length);
+    // The whole document, however long parsing takes on a busy machine
+    ensureSyntaxTree(state, state.doc.length, 10_000);
     expect(extractHeadings(state).map((h) => h.text)).toEqual(['One', 'See the plan and code']);
   });
 });
