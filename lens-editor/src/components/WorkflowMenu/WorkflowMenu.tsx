@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { workflowAccess, type WorkflowAccess } from '../../lib/app-routes';
+import { setThemeSetting, useTheme, type ThemeSetting } from '../../lib/theme';
 
 interface WorkflowItem {
   label: string;
@@ -94,7 +95,40 @@ function WorkflowIcon({ icon }: { icon: WorkflowItem['icon'] }) {
   );
 }
 
-export function WorkflowMenu() {
+/** Notion's appearance choices */
+const THEME_CHOICES: { value: ThemeSetting; label: string }[] = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'system', label: 'Use system setting' },
+];
+
+function ThemeIcon({ value }: { value: ThemeSetting }) {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {value === 'light' && (
+        <>
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+        </>
+      )}
+      {value === 'dark' && <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />}
+      {value === 'system' && (
+        <>
+          <rect x="2" y="4" width="20" height="13" rx="2" />
+          <path d="M8 21h8M12 17v4" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+/**
+ * Notion's page menu (•••) at the right end of the top bar: on a document,
+ * that page's settings (`children`) first; then the workflow pages, and
+ * the appearance.
+ */
+export function WorkflowMenu({ children }: { children?: ReactNode }) {
+  const { setting: themeSetting } = useTheme();
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 8 });
   const rootRef = useRef<HTMLDivElement>(null);
@@ -154,12 +188,12 @@ export function WorkflowMenu() {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Open workflows menu"
-        className="flex h-8 w-8 items-center justify-center rounded border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900"
+        className="lens-icon-button"
       >
-        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <circle cx="12" cy="5" r="1.75" />
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <circle cx="5" cy="12" r="1.75" />
           <circle cx="12" cy="12" r="1.75" />
-          <circle cx="12" cy="19" r="1.75" />
+          <circle cx="19" cy="12" r="1.75" />
         </svg>
       </button>
 
@@ -167,10 +201,16 @@ export function WorkflowMenu() {
         <div
           ref={menuRef}
           role="menu"
-          className="fixed z-[1200] rounded-md border border-gray-200 bg-white p-1.5 shadow-xl"
-          style={{ top: position.top, left: position.left, width: 'min(280px, calc(100vw - 16px))' }}
+          className="lens-popover fixed z-[1200] p-1 overflow-y-auto"
+          style={{ top: position.top, left: position.left, width: 'min(280px, calc(100vw - 16px))', maxHeight: `calc(100dvh - ${position.top + 8}px)` }}
         >
-          <div className="space-y-0.5">
+          {children && (
+            <>
+              <div className="space-y-px">{children}</div>
+              <div className="lens-menu-divider" />
+            </>
+          )}
+          <div className="space-y-px">
             {workflows.map(item => {
               const active = location.pathname === item.path;
               return (
@@ -180,26 +220,43 @@ export function WorkflowMenu() {
                   role="menuitem"
                   aria-current={active ? 'page' : undefined}
                   onClick={() => selectWorkflow(item.path)}
-                  className={`flex w-full items-start gap-3 rounded px-2.5 py-2 text-left transition-colors ${
-                    active
-                      ? 'bg-gray-900 text-white'
-                      : 'text-gray-700 hover:bg-gray-100 hover:text-gray-950'
-                  }`}
+                  className={`lens-menu-item${active ? ' is-active' : ''}`}
                 >
-                  <span className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded border ${
-                    active ? 'border-white/20 bg-white/10 text-white' : 'border-gray-200 bg-gray-50 text-gray-500'
-                  }`}>
+                  <span className="lens-menu-item-icon">
                     <WorkflowIcon icon={item.icon} />
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-sm font-medium leading-5">{item.label}</span>
-                    <span className={`block text-xs leading-4 ${active ? 'text-gray-300' : 'text-gray-500'}`}>
-                      {item.description}
-                    </span>
+                    <span className="lens-menu-item-label block text-sm leading-5">{item.label}</span>
+                    <span className="lens-menu-item-description">{item.description}</span>
                   </span>
                 </button>
               );
             })}
+          </div>
+          {/* Notion's Settings › Appearance */}
+          <div className="lens-menu-divider" />
+          <div className="lens-menu-label px-2 pt-1 pb-1" id="appearance-label">Appearance</div>
+          <div role="group" aria-labelledby="appearance-label">
+            {THEME_CHOICES.map(choice => (
+              <button
+                key={choice.value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={themeSetting === choice.value}
+                onClick={() => setThemeSetting(choice.value)}
+                className="lens-menu-item lens-menu-item-compact"
+              >
+                <span className="lens-menu-item-icon">
+                  <ThemeIcon value={choice.value} />
+                </span>
+                <span className="flex-1 text-sm leading-5">{choice.label}</span>
+                {themeSetting === choice.value && (
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                )}
+              </button>
+            ))}
           </div>
         </div>,
         document.body

@@ -160,7 +160,7 @@ describe('CommentsLayer', () => {
 });
 
 describe('a reply being written while others edit', () => {
-  it('keeps its box open when the thread moves because text was typed above it', () => {
+  it('keeps its card open and its reply when the thread moves because text was typed above it', () => {
     const ss = fakeScrollSource();
     const props = {
       resolveAnchorY: () => 100,
@@ -169,12 +169,13 @@ describe('a reply being written while others edit', () => {
       onReply: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(),
     };
     const { rerender } = render(<CommentsLayer threads={[thread({ key: '100' })]} {...props} />);
-    fireEvent.click(screen.getByRole('button', { name: /^reply$/i }));
-    const box = screen.getByPlaceholderText(/write a reply/i);
+    // Opening the card brings its reply bar
+    fireEvent.click(screen.getByText('hi'));
+    const box = screen.getByPlaceholderText(/reply…/i);
     fireEvent.change(box, { target: { value: 'half-written' } });
 
     rerender(<CommentsLayer threads={[thread({ key: '109' })]} {...props} />);
 
-    expect(screen.getByPlaceholderText(/write a reply/i)).toHaveValue('half-written');
+    expect(screen.getByPlaceholderText(/reply…/i)).toHaveValue('half-written');
   });
 });

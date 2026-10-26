@@ -434,6 +434,29 @@ See [[../Course Notes]] for course material and [[../Syllabus]] for the schedule
 {~~{"author":"AI","timestamp":${T.old}}@@- Advanced CRDT patterns~>- Advanced CRDT patterns and conflict resolution strategies~~}
 `,
       },
+      // Tables whose cells hold aliased wikilinks: the | inside [[...]] is
+      // part of the link, not a column separator.
+      {
+        path: '/Tables.md',
+        id: 'c0000021-0000-4000-8000-000000000021',
+        type: 'markdown',
+        version: 0,
+        content: `# Tables
+
+| Real, anonymized | Fit for MATS |
+|---|---|
+| [[Polymath/MATS interviews/Kiran (real, anonymized)|Kiran]] | 7/10 |
+| [[Polymath/MATS interviews/Noor (real, anonymized)|Noor]] | 9/10 |
+| [[Polymath/MATS interviews/Elias (real, anonymized)|Elias]] | 7/10 |
+| [[Polymath/MATS interviews/Felix (real, anonymized)|Felix]] | 9/10 |
+| [[Polymath/MATS interviews/Theo (real, anonymized)|Theo]] | 9/10 |
+
+| Note | Linked as |
+|---|---|
+| [[Welcome|the welcome page]] | alias |
+| [[Course Notes]] | plain |
+`,
+      },
       // An HTML page taller than a phone screen, with a full-screen intro and a
       // sticky header, to try the preview's Phone mode (height and scrolling).
       {

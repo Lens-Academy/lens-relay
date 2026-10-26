@@ -1,4 +1,5 @@
 import { useConnectionStatus } from '../../lib/ydoc-provider';
+import { Tooltip } from '../Tooltip/Tooltip';
 
 type SyncState = 'synced' | 'syncing' | 'offline';
 
@@ -9,11 +10,11 @@ interface StateConfig {
 
 const stateConfig: Record<SyncState, StateConfig> = {
   synced: {
-    color: 'text-green-500',
+    color: 'text-[var(--lens-icon-secondary)]',
     tooltip: 'All changes saved',
   },
   syncing: {
-    color: 'text-amber-500',
+    color: 'text-[var(--lens-icon-secondary)]',
     tooltip: 'Syncing changes...',
   },
   offline: {
@@ -34,15 +35,13 @@ function mapStatus(status: string): SyncState {
   }
 }
 
-// Inline SVG icons
+// Inline SVG icons. Saved: a cloud with a tick, quiet, as the editors
+// that save as you type show it.
 function CheckIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 20 20" fill="currentColor" className={className}>
-      <path
-        fillRule="evenodd"
-        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-        clipRule="evenodd"
-      />
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M6 15.5h8.25a3.25 3.25 0 0 0 .4-6.47 4.75 4.75 0 0 0-9.2-.86A3.75 3.75 0 0 0 6 15.5Z" />
+      <path d="m7.75 11.25 1.6 1.6 3-3.1" />
     </svg>
   );
 }
@@ -77,18 +76,13 @@ export function SyncStatus() {
   const config = stateConfig[state];
 
   return (
-    <div className="relative group">
-      {/* Icon */}
-      <div className={`w-5 h-5 ${config.color}`}>
-        {state === 'synced' && <CheckIcon className="w-5 h-5" />}
-        {state === 'syncing' && <SpinnerIcon className="w-5 h-5 animate-spin" />}
-        {state === 'offline' && <WarningIcon className="w-5 h-5" />}
+    <Tooltip label={config.tooltip} className="flex items-center">
+      <div className={`flex items-center gap-1 px-1 text-xs ${config.color}`} aria-label={config.tooltip} role="status">
+        {state === 'synced' && <CheckIcon className="w-[18px] h-[18px]" />}
+        {state === 'syncing' && <SpinnerIcon className="w-4 h-4 animate-spin" />}
+        {state === 'offline' && <WarningIcon className="w-4 h-4" />}
+        {state === 'offline' && <span>Offline</span>}
       </div>
-
-      {/* Tooltip on hover */}
-      <div className="absolute top-full right-0 mt-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
-        {config.tooltip}
-      </div>
-    </div>
+    </Tooltip>
   );
 }

@@ -12,7 +12,7 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
       <div className="relative">
         {/* Search icon */}
         <svg
-          className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--lens-sidebar-icon)]"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -31,9 +31,7 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
-          className="w-full pl-8 pr-8 py-1.5 text-sm border border-gray-300 rounded-md
-                     focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500
-                     placeholder:text-gray-400"
+          className="lens-sidebar-field w-full pl-8 pr-8 h-[30px]"
         />
 
         {/* Clear button */}

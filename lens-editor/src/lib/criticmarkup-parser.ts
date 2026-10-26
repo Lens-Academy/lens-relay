@@ -11,6 +11,9 @@ export interface CriticMarkupRange {
   metadata?: {
     author?: string;
     timestamp?: number;
+    /** A comment's emoji reactions: [emoji, who] pairs (a flat list, so the
+     *  metadata stays one level of braces) */
+    reactions?: Array<[string, string]>;
   };
 }
 
@@ -37,6 +40,11 @@ function extractMetadata(rawContent: string): ParsedContent {
       metadata: {
         author: metadata.author,
         timestamp: metadata.timestamp,
+        ...(Array.isArray(metadata.reactions) && {
+          reactions: metadata.reactions.filter(
+            (r: unknown): r is [string, string] => Array.isArray(r) && typeof r[0] === 'string' && typeof r[1] === 'string',
+          ),
+        }),
       },
       metadataLength,
     };
@@ -206,4 +214,44 @@ export function parseThreads(ranges: CriticMarkupRange[]): CommentThread[] {
   });
 
   return threads;
+}
+
+/** The thread of comments right after `ranges[index]` (adjacent, as parseThreads groups them) */
+function commentsAfter(ranges: CriticMarkupRange[], index: number): CriticMarkupRange[] {
+  const thread: CriticMarkupRange[] = [];
+  let at = ranges[index].to;
+  for (let i = index + 1; i < ranges.length && ranges[i].type === 'comment' && ranges[i].from === at; i++) {
+    thread.push(ranges[i]);
+    at = ranges[i].to;
+  }
+  return thread;
+}
+
+/**
+ * A comment thread and the highlight it is on ({==text==}{>>comment<<}) go
+ * together, as in Notion: removing the highlight removes its thread, and
+ * removing all of a thread's comments removes its highlight (keeping the
+ * text). Returns `picked` (ranges of `ranges`, the document's parse sorted
+ * by position) with the ranges linked to them, in document order.
+ */
+export function withLinkedComments(ranges: CriticMarkupRange[], picked: CriticMarkupRange[]): CriticMarkupRange[] {
+  const out = new Set(picked);
+  ranges.forEach((range, i) => {
+    if (range.type !== 'highlight') return;
+    const thread = commentsAfter(ranges, i);
+    if (thread.length === 0) return;
+    if (out.has(range)) thread.forEach((c) => out.add(c));
+    else if (thread.every((c) => out.has(c))) out.add(range);
+  });
+  return ranges.filter((r) => out.has(r));
+}
+
+/**
+ * The comments of the thread at `pos`: the thread `pos` is in, or the one on
+ * the highlight `pos` is in. Empty when there is none.
+ */
+export function commentThreadAt(ranges: CriticMarkupRange[], pos: number): CriticMarkupRange[] {
+  const highlight = ranges.findIndex((r) => r.type === 'highlight' && pos >= r.from && pos < r.to);
+  if (highlight !== -1) return commentsAfter(ranges, highlight);
+  return parseThreads(ranges).find((t) => pos >= t.from && pos <= t.to)?.comments ?? [];
 }

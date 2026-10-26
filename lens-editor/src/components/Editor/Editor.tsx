@@ -11,15 +11,15 @@ import {
 } from '@codemirror/view';
 import { EditorState, Prec } from '@codemirror/state';
 import { defaultKeymap } from '@codemirror/commands';
-import { indentOnInput, indentUnit, syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldKeymap } from '@codemirror/language';
+import { indentOnInput, indentUnit, syntaxHighlighting, bracketMatching, foldKeymap } from '@codemirror/language';
+import { editorTheme, markdownHighlightStyle } from './editorTheme';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { completionKeymap } from '@codemirror/autocomplete';
 import { lintKeymap, forceLinting } from '@codemirror/lint';
 import { harperLinter, updateHarperFolder } from './extensions/harper';
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { Autolink, Table, TaskList } from '@lezer/markdown';
-import { WikilinkExtension } from './extensions/wikilinkParser';
+import { commonmarkLanguage, markdown } from '@codemirror/lang-markdown';
+import { lensMarkdownExtensions } from './extensions/wikilinkTable';
 import { tightMarkdownKeymap } from './extensions/tightListEnter';
 import { segmentIdKeymap } from './extensions/segmentIds';
 import { checklistKeymap } from './extensions/checklistToggle';
@@ -59,7 +59,8 @@ import { ContextMenu } from './ContextMenu';
 import { getContextMenuItems } from './extensions/criticmarkup-context-menu';
 import type { ContextMenuItem } from './extensions/criticmarkup-context-menu';
 import { resolvePageName } from '../../lib/document-resolver';
-import { openDocInNewTab } from '../../lib/url-utils';
+import { openDocInNewTab, urlForDoc } from '../../lib/url-utils';
+import { newDocPathForLink, type NewLinkTarget } from '../../lib/wikilink-create';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
 import { imagePasteExtension } from './extensions/imagePaste';
@@ -83,10 +84,15 @@ interface EditorProps {
   onNavigate?: (docId: string) => void;
   onRequestAddComment?: () => void;
   /** Fires when a comment badge is clicked, with the absolute Y.Text offset. */
-  onCommentClick?: (absFrom: number) => void;
+  onCommentClick?: (absFrom: number, opts?: { fromText?: boolean }) => void;
   metadata?: FolderMetadata;
   currentFilePath?: string;
   getFolderDoc?: () => Y.Doc | null;
+  /** Shared folder names, for where an unresolved wikilink creates its file */
+  folderNames?: string[];
+  /** Creates the file an unresolved wikilink names; returns its UUID. Without
+   *  it (or read-only) following such a link does nothing. */
+  createLinkedDoc?: (target: Extract<NewLinkTarget, { path: string }>) => Promise<string>;
   initialSuggestionMode?: boolean;
 }
 
@@ -128,7 +134,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, onCommentClick, metadata, currentFilePath, getFolderDoc, initialSuggestionMode = false }: EditorProps) {
+export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, onCommentClick, metadata, currentFilePath, getFolderDoc, folderNames, createLinkedDoc, initialSuggestionMode = false }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [initialSuggestionModeOnMount] = useState(initialSuggestionMode);
@@ -267,7 +273,11 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         label: 'Add Comment',
         shortcut: 'Ctrl+Shift+M',
         action: () => {
-          view.dispatch({ selection: { anchor: clickPos } });
+          // Right-clicked in a selection: the comment is on that text
+          const sel = view.state.selection.main;
+          if (sel.empty || clickPos < sel.from || clickPos > sel.to) {
+            view.dispatch({ selection: { anchor: clickPos } });
+          }
           view.focus();
           onRequestAddCommentRef.current?.();
         },
@@ -289,30 +299,74 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // Store wikilink context in ref to avoid re-creating editor when metadata changes
   // The livePreview extension uses a module-scoped variable that we update separately
   const wikilinkContextRef = useRef<WikilinkContext | undefined>(undefined);
+  const folderNamesRef = useRef(folderNames);
+  folderNamesRef.current = folderNames;
 
   // Update the ref when dependencies change (doesn't cause re-render)
   wikilinkContextRef.current = useMemo((): WikilinkContext | undefined => {
     if (!metadata || !onNavigate) return undefined;
 
+    // An unresolved link creates its file (Obsidian's behaviour), for editors.
+    // Null when it creates nothing; a bad link name is said at once.
+    const newFileFor = (pageName: string, create: boolean) => {
+      const names = folderNamesRef.current;
+      if (!create || readOnly || !createLinkedDoc || !names || !currentFilePath) return null;
+      const target = newDocPathForLink(pageName, currentFilePath, names);
+      if (target && 'error' in target) {
+        window.alert(target.error);
+        return null;
+      }
+      return target;
+    };
+    const createFile = async (target: Extract<NewLinkTarget, { path: string }>): Promise<string | null> => {
+      try {
+        return await createLinkedDoc!(target);
+      } catch (err) {
+        console.error('Could not create the linked file:', err);
+        window.alert(`Could not create ${target.path}. Try again.`);
+        return null;
+      }
+    };
+
     return {
-      onClick: (pageName: string) => {
+      onClick: (pageName: string, create = true) => {
         const resolved = resolvePageName(pageName, metadata, currentFilePath);
         if (resolved) {
           onNavigate(`${RELAY_ID}-${resolved.docId}`);
+          return;
         }
-        // Unresolved wikilinks do nothing on click (document creation deferred)
+        const target = newFileFor(pageName, create);
+        if (!target) return;
+        void createFile(target).then((id) => {
+          if (id) onNavigate(`${RELAY_ID}-${id}`);
+        });
       },
-      onOpenNewTab: (pageName: string) => {
+      onOpenNewTab: (pageName: string, create = true) => {
         const resolved = resolvePageName(pageName, metadata, currentFilePath);
         if (resolved) {
           openDocInNewTab(RELAY_ID, resolved.docId, metadata);
+          return;
         }
+        const target = newFileFor(pageName, create);
+        if (!target) return;
+        // Open the tab now, while the click still counts as a user gesture:
+        // a window.open after the create's awaits is blocked as a popup
+        const tab = window.open('', '_blank');
+        void createFile(target).then((id) => {
+          // Popups blocked: open it here rather than not at all
+          if (!tab) {
+            if (id) onNavigate(`${RELAY_ID}-${id}`);
+            return;
+          }
+          if (id) tab.location.href = `${window.location.origin}${urlForDoc(`${RELAY_ID}-${id}`, metadata)}`;
+          else tab.close();
+        });
       },
       isResolved: (pageName: string) => {
         return resolvePageName(pageName, metadata, currentFilePath) !== null;
       },
     };
-  }, [metadata, onNavigate, currentFilePath]);
+  }, [metadata, onNavigate, currentFilePath, readOnly, createLinkedDoc]);
 
   // Update the module-scoped wikilink context when it changes
   // This is separate from the editor creation effect to avoid recreating the editor
@@ -332,7 +386,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
     viewRef.current?.dispatch({
       effects: wikilinkMetadataChanged.of(undefined),
     });
-  }, [metadata, onNavigate, currentFilePath, readOnly, canAcceptReject]);
+  }, [metadata, onNavigate, currentFilePath, readOnly, canAcceptReject, createLinkedDoc]);
 
   // Update Harper folder gate when the active file changes
   useEffect(() => {
@@ -407,7 +461,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         dropCursor(),
         EditorState.allowMultipleSelections.of(true),
         indentOnInput(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(markdownHighlightStyle, { fallback: true }),
         bracketMatching(),
         closeBrackets(),
         rectangularSelection(),
@@ -430,8 +484,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           ...lintKeymap,
         ]),
         markdown({
-          base: markdownLanguage,
-          extensions: [WikilinkExtension, TaskList, Autolink, Table],
+          base: commonmarkLanguage,
+          extensions: lensMarkdownExtensions,
           addKeymap: false,
           // pasteLink below does this, with wikilinks for docs
           pasteURLAsLink: false,
@@ -478,7 +532,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
             ]),
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
         criticMarkupExtension({ canAcceptReject }),
-        commentClickCallback.of((absFrom) => onCommentClickRef.current?.(absFrom)),
+        commentClickCallback.of((absFrom, opts) => onCommentClickRef.current?.(absFrom, opts)),
         harperLinter,
         ...(!readOnly && getFolderDoc
           ? [imagePasteExtension({ getFolderDoc, getCurrentFilePath })]
@@ -505,43 +559,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
             return { top: 0, left: 0, right: window.innerWidth, bottom: bottom - (coarse ? 52 : 0) };
           },
         }),
-        EditorView.theme({
-          '&': {
-            height: '100%',
-            fontSize: '16px',
-            lineHeight: '1.5',
-            color: '#222222',
-            outline: 'none',
-          },
-          '&.cm-focused': {
-            outline: 'none',
-          },
-          '.cm-scroller': {
-            fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-            overflow: 'auto',
-            lineHeight: '1.5',
-          },
-          '.cm-content': {
-            padding: '16px 24px 170px',
-            maxWidth: '700px',
-            marginLeft: 'auto',
-            marginRight: 'auto',
-          },
-          '.cm-line': {
-            lineHeight: '1.5',
-          },
-          // Hide gutters (fold markers only, no line numbers)
-          '.cm-gutters': {
-            display: 'none',
-          },
-          // Remove underline from headings (override defaultHighlightStyle)
-          '.tok-heading': {
-            textDecoration: 'none !important',
-          },
-          '.cm-line .tok-heading': {
-            textDecoration: 'none !important',
-          },
-        }),
+        editorTheme,
         // Notify parent of document changes (for ToC + comment margin updates)
         ...(onDocChange ? [EditorView.updateListener.of((update) => {
           if (update.docChanged) { onDocChange(); return; }

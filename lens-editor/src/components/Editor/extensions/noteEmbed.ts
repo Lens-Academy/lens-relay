@@ -10,9 +10,9 @@
 import { EditorState, Prec, StateField, type Text } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { defaultHighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language';
-import { Autolink, Table, TaskList } from '@lezer/markdown';
+import { commonmarkLanguage, markdown } from '@codemirror/lang-markdown';
+import { indentUnit, syntaxHighlighting } from '@codemirror/language';
+import { markdownHighlightStyle } from '../editorTheme';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { findEmbedLines } from '../../../../shared/embeds';
@@ -21,7 +21,7 @@ import { attachProvenanceRegistration } from '../../../lib/provenance';
 import { criticMarkupExtension, suggestionModeField, toggleSuggestionMode } from './criticmarkup';
 import { livePreview } from './livePreview';
 import { markdownTableExtension } from './markdownTable';
-import { WikilinkExtension } from './wikilinkParser';
+import { lensMarkdownExtensions } from './wikilinkTable';
 import { wikilinkMetadataChanged } from './wikilinkEffects';
 
 export interface NoteEmbedContext {
@@ -143,15 +143,12 @@ export function embedViewExtensions(canAcceptReject: boolean) {
   return [
     indentUnit.of('\t'),
     EditorState.tabSize.of(4),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-    markdown({ base: markdownLanguage, extensions: [WikilinkExtension, TaskList, Autolink, Table], addKeymap: false }),
+    syntaxHighlighting(markdownHighlightStyle, { fallback: true }),
+    markdown({ base: commonmarkLanguage, extensions: lensMarkdownExtensions, addKeymap: false }),
     livePreview(undefined, { embeds: false }),
     markdownTableExtension(),
     criticMarkupExtension({ canAcceptReject }),
     EditorView.lineWrapping,
-    EditorView.theme({
-      '.tok-heading, .cm-line .tok-heading': { textDecoration: 'none !important' },
-    }),
   ];
 }
 

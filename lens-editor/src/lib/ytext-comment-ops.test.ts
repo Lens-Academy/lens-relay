@@ -6,8 +6,10 @@ import {
   insertCommentInYText,
   replyInYText,
   deleteRangeInYText,
+  removeThreadInYText,
   editRangeContentInYText,
   isOwnRange,
+  toggleReactionInYText,
 } from './ytext-comment-ops';
 
 describe('ytext-comment-ops', () => {
@@ -29,6 +31,16 @@ describe('ytext-comment-ops', () => {
     expect(comment).toBeDefined();
     expect(comment?.metadata?.author).toBe('alice');
     expect(comment?.content).toBe('first thought');
+  });
+
+  it('wraps the text a comment is on in a highlight the comment follows', () => {
+    ytext.insert(0, 'Hello world.');
+    const at = insertCommentInYText(ytext, 'which world?', 11, 6);
+
+    expect(ytext.toString()).toMatch(/^Hello \{==world==\}\{>>.*@@which world\?<<\}\.$/);
+    const ranges = parse(ytext.toString());
+    expect(ranges.map((r) => r.type)).toEqual(['highlight', 'comment']);
+    expect(ranges[1].from).toBe(at);
   });
 
   it('replies append a second comment that parseThreads groups with the first', () => {
@@ -94,5 +106,38 @@ describe('ytext-comment-ops', () => {
     // calls decodeCommentContent before display. We assert the round trip
     // recovers the original.
     expect(decodeCommentContent(range.content)).toBe('line one\nline two\\with-backslash');
+  });
+
+  it('toggles a reaction in the metadata, which the parser reads back, and drops the key when the last goes', () => {
+    ytext.insert(0, 'Body.');
+    insertCommentInYText(ytext, 'nice', 4);
+    const comment = () => parse(ytext.toString()).find(r => r.type === 'comment')!;
+
+    toggleReactionInYText(ytext, comment(), '👍', 'Bob');
+    toggleReactionInYText(ytext, comment(), '👍', 'Carol "C" {x}');
+    expect(comment().metadata?.reactions).toEqual([['👍', 'Bob'], ['👍', 'Carol C x']]);
+    expect(comment().metadata?.author).toBe('alice');
+    expect(decodeCommentContent(comment().content)).toBe('nice');
+
+    toggleReactionInYText(ytext, comment(), '👍', 'Bob');
+    toggleReactionInYText(ytext, comment(), '👍', 'Carol C x');
+    expect(comment().metadata?.reactions).toBeUndefined();
+    expect(ytext.toString()).not.toContain('reactions');
+  });
+});
+
+describe('removeThreadInYText', () => {
+  it('removes the thread and its highlight, keeping the highlighted text', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    setCurrentAuthor('alice');
+    ytext.insert(0, 'We plan to ship it soon.');
+    insertCommentInYText(ytext, 'why?', 'We plan to ship it'.length, 'We plan to '.length);
+    const thread = parseThreads(parse(ytext.toString()))[0];
+    replyInYText(ytext, 'because', thread.to);
+
+    const ranges = parse(ytext.toString());
+    removeThreadInYText(ytext, ranges, parseThreads(ranges)[0].comments);
+    expect(ytext.toString()).toBe('We plan to ship it soon.');
   });
 });

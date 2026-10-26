@@ -59,7 +59,7 @@ export function MobileNavBar({ onOpenQuickSwitcher }: MobileNavBarProps) {
   return (
     <nav
       id="mobile-nav-bar"
-      className="flex-shrink-0 flex items-stretch bg-[#f6f6f6] border-t border-gray-200"
+      className="flex-shrink-0 flex items-stretch bg-[var(--lens-sidebar-bg)] border-t border-gray-200"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       aria-label="Mobile navigation"
     >

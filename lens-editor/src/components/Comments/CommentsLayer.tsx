@@ -43,6 +43,11 @@ export interface CommentsLayerHandle {
 
 export interface CommentsLayerProps {
   threads: ThreadView[];
+  /** Cards show their thread's number, as the page's markers do (HTML pages);
+   *  not where the text a comment is on marks it (the markdown editor) */
+  numbered?: boolean;
+  /** Adds the current user's emoji reaction to a message, or takes it back */
+  onReact?: (message: MessageView, emoji: string) => void;
   /** Resolve a thread key to a screen y, or null if not currently rendered. */
   resolveAnchorY: (key: ThreadKey) => number | null;
   /** Current visible viewport in the same coordinate space as resolveAnchorY. */
@@ -58,7 +63,8 @@ export interface CommentsLayerProps {
   onDelete: (message: MessageView) => void;
   /** Add-comment UI shown only when both provided. */
   getInsertKey?: () => ThreadKey | null;
-  onAddComment?: (key: ThreadKey, body: string) => void;
+  /** May return the new thread's key, when it isn't the insert key (the comment highlights text) */
+  onAddComment?: (key: ThreadKey, body: string) => ThreadKey | void;
   /** Resolve / re-attach actions passed to every card. */
   actions?: ThreadActions;
   /** A comment being written at an anchor (resolveAnchorY(draft.key) places it). */
@@ -98,7 +104,9 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     onAddComment,
     actions,
     draft,
-    emptyHint = 'No comments yet. Select text and click Add.',
+    emptyHint = 'No comments yet. Select text and choose Add comment (Ctrl+Shift+M).',
+    numbered = true,
+    onReact,
   } = props;
 
   // getInsertKey identity may change every render (callers commonly pass
@@ -109,11 +117,17 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
 
   const layerRef = useRef<HTMLDivElement | null>(null);
 
-  const [focusedThreadKey, setFocusedThreadKey] = useState<ThreadKey | null>(null);
+  // The open thread, by its key and its root comment: the key is an offset that
+  // moves when anyone types above, so the root finds the thread again and the
+  // card stays open with its reply bar
+  const [focus, setFocus] = useState<{ key: ThreadKey; rootId?: string } | null>(null);
+  const focusedThreadKey = focus == null || threads.some((t) => t.key === focus.key)
+    ? focus?.key ?? null
+    : threads.find((t) => t.root.id === focus.rootId)?.key ?? null;
 
   // Helper: set focus and fire callback.
   const applyFocus = (key: ThreadKey | null) => {
-    setFocusedThreadKey(key);
+    setFocus(key == null ? null : { key, rootId: threads.find((t) => t.key === key)?.root.id });
     onFocusChange?.(key);
   };
 
@@ -159,10 +173,10 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
   const handleAddSubmit = (content: string) => {
     const key = pendingInsertKey;
     if (key == null || !onAddComment) return;
-    onAddComment(key, content);
+    const created = onAddComment(key, content);
     setShowAddForm(false);
     setPendingInsertKey(null);
-    applyFocus(key);
+    applyFocus(typeof created === 'string' ? created : key);
   };
 
   const cardHeightsRef = useRef(new Map<ThreadKey, number>());
@@ -376,37 +390,26 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
             setPendingInsertKey(key);
             setShowAddForm(true);
           }}
-          style={{
-            position: 'absolute',
-            top: 8,
-            right: 8,
-            zIndex: 2,
-            pointerEvents: 'auto',
-            fontSize: 12,
-            padding: '2px 10px',
-            background: '#3b82f6',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            cursor: 'pointer',
-            fontWeight: 600,
-            boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
-          }}
+          className="lens-comment-add"
         >
-          + Add
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3.5 2.75h9a1.75 1.75 0 0 1 1.75 1.75v5.5A1.75 1.75 0 0 1 12.5 11.75H8.5l-3 2.5v-2.5h-2A1.75 1.75 0 0 1 1.75 10V4.5A1.75 1.75 0 0 1 3.5 2.75Z" />
+            <path d="M8 5v4M6 7h4" />
+          </svg>
+          Add comment
         </button>
       )}
 
       {showAddForm && pendingInsertKey != null && (
         <div
-          style={{ pointerEvents: 'auto', padding: '0 8px 8px', position: 'relative', zIndex: 2 }}
+          style={{ pointerEvents: 'auto', padding: '12px 8px 8px 16px', position: 'relative', zIndex: 2 }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div style={{ border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
+          <div className="lens-comment-card is-open">
             <AddCommentForm
               onSubmit={handleAddSubmit}
               onCancel={() => { setShowAddForm(false); setPendingInsertKey(null); }}
-              placeholder="Add a comment..."
+              placeholder="Add a comment…"
               submitLabel="Add"
               autoFocus
             />
@@ -426,11 +429,8 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
             style={{ position: 'absolute', top: Math.max(4, layoutY - layerTop), left: 4, right: 4, pointerEvents: 'auto', zIndex: 3 }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="overflow-hidden rounded-lg border border-blue-300 bg-white shadow-md">
-              <p
-                className="mx-3 mt-2 border-l-2 border-blue-300 pl-2 text-[12px] italic leading-snug text-gray-600"
-                title={draft.target}
-              >
+            <div className="lens-comment-card is-open">
+              <p className="lens-comment-quote mx-3 mt-2.5" title={draft.target}>
                 {draft.target.length > 140 ? `${draft.target.slice(0, 139)}…` : draft.target}
               </p>
               {draft.warning && (
@@ -442,7 +442,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
                 onSubmit={draft.onSubmit}
                 onCancel={draft.onCancel}
                 initialValue={draft.initialText}
-                placeholder="Add a comment..."
+                placeholder="Add a comment…"
                 submitLabel="Post"
                 autoFocus
               />
@@ -453,13 +453,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
 
       {threads.length === 0 && !draft && (
         <div
-          style={{
-            pointerEvents: 'none',
-            padding: '40px 16px',
-            textAlign: 'center',
-            color: '#9ca3af',
-            fontSize: 13,
-          }}
+          className="lens-comments-empty"
         >
           {emptyHint}
         </div>
@@ -483,24 +477,26 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
             key={thread.root.id}
             data-comment-thread={thread.key}
             ref={(el) => attachObserver(el, thread.key)}
+            // Inset so a card can move left as Notion's do when hovered or open
             style={{
               position: 'absolute',
               top,
-              left: 4,
-              right: 4,
+              left: 16,
+              right: 8,
               pointerEvents: 'auto',
             }}
             onClick={(e) => e.stopPropagation()}
           >
             <CommentCard
               thread={thread}
-              number={thread.order}
+              number={numbered ? thread.order : undefined}
               focused={focusedThreadKey === thread.key}
               onFocus={handleFocus}
               onReply={(t, body) => onReply(t, body)}
               onEdit={(msg, body) => onEdit(msg, body)}
               onDelete={(msg) => onDelete(msg)}
               actions={actions}
+              onReact={onReact}
             />
           </div>
         );

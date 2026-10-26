@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { EditorView } from '@codemirror/view';
+import { EditorState } from '@codemirror/state';
 import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import {
   createTestEditor,
   moveCursor,
@@ -8,7 +10,9 @@ import {
   countClass,
   getTextWithClass,
 } from '../../../test/codemirror-helpers';
-import { toggleSourceMode, updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
+import { livePreview, toggleSourceMode, updateWikilinkContext, wikilinkMetadataChanged, wikilinkTargetAt } from './livePreview';
+import { runScopeHandlers } from '@codemirror/view';
+import { criticMarkupExtension } from './criticmarkup';
 import { parseCalloutHeader } from './callouts';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
@@ -441,7 +445,7 @@ describe('livePreview - wikilinks', () => {
     const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
     expect(widget.textContent).toBe('the alias');
     widget.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    expect(onClick).toHaveBeenCalledWith('My Page#Heading');
+    expect(onClick).toHaveBeenCalledWith('My Page#Heading', true);
   });
 
   it('widget falls back to the target when the alias is empty or blank', () => {
@@ -544,7 +548,7 @@ describe('livePreview - wikilinks', () => {
     const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
     expect(widget).not.toBeNull();
     widget.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
-    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page', true);
     expect(onClick).not.toHaveBeenCalled();
   });
 
@@ -561,7 +565,7 @@ describe('livePreview - wikilinks', () => {
     const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
     expect(widget).not.toBeNull();
     widget.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true }));
-    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page', true);
     expect(onClick).not.toHaveBeenCalled();
   });
 
@@ -578,7 +582,7 @@ describe('livePreview - wikilinks', () => {
     const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
     expect(widget).not.toBeNull();
     widget.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, button: 1 }));
-    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page', true);
     expect(onClick).not.toHaveBeenCalled();
   });
 
@@ -595,7 +599,7 @@ describe('livePreview - wikilinks', () => {
     const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
     expect(widget).not.toBeNull();
     widget.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    expect(onClick).toHaveBeenCalledWith('My Page');
+    expect(onClick).toHaveBeenCalledWith('My Page', true);
     expect(onOpenNewTab).not.toHaveBeenCalled();
   });
 
@@ -827,6 +831,104 @@ describe('livePreview - bullet lists', () => {
 
     expect(hasClass(view, 'cm-bullet')).toBe(false);
   });
+
+  it('draws •, ◦ and ▪ by nesting depth, as Notion does', () => {
+    const { view, cleanup: c } = createTestEditor('- a\n\t- b\n\t\t- c\n\t\t\t- d\n\nend', 26);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-bullet')).toEqual(['•', '◦', '▪', '•']);
+  });
+
+  it('draws a nested bullet after a blank line by its depth too', () => {
+    const { view, cleanup: c } = createTestEditor('- a\n\n\t- b\n\nend', 12);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-bullet')).toEqual(['•', '◦']);
+  });
+});
+
+describe('livePreview - block spacing (Notion\'s 16px between blocks)', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  const lineClasses = (view: EditorView) =>
+    [...view.contentDOM.querySelectorAll('.cm-line')].map((line) => line.className);
+
+  it('marks blank lines, but not those in code', () => {
+    const content = 'one\n\ntwo\n```\n\n```\nend';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const blank = lineClasses(view).map((cls) => cls.includes('cm-blank-line'));
+    expect(blank).toEqual([false, true, false, false, false, false, false]);
+  });
+
+  it('marks a heading that touches text above or below it', () => {
+    const content = 'text\n## Touching\nmore\n\n## Apart\n\nend';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const [touching, apart] = [...view.contentDOM.querySelectorAll('.cm-heading-line')];
+    expect(touching.classList.contains('cm-heading-after-text')).toBe(true);
+    expect(touching.classList.contains('cm-heading-before-text')).toBe(true);
+    expect(apart.classList.contains('cm-heading-after-text')).toBe(false);
+    expect(apart.classList.contains('cm-heading-before-text')).toBe(false);
+  });
+
+  it('marks the first and last lines of a list that touches text', () => {
+    const content = 'intro:\n- a\n- b\n\nend';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const classes = lineClasses(view);
+    expect(classes[1]).toContain('cm-list-after-text');
+    expect(classes[2]).not.toContain('cm-list-before-text');
+  });
+
+  it('puts numbered list markers in their column', () => {
+    const content = '1. one\n2. two\n\nend';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-list-number')).toEqual(['1.', '2.']);
+  });
+});
+
+describe('livePreview - strikethrough', () => {
+  let view: EditorView | null = null;
+
+  afterEach(() => {
+    view?.destroy();
+    view = null;
+  });
+
+  // GFM, as Editor.tsx parses: the test helper's CommonMark has no ~~
+  function create(content: string, cursorPos: number) {
+    view = new EditorView({
+      state: EditorState.create({
+        doc: content,
+        selection: { anchor: cursorPos },
+        extensions: [markdown({ base: markdownLanguage }), livePreview()],
+      }),
+      parent: document.body,
+    });
+    return view;
+  }
+
+  const content = 'a ~~gone~~ b\n\nend';
+
+  it('hides the ~~ marks while the cursor is elsewhere, as for * and _', () => {
+    create(content, content.length);
+    expect(getTextWithClass(view!, 'cm-hidden-syntax')).toEqual(['~~', '~~']);
+  });
+
+  it('shows them while the cursor is in the struck-through text', () => {
+    create(content, content.indexOf('gone'));
+    expect(getTextWithClass(view!, 'cm-hidden-syntax')).toEqual([]);
+  });
 });
 
 describe('livePreview - Obsidian bullet compatibility', () => {
@@ -955,6 +1057,27 @@ describe('livePreview - fenced code blocks', () => {
     cleanup = c;
 
     expect(hasClass(view, 'cm-code-block')).toBe(true);
+  });
+
+  it('labels the box with its language while the cursor is outside it, as Notion does', () => {
+    const content = 'before\n```ts\nconst x = 1;\n```\nafter';
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-code-language')).toEqual(['TypeScript']);
+    expect(hasClass(view, 'cm-code-block')).toBe(true);
+    moveCursor(view, content.indexOf('const'));
+    expect(getTextWithClass(view, 'cm-code-language')).toEqual([]);
+  });
+
+  it('marks the first and last lines, for the box\'s round corners', () => {
+    const content = 'before\n```\ncode line\n```\nafter';
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+
+    const lines = [...view.contentDOM.querySelectorAll('.cm-code-block')];
+    expect(lines.map((line) => [line.classList.contains('cm-code-block-first'), line.classList.contains('cm-code-block-last')]))
+      .toEqual([[true, false], [false, false], [false, true]]);
   });
 
   it('applies cm-code-block line class when cursor inside too', () => {
@@ -1367,5 +1490,87 @@ describe('livePreview - callouts', () => {
     const { view, cleanup: c } = createTestEditor(doc, doc.length);
     cleanup = c;
     expect(getTextWithClass(view, 'cm-callout-title')).toEqual(['Warning']);
+  });
+});
+
+describe('livePreview - following a raw wikilink', () => {
+  let cleanup: () => void;
+  afterEach(() => {
+    if (cleanup) cleanup();
+    updateWikilinkContext(undefined);
+  });
+
+  it('finds the target at a position, without the alias, ends included', () => {
+    const content = 'see [[../Notes/Idea|the idea]] here';
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+    const from = content.indexOf('[[');
+    const to = content.indexOf(']]') + 2;
+    expect(wikilinkTargetAt(view.state, from + 3)).toBe('../Notes/Idea');
+    expect(wikilinkTargetAt(view.state, to)).toBe('../Notes/Idea');
+    expect(wikilinkTargetAt(view.state, to, true)).toBeNull();
+    expect(wikilinkTargetAt(view.state, 1)).toBeNull();
+  });
+
+  it('Mod-Enter in a wikilink opens it in a new tab', () => {
+    const onOpenNewTab = vi.fn();
+    const content = 'a [[Missing Page]] b';
+    const { view, cleanup: c } = createTestEditor(content, 6, {
+      onClick: () => {}, onOpenNewTab, isResolved: () => false,
+    });
+    cleanup = c;
+    const handled = runScopeHandlers(view, new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }), 'editor');
+    expect(handled).toBe(true);
+    expect(onOpenNewTab).toHaveBeenCalledWith('Missing Page', true);
+  });
+
+  it('Mod-Enter in a wikilink inside a suggestion is left to accepting it', () => {
+    const onOpenNewTab = vi.fn();
+    const content = 'a {++see [[Topic]]++} b';
+    const { view, cleanup: c } = createTestEditor(content, content.indexOf('Topic') + 1, {
+      onClick: () => {}, onOpenNewTab, isResolved: () => false,
+    }, [criticMarkupExtension()]);
+    cleanup = c;
+    const handled = runScopeHandlers(view, new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }), 'editor');
+    expect(handled).toBe(true);
+    expect(onOpenNewTab).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe('a see [[Topic]] b');
+  });
+
+  it('Mod-Enter outside a wikilink is left to other bindings', () => {
+    const onOpenNewTab = vi.fn();
+    const { view, cleanup: c } = createTestEditor('a [[Page]] b', 0, {
+      onClick: () => {}, onOpenNewTab, isResolved: () => true,
+    });
+    cleanup = c;
+    const handled = runScopeHandlers(view, new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }), 'editor');
+    expect(handled).toBe(false);
+    expect(onOpenNewTab).not.toHaveBeenCalled();
+  });
+});
+
+describe('livePreview - the gap after a line of a paragraph', () => {
+  let cleanup: () => void;
+  afterEach(() => cleanup?.());
+
+  it('marks a short gapped line so CodeMirror does not take the page line height from it', () => {
+    const { view, cleanup: c } = createTestEditor('KR on alumni N\nA longer line of the same paragraph, over twenty.\nEnd\n\nAfter', 0);
+    cleanup = c;
+    // The short line has the gap and the mark; the long one only the gap
+    expect(getTextWithClass(view, 'cm-gap-text')).toEqual(['KR on alumni N']);
+    expect(countClass(view, 'cm-text-before-text')).toBe(2);
+  });
+
+  it('gives the gap to the drawn line where a hidden comment joins two', () => {
+    const { view, cleanup: c } = createTestEditor(
+      'Before{>>first\nsecond<<} after\nNext line\n\nEnd',
+      0,
+      undefined,
+      [criticMarkupExtension()],
+    );
+    cleanup = c;
+    const gapped = [...view.contentDOM.querySelectorAll('.cm-text-before-text')].map((l) => l.textContent);
+    // The drawn line the comment joins takes the gap, as more of the paragraph follows
+    expect(gapped).toEqual(['Before1 after']);
   });
 });

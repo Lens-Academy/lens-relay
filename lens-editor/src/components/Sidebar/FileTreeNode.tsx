@@ -5,8 +5,21 @@ import { FileTreeContextMenu, shouldSuppressTreeClick } from './FileTreeContextM
 import { useFileTreeContext } from './FileTreeContext';
 import { useDragTarget } from './FileTree';
 import { CreateMenu } from './CreateMenu';
+import { CHEVRON_SVG, FOLDER_ICON_SVG, MORE_SVG, PAGE_ICON_SVG, treeGuides, treeItemPadding } from './treeLayout';
 
-const INDENT_SIZE = 16; // Must match the indent prop in FileTree.tsx
+/**
+ * The folder just opened by a click, for a moment: its contents ease in
+ * (index.css) as they first show, one after another
+ */
+let justOpened: string | null = null;
+let justOpenedTimer = 0;
+function markOpened(id: string) {
+  justOpened = id;
+  window.clearTimeout(justOpenedTimer);
+  justOpenedTimer = window.setTimeout(() => {
+    justOpened = null;
+  }, 400);
+}
 
 export function FileTreeNode({
   node,
@@ -107,30 +120,27 @@ export function FileTreeNode({
     }
   };
 
-  // Build indentation guides - vertical lines for each ancestor level
-  const indentGuides = [];
-  for (let i = 0; i < depth; i++) {
-    indentGuides.push(
-      <span
-        key={i}
-        className="flex-shrink-0 relative"
-        style={{ width: INDENT_SIZE }}
-      >
-        {/* Vertical guide line */}
-        <span
-          className="absolute left-[7px] top-0 bottom-0 w-px bg-gray-200"
-          style={{ height: '100%' }}
-        />
-      </span>
-    );
-  }
+  // Notion's sidebar item (index.css): a page's or folder's icon in a fixed
+  // slot before the name; a folder's icon opens as the folder does. The
+  // shared folders at the top are section labels.
+  const itemClass = `lens-tree-item${isSharedFolderRoot ? ' is-section' : ''}${isActive ? ' is-active' : ''}${isDropTarget ? ' is-drop-target' : ''}`;
+  const entering = justOpened !== null && node.parent?.id === justOpened;
+  // A faint line down from each folder the item is in
+  const guides = treeGuides(depth);
+  const guideStyle = guides.length > 0 ? {
+    backgroundImage: guides.map(() => 'linear-gradient(var(--lens-tree-guide), var(--lens-tree-guide))').join(', '),
+    backgroundSize: guides.map(() => '1px 100%').join(', '),
+    backgroundPosition: guides.map((x) => `${x}px 0`).join(', '),
+    backgroundRepeat: 'no-repeat',
+  } : undefined;
+  const hasMenu = !isSharedFolderRoot && !!(ctx.onRequestDelete || ctx.onRequestRename);
 
   const content = (
     <div
       ref={dragHandle}
-      style={{ ...style, paddingLeft: 0 }} // Override react-arborist's padding, we handle it ourselves
-      className={`flex items-center h-full py-0.5 pr-2 cursor-pointer select-none
-                  ${isDropTarget ? 'bg-blue-100 ring-1 ring-blue-300' : isActive ? 'bg-blue-100' : 'hover:bg-gray-100'}`}
+      // Override react-arborist's padding, we handle it ourselves
+      style={{ ...style, paddingLeft: 0, ...guideStyle, ...(entering && { '--i': Math.min(node.childIndex, 12) }) } as React.CSSProperties}
+      className={`lens-tree-row cursor-pointer select-none${entering ? ' is-entering' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         // Ghost click after a touch long-press context menu closes — the tap
@@ -140,6 +150,7 @@ export function FileTreeNode({
           return;
         }
         if (isFolder) {
+          if (!node.isOpen) markOpened(node.id);
           node.toggle();
         } else if ((e.ctrlKey || e.metaKey) && ctx.onOpenNewTab && node.data.docId) {
           ctx.onOpenNewTab(node.data.docId);
@@ -162,76 +173,73 @@ export function FileTreeNode({
         }
       }}
     >
-      {/* Indentation guides (vertical lines) */}
-      {indentGuides}
+      <div className={itemClass} style={{ paddingLeft: treeItemPadding(depth) }}>
+        {!isSharedFolderRoot && (
+          // A folder's icon gives way to Notion's chevron on hover
+          <span className={`lens-tree-icon${isFolder ? ' is-folder' : ''}${isFolder && node.isOpen ? ' is-open' : ''}`}>
+            <span className="lens-tree-glyph" dangerouslySetInnerHTML={{ __html: isFolder ? FOLDER_ICON_SVG : PAGE_ICON_SVG }} />
+            {isFolder && <span className="lens-tree-chevron" dangerouslySetInnerHTML={{ __html: CHEVRON_SVG }} />}
+          </span>
+        )}
 
-      {/* Chevron for folders */}
-      {isFolder ? (
-        <svg
-          className={`w-4 h-4 text-gray-500 transition-transform flex-shrink-0 ml-1
-                      ${node.isOpen ? 'rotate-90' : ''}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M9 5l7 7-7 7"
+        {/* Name or edit input */}
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            type="text"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            className="lens-tree-rename flex-1 min-w-0 outline-none"
+            onClick={(e) => e.stopPropagation()}
           />
-        </svg>
-      ) : (
-        /* Spacer for files to align text with folder text (past the chevron) */
-        <span className="w-5 flex-shrink-0" />
-      )}
+        ) : (
+          <span className="lens-tree-name truncate" title={node.data.path}>
+            {/* Pages show their title, as in Notion: no .md */}
+            {isFolder ? node.data.name : node.data.name.replace(/\.md$/i, '')}
+          </span>
+        )}
+        {isSharedFolderRoot && (
+          <span className={`lens-tree-section-chevron${node.isOpen ? ' is-open' : ''}`} dangerouslySetInnerHTML={{ __html: CHEVRON_SVG }} />
+        )}
 
-      {/* Folder icon */}
-      {isFolder && (
-        <svg
-          className="w-4 h-4 text-gray-500 flex-shrink-0 ml-0.5"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+        {/* Create menu (new file / from template / new HTML file / new folder) for folders */}
+        {isFolder && (ctx.onCreateDocument || ctx.onCreateHtmlDocument || ctx.onCreateFolder) && (
+          <CreateMenu
+            folderName={node.data.name}
+            onCreateDocument={ctx.onCreateDocument ? () => ctx.onCreateDocument!(node.data.path) : undefined}
+            onCreateHtmlDocument={ctx.onCreateHtmlDocument ? () => ctx.onCreateHtmlDocument!(node.data.path) : undefined}
+            onCreateFolder={ctx.onCreateFolder ? () => ctx.onCreateFolder!(node.data.path) : undefined}
+            getTemplates={ctx.getTemplates ? () => ctx.getTemplates!(node.data.path) : undefined}
+            onCreateFromTemplate={ctx.onCreateFromTemplate ? (template) => ctx.onCreateFromTemplate!(node.data.path, template) : undefined}
           />
-        </svg>
-      )}
+        )}
 
-      {/* Name or edit input */}
-      {isEditing ? (
-        <input
-          ref={inputRef}
-          type="text"
-          value={editValue}
-          onChange={(e) => setEditValue(e.target.value)}
-          onBlur={handleBlur}
-          onKeyDown={handleKeyDown}
-          className="flex-1 text-sm text-gray-700 bg-white border border-blue-400 rounded px-1 py-0 outline-none ml-1"
-          onClick={(e) => e.stopPropagation()}
-        />
-      ) : (
-        <span className="truncate text-sm text-gray-700 ml-1" title={node.data.path}>
-          {node.data.name}
-        </span>
-      )}
-
-      {/* Create menu (new file / from template / new HTML file / new folder) for folders */}
-      {isFolder && (ctx.onCreateDocument || ctx.onCreateHtmlDocument || ctx.onCreateFolder) && (
-        <CreateMenu
-          folderName={node.data.name}
-          onCreateDocument={ctx.onCreateDocument ? () => ctx.onCreateDocument!(node.data.path) : undefined}
-          onCreateHtmlDocument={ctx.onCreateHtmlDocument ? () => ctx.onCreateHtmlDocument!(node.data.path) : undefined}
-          onCreateFolder={ctx.onCreateFolder ? () => ctx.onCreateFolder!(node.data.path) : undefined}
-          getTemplates={ctx.getTemplates ? () => ctx.getTemplates!(node.data.path) : undefined}
-          onCreateFromTemplate={ctx.onCreateFromTemplate ? (template) => ctx.onCreateFromTemplate!(node.data.path, template) : undefined}
-        />
-      )}
+        {/* Notion's ···: the item's menu (rename, move, delete), which a
+            right-click also opens */}
+        {hasMenu && !isEditing && (
+          <span className={`lens-tree-actions flex-shrink-0${isFolder ? '' : ' ml-auto'}`}>
+            <button
+              type="button"
+              aria-label={`More actions for ${node.data.name}`}
+              title="Rename, move, delete…"
+              className="lens-tree-action max-md:p-2 max-md:-my-1.5"
+              onClick={(e) => {
+                e.stopPropagation();
+                const at = e.currentTarget.getBoundingClientRect();
+                e.currentTarget.closest('.lens-tree-row')?.dispatchEvent(new MouseEvent('contextmenu', {
+                  bubbles: true,
+                  cancelable: true,
+                  clientX: at.left,
+                  clientY: at.bottom + 4,
+                }));
+              }}
+              dangerouslySetInnerHTML={{ __html: MORE_SVG }}
+            />
+          </span>
+        )}
+      </div>
     </div>
   );
 

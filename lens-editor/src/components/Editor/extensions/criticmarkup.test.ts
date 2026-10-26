@@ -946,5 +946,80 @@ describe('CriticMarkup Extension', () => {
       badge.click();
       expect(receivedFrom).toBe(6); // thread.from
     });
+
+    it('marks the text a comment follows as what it is on, which opens the thread when clicked', () => {
+      const calls: Array<[number, unknown]> = [];
+      const doc = 'see {==this part==}{>>a comment<<} end';
+      const state = EditorState.create({
+        doc,
+        selection: { anchor: 0 },
+        extensions: [
+          markdown(),
+          criticMarkupExtension(),
+          commentClickCallback.of((absFrom, opts) => { calls.push([absFrom, opts]); }),
+        ],
+      });
+      const view = new EditorView({ state, parent: document.body });
+      cleanup = () => view.destroy();
+
+      const target = view.contentDOM.querySelector('.cm-comment-target') as HTMLElement;
+      expect(target.textContent).toBe('this part');
+      expect(target.dataset.commentFrom).toBe(String(doc.indexOf('{>>')));
+      target.click();
+      expect(calls).toEqual([[doc.indexOf('{>>'), { fromText: true }]]);
+    });
+
+    it('marks a comment on highlighted text by its highlight alone, and a comment on a point in the margin', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'see {==this part==}{>>on the text<<}{>>a reply<<} and here{>>on a point<<} end',
+        0
+      );
+      cleanup = c;
+
+      const badges = [...view.contentDOM.querySelectorAll('.cm-comment-badge')];
+      expect(badges).toHaveLength(1);
+      expect(badges[0].classList.contains('is-margin')).toBe(true);
+      expect(badges[0].textContent).toBe('2');
+      expect(view.contentDOM.querySelector('.cm-comment-target')?.textContent).toBe('this part');
+      // The comments' text stays hidden
+      expect(view.contentDOM.textContent).not.toContain('on the text');
+      expect(view.contentDOM.textContent).not.toContain('a reply');
+    });
+
+    it('hides a comment over several lines whole, its line breaks too, with its badge', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor('Before{>>first\nsecond\nthird<<} after\n\nEnd', 0);
+      cleanup = c;
+
+      const lines = [...view.contentDOM.querySelectorAll('.cm-line')].map((l) => l.textContent);
+      expect(lines[0]).toBe('Before1 after');
+      expect(view.contentDOM.textContent).not.toMatch(/first|second|third/);
+      expect(view.contentDOM.querySelector('.cm-comment-collapsed-line')).toBeNull();
+    });
+
+    it('leaves no empty line where a comment of whole lines was', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor('Above\n{>>one\ntwo<<}\nBelow', 0);
+      cleanup = c;
+
+      const lines = [...view.contentDOM.querySelectorAll('.cm-line')].map((l) => l.textContent);
+      expect(lines).toEqual(['Above1', 'Below']);
+    });
+
+    it('shows no accept / reject on the text a comment is on, which its card resolves', () => {
+      const doc = 'see {==this part==}{>>on the text<<} and {==plain==} end';
+      const { view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('this part') + 2);
+      cleanup = c;
+      expect(view.contentDOM.querySelector('.cm-criticmarkup-accept')).toBeNull();
+
+      view.dispatch({ selection: { anchor: doc.indexOf('plain') + 2 } });
+      expect(view.contentDOM.querySelector('.cm-criticmarkup-accept')).not.toBeNull();
+    });
+
+    it('leaves a highlight without a comment a plain highlight', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor('see {==this part==} end', 0);
+      cleanup = c;
+
+      expect(view.contentDOM.querySelector('.cm-highlight')?.textContent).toBe('this part');
+      expect(view.contentDOM.querySelector('.cm-comment-target')).toBeNull();
+    });
   });
 });

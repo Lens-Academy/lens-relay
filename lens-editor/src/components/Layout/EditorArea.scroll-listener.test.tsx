@@ -40,7 +40,18 @@ vi.mock('../../lib/ydoc-provider', () => {
 
 vi.mock('../DiscussionPanel', () => ({ ConnectedDiscussionPanel: () => null }));
 vi.mock('../DiscussionPanel/useHasDiscussion', () => ({ useHasDiscussion: () => false }));
-vi.mock('../Editor/extensions/harper', () => ({ harperLinter: [], updateHarperFolder: () => {} }));
+vi.mock('../Editor/extensions/harper', async () => {
+  const { StateField } = await import('@codemirror/state');
+  return {
+    harperLinter: [],
+    updateHarperFolder: () => {},
+    // The spellcheck setting EditorArea holds for the page menu
+    loadSpellcheckEnabled: () => true,
+    saveSpellcheckEnabled: () => {},
+    spellcheckEnabledField: StateField.define({ create: () => true, update: (on: boolean) => on }),
+    toggleSpellcheck: () => {},
+  };
+});
 
 beforeAll(() => {
   if (!globalThis.ResizeObserver) {

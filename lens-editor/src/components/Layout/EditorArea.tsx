@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { Fragment, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { EditorView } from '@codemirror/view';
@@ -7,22 +7,24 @@ import { useYDoc } from '../../lib/ydoc-provider';
 import * as Y from 'yjs';
 import { criticMarkupField, suggestionModeField } from '../Editor/extensions/criticmarkup';
 import { sourceReadOnlyCompartment } from '../Editor/extensions/livePreview';
+import { createLinkedDoc } from '../../lib/wikilink-create';
 import { SourceSuggestionBanner } from '../SourceSuggestionBanner/SourceSuggestionBanner';
 import { SyncedFileBanner } from '../SyncedFileBanner/SyncedFileBanner';
 import { parseThreads } from '../../lib/criticmarkup-parser';
 import { SyncStatus } from '../SyncStatus/SyncStatus';
 import { Editor } from '../Editor/Editor';
 import { DocumentTitle } from '../DocumentTitle';
-import { SourceModeToggle } from '../SourceModeToggle/SourceModeToggle';
+import { SourceModeChip, SourceModeToggle } from '../SourceModeToggle/SourceModeToggle';
 import { AuthorshipModeToggle } from '../AuthorshipModeToggle/AuthorshipModeToggle';
+import { useAuthorshipSettings } from '../AuthorshipModeToggle/useAuthorshipSettings';
 import { SpellcheckToggle } from '../SpellcheckToggle/SpellcheckToggle';
+import { useSpellcheckSetting } from '../SpellcheckToggle/useSpellcheckSetting';
 import { ListenButton } from '../ReadAloud/ListenButton';
 import { ReadAloudBar } from '../ReadAloud/ReadAloudBar';
 import { getReadAloud } from '../Editor/extensions/readAloud';
 import { SuggestionModeToggle } from '../SuggestionModeToggle/SuggestionModeToggle';
 import { PresencePanel } from '../PresencePanel/PresencePanel';
-import { OverflowMenu } from '../OverflowMenu';
-import { TableOfContents } from '../TableOfContents';
+import { TableOfContents, PageOutline } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
 import { ConceptRowsPanel, panelHostField, setPanelHost } from '../ConceptRowsPanel';
 import { JevCheckPanel } from '../JevCheckPanel/JevCheckPanel';
@@ -34,6 +36,8 @@ import { PanelErrorBoundary } from '../PanelErrorBoundary';
 import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { pinInsertKey, useThreadsFromYText } from '../Comments/criticmarkupAdapter';
+import { commentTarget } from '../Comments/commentTarget';
+import type { ThreadView } from '../Comments/types';
 import { useScrollSource } from '../Comments/useScrollSource';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { PanelDebugOverlay } from '../PanelDebugOverlay';
@@ -59,7 +63,6 @@ import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
 import { getPromotionStatus, type PromotionStatusResponse } from '../../lib/promotion-api';
 import { editorPathToPromotionPath } from '../../lib/promotion-paths';
-import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
 import { RELAY_ID, PANEL_CONFIG } from '../../App';
 import { EDU_FOLDER_ID } from '../../lib/constants';
 
@@ -110,7 +113,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const routerLocation = useLocation();
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
-  const { metadata, onNavigate, folderDocs } = useNavigation();
+  const { metadata, onNavigate, folderDocs, folderNames } = useNavigation();
   const { canWrite, canEdit, canPromote, folderUuid, isAllFolders } = useAuth();
   const { manager, headerStage } = useSidebar();
   const { isMobile, activeDrawer, openDrawer, closeDrawer, toggleDrawer, editorFocused, setEditorFocused, setDocPanelsAvailable, setDiscussionAvailable } = useMobile();
@@ -166,24 +169,38 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
   // Thread data and mutation callbacks from the criticmarkup adapter.
   const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous', canEdit);
+  // A link to a thread's place: the page with ?pos= (its UTF-8 offset), which
+  // puts the cursor there when opened
+  const copyCommentLink = useCallback((thread: ThreadView) => {
+    const offset = new TextEncoder().encode(yText.toString().slice(0, Number(thread.key))).length;
+    void navigator.clipboard?.writeText(`${window.location.origin}${window.location.pathname}?pos=${offset}`);
+  }, [yText]);
+  // An opened card stands by its text, so the text comes up a quarter of the
+  // way down the page when it is off screen or low on it (Notion scrolls to
+  // it); the card and its reply bar would otherwise be out of sight
+  const scrollToThread = useCallback((key: string | null) => {
+    if (key == null || !editorView) return;
+    const pos = Math.min(Number(key), editorView.state.doc.length);
+    const page = editorView.scrollDOM.getBoundingClientRect();
+    const at = editorView.coordsAtPos(pos);
+    if (at && at.top >= page.top && at.bottom <= page.top + page.height * 0.6) return;
+    editorView.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: page.height / 4 }) });
+  }, [editorView]);
+  // Those who may edit resolve comments (the card's tick); anyone copies a link
+  const commentActions = useMemo(
+    () => ({ onCopyLink: copyCommentLink, ...(canEdit && { onResolve: callbacks.onResolve }) }),
+    [canEdit, callbacks, copyCommentLink],
+  );
 
   // ScrollSource wrapping the editor's scroll container. Pass the live element
   // (not the ref) so the hook re-attaches when editorView arrives.
   const scrollSource = useScrollSource(editorView ? (editorView.scrollDOM as HTMLElement) : null);
-  // The title shrinks to one small line once the document is scrolled away from its top, so it
-  // stops taking a fifth of a phone screen (Lauren, 2026-10-25).
-  const [scrolledDown, setScrolledDown] = useState(false);
-  // Compact only when the document scrolls further than the title would give back, and expand
-  // only at the very top: compacting grows the scroller, so without both a short document
-  // flipped between the two at its end (Assay, #195).
-  useEffect(() => scrollSource.subscribe(() => {
-    const top = scrollSource.getScrollTop();
-    const range = scrollSource.getScrollHeight() - scrollSource.getClientHeight();
-    setScrolledDown((was) => (top > 8 && range > 80 ? true : top <= 0 ? false : was));
-  }), [scrollSource]);
 
   const [synced, setSynced] = useState(false);
   const [isSourceMode, setIsSourceMode] = useState(false);
+  // Settings in the page menu, held here so each new editor gets them
+  const spellcheck = useSpellcheckSetting(editorView);
+  const authorship = useAuthorshipSettings(editorView);
   const [isSuggestionMode, setIsSuggestionMode] = useState(readSuggestionMode);
   const handleSuggestionModeChange = useCallback((next: boolean) => {
     setIsSuggestionMode(next);
@@ -275,21 +292,29 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     return folderName ? (folderDocsRef.current.get(folderName) ?? null) : null;
   }, []);
 
-  // The Concepts panel, for the files the concept-row rules name, and the
-  // concept graph header, for concept files: rendered into a block widget at
-  // the top of the document so they scroll with it (graph first if both).
-  const [conceptPanelHost] = useState(() => document.createElement('div'));
+  const folderNamesRef = useRef(folderNames);
+  folderNamesRef.current = folderNames;
+  const createLinkedDocInFolder = useCallback(
+    (target: Parameters<typeof createLinkedDoc>[0]) =>
+      createLinkedDoc(target, folderDocsRef.current, folderNamesRef.current),
+    [],
+  );
+
+  // The page header (icon and title), then the Concepts panel, for the files
+  // the concept-row rules name, and the concept graph header, for concept
+  // files: rendered into a block widget at the top of the document so they
+  // scroll with it, as Notion's page header does (graph first if both).
+  const [pageTopHost] = useState(() => document.createElement('div'));
   const showConceptPanel = matchRule(currentFilePath) !== null;
   const showConceptGraph = isConceptPath(currentFilePath);
   const showJevCheck = isCheckPath(currentFilePath);
-  const showPanelHost = showConceptPanel || showConceptGraph || showJevCheck;
   useEffect(() => {
     if (!editorView) return;
     if (editorView.state.field(panelHostField, false) === undefined) {
       editorView.dispatch({ effects: StateEffect.appendConfig.of(panelHostField) });
     }
-    editorView.dispatch({ effects: setPanelHost.of(showPanelHost ? conceptPanelHost : null) });
-  }, [editorView, showPanelHost, conceptPanelHost]);
+    editorView.dispatch({ effects: setPanelHost.of(pageTopHost) });
+  }, [editorView, pageTopHost]);
 
   // Callback to receive view reference from Editor
   const handleEditorReady = useCallback((view: EditorView) => {
@@ -313,18 +338,24 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const commentsLayerRef = useRef<CommentsLayerHandle | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   editorViewRef.current = editorView;
+  // A new comment's place, pinned when its form opens: the selected text,
+  // which the comment highlights, or the cursor (Comments/commentTarget.ts)
+  const pinCommentTarget = useCallback((view: EditorView) => {
+    const target = commentTarget(view.state);
+    return pinInsertKey(yText, String(target.to), target.from < target.to ? target.from : undefined);
+  }, [yText]);
   const handleRequestAddComment = useCallback(() => {
     if (isMobile) {
       const view = editorViewRef.current;
       if (!view) return;
       commentSheetEpochRef.current++;
-      setPendingCommentAction({ type: 'add', key: pinInsertKey(yText, String(view.state.selection.main.head)) });
+      setPendingCommentAction({ type: 'add', key: pinCommentTarget(view) });
       openDrawer('comments');
       return;
     }
     manager.expand('comment-margin');
     commentsLayerRef.current?.openAddForm();
-  }, [manager.expand, isMobile, openDrawer]);
+  }, [manager.expand, isMobile, openDrawer, pinCommentTarget]);
 
   // Track suggestion mode from editor state
   useEffect(() => {
@@ -351,15 +382,20 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     });
   }, [editorView, isSourceMode, isSuggestionMode]);
 
-  const handleCommentClick = useCallback((absFrom: number) => {
+  const handleCommentClick = useCallback((absFrom: number, opts?: { fromText?: boolean }) => {
     if (isMobile) {
+      // A tap on commented text is for editing it; its badge opens the thread
+      if (opts?.fromText) return;
       commentSheetEpochRef.current++;
       setPendingCommentAction({ type: 'focus', key: String(absFrom) });
       openDrawer('comments');
       return;
     }
     manager.expand('comment-margin');
-    commentsLayerRef.current?.toggleFocus(String(absFrom));
+    // A click in commented text opens its thread (it also places the cursor);
+    // the badge toggles it
+    if (opts?.fromText) commentsLayerRef.current?.focusThread(String(absFrom));
+    else commentsLayerRef.current?.toggleFocus(String(absFrom));
   }, [manager.expand, isMobile, openDrawer]);
 
   // Track editor focus on mobile — drives the nav-bar ↔ edit-toolbar swap.
@@ -436,27 +472,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + hash);
   }, [synced, editorView, routerLocation]);
 
-  // Auto-split ToC/Backlinks vertical split inside right sidebar
-  const sidebarContainerRef = useRef<HTMLDivElement>(null);
-  const tocScrollRef = useRef<HTMLDivElement>(null);
-  const blScrollRef = useRef<HTMLDivElement>(null);
-  const [userOverride, setUserOverride] = useState<number | null>(null);
-
-  // Reset override when document changes
-  useEffect(() => setUserOverride(null), [currentDocId]);
-
-  const { topHeight: tocHeight, bottomHeight: blHeight } = useAutoSplitHeight({
-    containerRef: sidebarContainerRef,
-    topRef: tocScrollRef,
-    bottomRef: blScrollRef,
-    handleHeight: 9,
-    minHeight: 80,
-    userOverride,
-  });
-
   // Portal targets in the global header
   const breadcrumbTarget = document.getElementById('header-breadcrumb');
   const portalTarget = document.getElementById('header-controls');
+  const menuTarget = document.getElementById('header-menu');
   const discussionToggleTarget = document.getElementById('header-discussion-toggle');
   const rightCollapsed = manager.collapsedState['right-sidebar'] ?? false;
   const commentMarginCollapsed = manager.collapsedState['comment-margin'] ?? false;
@@ -469,73 +488,76 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         const segments = pathToSegments(currentFilePath);
         if (segments.length === 0) return null;
         return createPortal(
-          // Folders keep their names; a long file name is cut with an ellipsis
-          // (full path in the tooltip) instead of running under the controls.
-          <span className="flex min-w-0 text-sm text-gray-600" title={segments.join(' › ')}>
+          // Notion's breadcrumb: each folder and the page, "/" between them;
+          // long names are cut with an ellipsis (full path in the tooltip)
+          // instead of running under the controls.
+          <nav className="lens-breadcrumb" aria-label="Breadcrumb" title={segments.join(' / ')}>
             {segments.map((seg, i) => (
-              <span key={i} className={i === segments.length - 1 ? 'min-w-0 truncate' : 'shrink-0 whitespace-nowrap'}>
-                {i > 0 && <span className="mx-0.5">›</span>}
-                {seg}
-              </span>
+              <Fragment key={i}>
+                {i > 0 && <span className="lens-crumb-separator" aria-hidden="true">/</span>}
+                <span className="lens-crumb">
+                  <span className="lens-crumb-name">{seg}</span>
+                </span>
+              </Fragment>
             ))}
-          </span>,
+          </nav>,
           breadcrumbTarget
         );
       })()}
-      {/* Portal editor controls into global header */}
+      {/* The page's controls in the top bar, after Notion's: whether it is
+          saved, who is here, the editing mode and Listen. The comments and
+          panel buttons follow (App.tsx), then the page menu. */}
       {portalTarget && createPortal(
         <>
           {/* <PanelDebugOverlay config={PANEL_CONFIG} manager={manager} /> */}
-          {headerStage === 'overflow' ? (
-            <OverflowMenu>
-              <SuggestionModeToggle view={editorView} iconOnly isSuggestionMode={isSuggestionMode} onSuggestionModeChange={handleSuggestionModeChange} />
-              <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
-              <AuthorshipModeToggle view={editorView} />
-              <SpellcheckToggle view={editorView} />
-              <ListenButton engine={readAloudEngine} onStart={startReadAloud} />
-              {promotionFilePath && (
-                <PromotionStatus
-                  filePath={promotionFilePath}
-                  canPromote={canPromote}
-                  status={promotionStatus}
-                  loading={promotionLoading}
-                  error={promotionError}
-                  onRefresh={refreshPromotionStatus}
-                  onPromoteFile={openPromoteDialog}
-                  onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(promotionFilePath)}`)}
-                />
-              )}
-              <WorkflowMenu />
-              <PresencePanel />
-              <SyncStatus />
-            </OverflowMenu>
-          ) : (
-            <>
-              {/* <DebugYMapPanel /> */}
-              <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} isSuggestionMode={isSuggestionMode} onSuggestionModeChange={handleSuggestionModeChange} />
-              <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
-              <AuthorshipModeToggle view={editorView} />
-              <SpellcheckToggle view={editorView} iconOnly={headerStage !== 'full'} />
-              <ListenButton engine={readAloudEngine} onStart={startReadAloud} />
-              {promotionFilePath && (
-                <PromotionStatus
-                  filePath={promotionFilePath}
-                  canPromote={canPromote}
-                  status={promotionStatus}
-                  loading={promotionLoading}
-                  error={promotionError}
-                  onRefresh={refreshPromotionStatus}
-                  onPromoteFile={openPromoteDialog}
-                  onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(promotionFilePath)}`)}
-                />
-              )}
-              <WorkflowMenu />
-              <PresencePanel />
-              <SyncStatus />
-            </>
+          {/* <DebugYMapPanel /> */}
+          {isSourceMode && <SourceModeChip editorView={editorView} onSourceModeChange={setIsSourceMode} />}
+          {promotionFilePath && headerStage !== 'overflow' && (
+            <PromotionStatus
+              filePath={promotionFilePath}
+              canPromote={canPromote}
+              status={promotionStatus}
+              loading={promotionLoading}
+              error={promotionError}
+              onRefresh={refreshPromotionStatus}
+              onPromoteFile={openPromoteDialog}
+              onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(promotionFilePath)}`)}
+            />
           )}
+          <SyncStatus />
+          {headerStage !== 'overflow' && <PresencePanel />}
+          <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} isSuggestionMode={isSuggestionMode} onSuggestionModeChange={handleSuggestionModeChange} />
+          <ListenButton engine={readAloudEngine} onStart={startReadAloud} />
         </>,
         portalTarget
+      )}
+      {/* Notion's page menu (•••): this page's settings, then the workflows
+          and appearance. On a narrow bar it also takes who is here and the
+          production status. */}
+      {menuTarget && createPortal(
+        <WorkflowMenu>
+          {headerStage === 'overflow' && (
+            <div className="lens-menu-presence">
+              <PresencePanel />
+              {promotionFilePath && (
+                <PromotionStatus
+                  filePath={promotionFilePath}
+                  canPromote={canPromote}
+                  status={promotionStatus}
+                  loading={promotionLoading}
+                  error={promotionError}
+                  onRefresh={refreshPromotionStatus}
+                  onPromoteFile={openPromoteDialog}
+                  onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(promotionFilePath)}`)}
+                />
+              )}
+            </div>
+          )}
+          <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
+          <SpellcheckToggle setting={spellcheck} disabled={!editorView} />
+          <AuthorshipModeToggle settings={authorship} disabled={!editorView} />
+        </WorkflowMenu>,
+        menuTarget
       )}
       {/* Portal Discord toggle into global header — only when doc has discussion */}
       {discussionToggleTarget && hasDiscussion && createPortal(
@@ -554,15 +576,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       <div id="editor-area" className="flex-1 flex min-h-0">
         {/* Editor fills remaining space */}
         <div id="editor" className="flex-1 flex flex-col min-w-0 bg-white" style={{ minWidth: 250 }}>
-          <div className="max-w-[700px] mx-auto w-full">
-            <div className={`px-6 pb-1 transition-[padding] ${scrolledDown ? 'pt-1' : 'pt-5'}`}>
-              <DocumentTitle currentDocId={currentDocId} compact={scrolledDown} />
-            </div>
-            <div className="mx-6 border-b border-gray-200" />
-          </div>
           <SyncedFileBanner />
-          {showPanelHost && createPortal(
+          {createPortal(
             <>
+              <DocumentTitle currentDocId={currentDocId} />
               {showJevCheck && (
                 <PanelErrorBoundary name="Jev check workbench" resetKey={currentDocId}>
                   <JevCheckPanel ytext={yText} />
@@ -579,13 +596,15 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
                 </PanelErrorBoundary>
               )}
             </>,
-            conceptPanelHost,
+            pageTopHost,
           )}
           {isSourceMode && isSuggestionMode && (
             <SourceSuggestionBanner />
           )}
-          <div className="flex-1 min-h-0 relative">
+          <div className="lens-page-area flex-1 min-h-0 relative">
             <ReadAloudBar engine={readAloudEngine} />
+            {/* Notion's table of contents: dashes at the page's right edge */}
+            {!isMobile && <PageOutline view={editorView} stateVersion={stateVersion} docId={currentDocId} />}
             <Editor
               readOnly={!canWrite}
               canAcceptReject={canEdit}
@@ -598,6 +617,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               metadata={metadata}
               currentFilePath={currentFilePath}
               getFolderDoc={getFolderDoc}
+              folderNames={folderNames}
+              createLinkedDoc={createLinkedDocInFolder}
               initialSuggestionMode={isSuggestionMode}
             />
           </div>
@@ -614,7 +635,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         />
         <div
           id="comment-margin"
-          className={`overflow-hidden flex-shrink-0 relative ${commentMarginCollapsed ? '' : 'border-l border-gray-100 bg-gray-50/50'}`}
+          className="overflow-hidden flex-shrink-0 relative"
           style={{ width: commentMarginCollapsed ? 0 : Math.max(320, manager.getWidth('comment-margin')) }}
         >
           {editorView && (
@@ -629,7 +650,11 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onEdit={callbacks.onEdit}
               onDelete={callbacks.onDelete}
               onAddComment={callbacks.onAddComment}
-              getInsertKey={editorView ? () => pinInsertKey(yText, String(editorView.state.selection.main.head)) : undefined}
+              getInsertKey={editorView ? () => pinCommentTarget(editorView) : undefined}
+              actions={commentActions}
+              numbered={false}
+              onReact={canWrite ? callbacks.onReact : undefined}
+              onFocusChange={scrollToThread}
             />
           )}
         </div>
@@ -643,24 +668,13 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         />
         <div
           id="right-sidebar"
-          className="overflow-hidden flex-shrink-0 bg-[#f6f6f6] flex flex-col"
+          className="overflow-hidden flex-shrink-0 bg-[var(--lens-sidebar-bg)] flex flex-col"
           style={{ width: rightCollapsed ? 0 : manager.getWidth('right-sidebar') }}
         >
-          {/* The outline/backlinks split measures this box, which the
-              content status panel below leaves room for. */}
-          <div ref={sidebarContainerRef} className="flex-1 min-h-0 flex flex-col">
-            <div ref={tocScrollRef} style={{ height: tocHeight, flexShrink: 0 }} className="overflow-y-auto">
-              <TableOfContents view={editorView} stateVersion={stateVersion} />
-            </div>
-            <ResizeHandle
-              orientation="horizontal"
-              onDragStart={() => tocHeight}
-              onDrag={(size) => setUserOverride(Math.max(50, size))}
-              onDoubleClick={() => setUserOverride(null)}
-            />
-            <div ref={blScrollRef} style={{ height: blHeight, flexShrink: 0 }} className="overflow-y-auto">
-              <BacklinksPanel currentDocId={currentDocId} />
-            </div>
+          {/* Backlinks (the table of contents is on the page), above the
+              content status panel */}
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <BacklinksPanel currentDocId={currentDocId} />
           </div>
           {/* Not mounted while collapsed, so it does not keep asking the platform. */}
           {!rightCollapsed && (
@@ -711,7 +725,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onEdit={callbacks.onEdit}
               onDelete={callbacks.onDelete}
               onAddComment={canWrite ? callbacks.onAddComment : undefined}
-              getInsertKey={editorView && canWrite ? () => pinInsertKey(yText, String(editorView.state.selection.main.head)) : undefined}
+              getInsertKey={editorView && canWrite ? () => pinCommentTarget(editorView) : undefined}
+              actions={commentActions}
+              numbered={false}
+              onReact={canWrite ? callbacks.onReact : undefined}
             />
           </MobileDrawer>
 
@@ -721,8 +738,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             side="right"
             label="Outline and backlinks"
           >
-            {/* Bubble-phase: heading taps close the drawer; TOC fold chevrons
-                stopPropagation so they keep it open. */}
+            {/* Bubble-phase: a heading tap goes to it and closes the drawer */}
             <div onClick={(e) => { if ((e.target as HTMLElement).closest('li')) closeDrawer(); }}>
               <TableOfContents view={editorView} stateVersion={stateVersion} />
             </div>

@@ -87,7 +87,7 @@ export function MobileDrawer({ open, onClose, side, label, children }: MobileDra
 
   if (!mounted) return null;
 
-  const panelBase = 'fixed z-50 bg-[#f6f6f6] shadow-xl transition-transform duration-200 ease-out flex flex-col';
+  const panelBase = 'fixed z-50 bg-[var(--lens-sidebar-bg)] shadow-xl transition-transform duration-200 ease-out flex flex-col';
   const panelBySide = {
     left: `inset-y-0 left-0 w-[85vw] max-w-[320px] ${shown ? 'translate-x-0' : '-translate-x-full'}`,
     right: `inset-y-0 right-0 w-[85vw] max-w-[320px] ${shown ? 'translate-x-0' : 'translate-x-full'}`,

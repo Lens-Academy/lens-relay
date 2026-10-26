@@ -29,6 +29,23 @@ function renderMenu(initialEntry = '/') {
 describe('WorkflowMenu', () => {
   afterEach(() => {
     cleanup();
+    localStorage.removeItem('lens-theme');
+    document.documentElement.removeAttribute('data-theme');
+  });
+
+  it('switches between Light, Dark and the system setting, and remembers it', async () => {
+    const user = userEvent.setup();
+    renderMenu();
+    await user.click(screen.getByRole('button', { name: /open workflows menu/i }));
+
+    await user.click(screen.getByRole('menuitemradio', { name: 'Dark' }));
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(localStorage.getItem('lens-theme')).toBe('dark');
+    expect(screen.getByRole('menuitemradio', { name: 'Dark' })).toHaveAttribute('aria-checked', 'true');
+
+    await user.click(screen.getByRole('menuitemradio', { name: 'Light' }));
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(screen.getByRole('menuitemradio', { name: 'Use system setting' })).toHaveAttribute('aria-checked', 'false');
   });
 
   it('opens workflow links from the top menu', async () => {
@@ -87,7 +104,7 @@ describe('WorkflowMenu', () => {
       </AuthProvider>
     );
     await user.click(screen.getByRole('button', { name: /open workflows menu/i }));
-    return screen.getAllByRole('menuitem').map(item => item.querySelector('.font-medium')?.textContent);
+    return screen.getAllByRole('menuitem').map(item => item.querySelector('.lens-menu-item-label')?.textContent);
   }
 
   it('offers view and suggest links only the pages they can use', async () => {

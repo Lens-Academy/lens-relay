@@ -1,7 +1,6 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { EditorView } from '@codemirror/view';
-import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
-import { StateEffect } from '@codemirror/state';
+import { forceParsing, syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
 import { flashHeadingLine } from '../Editor/extensions/headingFlash';
 import type { EditorState } from '@codemirror/state';
 
@@ -26,8 +25,26 @@ const HEADING_TYPES: Record<string, number> = {
 };
 
 /**
- * Extract headings from CodeMirror editor state.
- * Iterates syntax tree to find ATXHeading nodes.
+ * A heading's text as it reads: without its markdown (emphasis, code, links
+ * and wikilinks, highlights and suggestions)
+ */
+export function plainHeadingText(text: string): string {
+  return text
+    .replace(/\{>>[\s\S]*?<<\}|\{--[\s\S]*?--\}/g, '')
+    .replace(/\{~~[\s\S]*?~>([\s\S]*?)~~\}/g, '$1')
+    .replace(/\{(\+\+|==)([\s\S]*?)(\+\+|==)\}/g, '$2')
+    .replace(/!?\[\[([^\]|]*?)(?:\|([^\]]*))?\]\]/g, (_, target: string, alias?: string) => alias ?? target.split('/').pop()!.replace(/#.*/, ''))
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__|~~|==|`)/g, '')
+    .replace(/(^|\W)[*_](?=\S)(.+?)(?<=\S)[*_](?=\W|$)/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Extract headings from CodeMirror editor state: the page's own ATX
+ * headings, not those inside lists or quotes (a "- ##### Label" item), as
+ * Notion's table of contents lists its heading blocks.
  */
 export function extractHeadings(state: EditorState): Heading[] {
   const headings: Heading[] = [];
@@ -36,7 +53,7 @@ export function extractHeadings(state: EditorState): Heading[] {
   tree.iterate({
     enter(node) {
       const level = HEADING_TYPES[node.name];
-      if (level !== undefined) {
+      if (level !== undefined && node.node.parent?.name === 'Document') {
         // Skip HeaderMark (# characters) to get just the text
         let textFrom = node.from;
 
@@ -56,7 +73,7 @@ export function extractHeadings(state: EditorState): Heading[] {
           } while (cursor.nextSibling());
         }
 
-        const text = state.doc.sliceString(textFrom, node.to).trim();
+        const text = plainHeadingText(state.doc.sliceString(textFrom, node.to));
         if (text) {
           headings.push({
             level,
@@ -177,26 +194,111 @@ export function useHeadings(view: EditorView | null): Heading[] {
   return headings;
 }
 
+/** Where a heading goes when picked: this far below the top of the page */
+const HEADING_TOP_MARGIN = 48;
+
 /**
- * Scroll to a heading position in the editor.
+ * How long the heading is held in place after the glide: what was drawn on
+ * the way (images, tables, embeds) can change size as it loads, which would
+ * otherwise carry the heading off
+ */
+const HOLD_MS = 1200;
+
+/** A glide still under way, by editor, so a new pick or the reader's own scroll stops it */
+const glides = new WeakMap<EditorView, () => void>();
+
+/**
+ * The scrollTop that puts `pos` HEADING_TOP_MARGIN below the top of the page,
+ * from where CodeMirror places it now. Lines far off screen are placed by an
+ * estimate that firms up as they are drawn, so this is asked again each frame.
+ */
+function headingScrollTop(view: EditorView, pos: number, clamp = true): number {
+  const scroller = view.scrollDOM;
+  const top = view.documentTop + view.lineBlockAt(pos).top - scroller.getBoundingClientRect().top;
+  const max = scroller.scrollHeight - scroller.clientHeight;
+  const goal = scroller.scrollTop + top - HEADING_TOP_MARGIN;
+  return clamp ? Math.max(0, Math.min(max, goal)) : goal;
+}
+
+/**
+ * Glide the page to `pos` in about 0.25-0.5s, aiming each frame at where the
+ * heading is now, then hold it there while what is around it is measured and
+ * loads. Not the browser's smooth scroll: CodeMirror corrects scrollTop as it
+ * measures lines, which stopped a smooth scroll short, most of all going up
+ * the page. The reader scrolling, clicking or typing takes over.
+ */
+function glideTo(view: EditorView, pos: number) {
+  glides.get(view)?.();
+  const scroller = view.scrollDOM;
+  const from = scroller.scrollTop;
+  const distance = Math.abs(headingScrollTop(view, pos) - from);
+  const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const duration = reduced ? 0 : Math.min(500, 250 + distance / 8);
+  const start = performance.now();
+  let frame = 0;
+  let rescued = false;
+
+  const takeover = ['wheel', 'touchstart', 'mousedown', 'keydown'] as const;
+  const stop = () => {
+    cancelAnimationFrame(frame);
+    for (const type of takeover) scroller.removeEventListener(type, stop);
+    if (glides.get(view) === stop) glides.delete(view);
+  };
+  for (const type of takeover) scroller.addEventListener(type, stop, { passive: true });
+  glides.set(view, stop);
+
+  const step = (now: number) => {
+    const t = duration > 0 ? Math.min(1, (now - start) / duration) : 1;
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+    const goal = headingScrollTop(view, pos);
+    if (t < 1) {
+      scroller.scrollTop = from + (goal - from) * eased;
+    } else {
+      // There: hold the heading in place, measuring each frame, as the page
+      // may be taller than estimated (the glide can reach the estimated
+      // bottom with the heading still below) and what loads may move it
+      view.requestMeasure();
+      // The page drawn shorter than CodeMirror's own measure of it (it can
+      // give up measuring around lines it hides, such as a long comment's),
+      // so the heading is out of reach: CodeMirror's own scroll draws the
+      // region it goes to first. Once.
+      if (!rescued && headingScrollTop(view, pos, false) > scroller.scrollHeight - scroller.clientHeight + 2) {
+        rescued = true;
+        view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: HEADING_TOP_MARGIN }) });
+      } else if (Math.abs(scroller.scrollTop - goal) > 1) {
+        scroller.scrollTop = goal;
+      }
+      if (now - start > duration + HOLD_MS) {
+        stop();
+        return;
+      }
+    }
+    frame = requestAnimationFrame(step);
+  };
+  frame = requestAnimationFrame(step);
+}
+
+/**
+ * Scroll to a heading position in the editor: the heading near the top of
+ * the page, as Notion's table of contents scrolls. The heading is found again
+ * in the page as it is now (by its level and text, the nearest to where it
+ * was), in case the page changed since the outline was drawn.
  */
 export function scrollToHeading(view: EditorView, heading: Heading) {
-  const scrollDOM = view.scrollDOM;
-  scrollDOM.style.scrollBehavior = 'smooth';
+  const now = extractHeadings(view.state)
+    .filter((h) => h.level === heading.level && h.text === heading.text)
+    .sort((a, b) => Math.abs(a.from - heading.from) - Math.abs(b.from - heading.from))[0];
+  const pos = Math.min(now?.from ?? heading.from, view.state.doc.length);
+  // Parsed to past the heading first: lines still unparsed get their heading
+  // sizes later, and the heading would move after the glide
+  forceParsing(view, Math.min(view.state.doc.length, pos + 2000), 200);
 
   view.dispatch({
-    selection: { anchor: heading.from },
-    effects: [
-      EditorView.scrollIntoView(heading.from, { y: 'center' }),
-      flashHeadingLine.of(heading.from),
-    ],
+    selection: { anchor: pos },
+    effects: flashHeadingLine.of(pos),
   });
-
-  setTimeout(() => {
-    scrollDOM.style.scrollBehavior = '';
-  }, 300);
-
   view.focus();
+  glideTo(view, pos);
 }
 
 /**
@@ -227,82 +329,75 @@ export function normalizeHeadingLevels(headings: Heading[]): NormalizedHeading[]
 }
 
 /**
- * Hook that tracks which heading the cursor is under.
- * Finds the last heading at or before the cursor position.
- * Returns the index of the active heading (or -1 if none).
+ * Levels by heading type: the page's highest heading level is 1, the next 2,
+ * and so on, so every H3 on a page looks alike (the page outline's dashes),
+ * whatever heading it follows.
  */
-/**
- * Cursor listeners per editor view. Each view gets one update listener,
- * installed on first use, that calls the hooks mounted on it; mounting and
- * unmounting a hook (the mobile outline drawer remounts on every open) only
- * changes this set. Reinstalling the listener whenever the headings changed
- * dispatched a transaction after every edit, other people's included, and
- * that transaction made CodeMirror lose its scroll anchor: text added above
- * the viewport pushed the page down.
- */
-const selectionListeners = new WeakMap<EditorView, Set<() => void>>();
-
-function onSelectionChange(view: EditorView, callback: () => void): () => void {
-  let callbacks = selectionListeners.get(view);
-  if (!callbacks) {
-    const set = new Set<() => void>();
-    callbacks = set;
-    selectionListeners.set(view, set);
-    view.dispatch({
-      effects: StateEffect.appendConfig.of(EditorView.updateListener.of((update) => {
-        if (update.selectionSet) set.forEach((fn) => fn());
-      })),
-    });
-  }
-  callbacks.add(callback);
-  return () => callbacks.delete(callback);
+export function rankHeadingLevels(headings: Heading[]): NormalizedHeading[] {
+  const top = Math.min(...headings.map((heading) => heading.level));
+  return headings.map((heading) => ({ ...heading, displayLevel: heading.level - top + 1 }));
 }
 
-export function useActiveHeading(view: EditorView | null, headings: Heading[]): number {
-  const [activeIndex, setActiveIndex] = useState(-1);
+/**
+ * The heading of the section being read: the last one whose top is at or
+ * above `probe` (a line near the top of the page), else the first. `tops`
+ * are the headings' tops, in the same coordinates as `probe`.
+ */
+export function headingInView(tops: number[], probe: number): number {
+  let active = tops.length > 0 ? 0 : -1;
+  tops.forEach((top, i) => {
+    if (top <= probe) active = i;
+  });
+  return active;
+}
 
-  const updateActive = useCallback(() => {
-    if (!view || headings.length === 0) {
-      setActiveIndex(-1);
-      return;
-    }
-
-    const cursorPos = view.state.selection.main.head;
-    let active = -1;
-
-    // Find the last heading at or before the cursor position
-    for (let i = 0; i < headings.length; i++) {
-      if (headings[i].from <= cursorPos) {
-        active = i;
-      } else {
-        break;
-      }
-    }
-
-    // If cursor is before the first heading, highlight the first one
-    if (active === -1 && headings.length > 0) {
-      active = 0;
-    }
-
-    setActiveIndex(active);
-  }, [view, headings]);
-
-  // Recomputed when the headings change, and on cursor moves through the
-  // per-view listener, which reads the latest updateActive from the ref.
-  const updateActiveRef = useRef(updateActive);
-
+/**
+ * The index of the heading whose section is in view, which Notion's table
+ * of contents marks: it follows scrolling, and edits that move the
+ * headings. It only reads the layout. Dispatching here (a cursor listener
+ * did) made CodeMirror lose its scroll anchor, so text added above the
+ * viewport pushed the page down.
+ */
+export function useHeadingInView(view: EditorView | null, headings: Heading[]): number {
+  const [active, setActive] = useState(-1);
+  const headingsRef = useRef(headings);
   useLayoutEffect(() => {
-    updateActiveRef.current = updateActive;
-  }, [updateActive]);
-
-  useEffect(() => {
-    updateActive();
-  }, [updateActive]);
+    headingsRef.current = headings;
+  });
+  const positions = headings.map((h) => h.from).join(',');
 
   useEffect(() => {
     if (!view) return;
-    return onSelectionChange(view, () => updateActiveRef.current());
-  }, [view]);
+    const scroller = view.scrollDOM;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const list = headingsRef.current;
+      if (list.length === 0 || !view.dom.isConnected) {
+        setActive(-1);
+        return;
+      }
+      const rect = scroller.getBoundingClientRect();
+      // A quarter of the way down the page; at the end of the page, its
+      // bottom, so the last sections can be marked too
+      const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+      const probe = atEnd ? rect.bottom : rect.top + scroller.clientHeight / 4;
+      const docTop = view.documentTop;
+      const end = view.state.doc.length;
+      setActive(headingInView(list.map((h) => docTop + view.lineBlockAt(Math.min(h.from, end)).top), probe));
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    schedule();
+    scroller.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    return () => {
+      scroller.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [view, positions]);
 
-  return activeIndex;
+  return active;
 }

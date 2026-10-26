@@ -12,13 +12,9 @@ import { useDocTabTitle, docDisplayName } from '../hooks/useDocTabTitle';
 
 interface DocumentTitleProps {
   currentDocId: string;
-  /** One small line (the document is scrolled down), unless the title is being edited. */
-  compact?: boolean;
 }
 
-export function DocumentTitle({ currentDocId, compact: scrolled = false }: DocumentTitleProps) {
-  const [editing, setEditing] = useState(false);
-  const compact = scrolled && !editing;
+export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
   const { metadata, folderNames, justCreatedRef } = useNavigation();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const cancelledRef = useRef(false);
@@ -56,18 +52,25 @@ export function DocumentTitle({ currentDocId, compact: scrolled = false }: Docum
     const observer = new ResizeObserver(fit);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [value, compact]);
+  }, [value]);
 
-  // Auto-focus and select when document was just created via instant-create
+  // Auto-focus and select when document was just created via instant-create.
+  // The title is in the editor's top widget (EditorArea), which can join the
+  // page a moment after this mounts: wait for it, up to 3 seconds.
   useEffect(() => {
     if (justCreatedRef.current && inputRef.current) {
       justCreatedRef.current = false;
-      setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.select();
+      const focusWhenShown = (tries: number) => {
+        const el = inputRef.current;
+        if (!el) return;
+        if (!el.isConnected && tries < 30) {
+          setTimeout(() => focusWhenShown(tries + 1), 100);
+          return;
         }
-      }, 100);
+        el.focus();
+        el.select();
+      };
+      setTimeout(() => focusWhenShown(0), 100);
     }
   }, [justCreatedRef, displayName]);
 
@@ -147,7 +150,9 @@ export function DocumentTitle({ currentDocId, compact: scrolled = false }: Docum
   if (!path) return null;
 
   return (
-    <div className="flex flex-col">
+    // The page header: the title, in the document (EditorArea), with
+    // Notion's space above it and below it (index.css)
+    <div className="lens-page-header flex flex-col">
       <div className="flex items-start gap-2">
         <textarea
           ref={inputRef}
@@ -155,25 +160,22 @@ export function DocumentTitle({ currentDocId, compact: scrolled = false }: Docum
           value={value}
           // A file name is one line: a pasted line break becomes a space.
           onChange={(e) => { setValue(e.target.value.replace(/[\r\n]+/g, ' ')); setRenameError(null); }}
-          onFocus={() => setEditing(true)}
-          onBlur={() => { setEditing(false); handleBlur(); }}
-          wrap={compact ? 'off' : 'soft'}
+          onBlur={handleBlur}
           onKeyDown={handleKeyDown}
           aria-label="Document name"
-          className={`flex-1 min-w-0 resize-none overflow-hidden font-bold leading-tight text-gray-900 bg-transparent
-                     border-none outline-none placeholder-gray-400 caret-gray-900 [overflow-wrap:anywhere]
-                     ${compact ? 'text-base text-ellipsis whitespace-nowrap' : 'text-3xl'}`}
+          className="lens-doc-title flex-1 min-w-0 resize-none overflow-hidden bg-transparent
+                     border-none outline-none placeholder-gray-400 caret-gray-900 [overflow-wrap:anywhere]"
           placeholder="Untitled"
           spellCheck={false}
         />
         {(eduEditorUrl || platformUrl) && (
-          <div className="flex-shrink-0 flex flex-col items-end gap-0.5 pt-1">
+          <div className="flex-shrink-0 flex flex-col items-end gap-0.5 pt-2">
             {platformUrl && (
               <a
                 href={platformUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-[11px] text-blue-500 hover:text-blue-700 hover:underline whitespace-nowrap"
+                className="lens-page-link"
               >
                 Show on Lensacademy.org
               </a>
@@ -183,7 +185,7 @@ export function DocumentTitle({ currentDocId, compact: scrolled = false }: Docum
                 href={eduEditorUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-[11px] text-blue-500 hover:text-blue-700 hover:underline whitespace-nowrap"
+                className="lens-page-link"
               >
                 Open in Course Editor
               </a>
