@@ -847,7 +847,7 @@ describe('livePreview - bullet lists', () => {
   });
 });
 
-describe('livePreview - block spacing (Notion\'s 16px between blocks)', () => {
+describe('livePreview - spacing: 16px for a blank line, none between lines in a row', () => {
   let cleanup: () => void;
 
   afterEach(() => {
@@ -878,14 +878,15 @@ describe('livePreview - block spacing (Notion\'s 16px between blocks)', () => {
     expect(apart.classList.contains('cm-heading-before-text')).toBe(false);
   });
 
-  it('marks the first and last lines of a list that touches text', () => {
-    const content = 'intro:\n- a\n- b\n\nend';
+  it('adds no space where a list touches text, or between lines of a paragraph', () => {
+    const content = 'intro:\n- a\n  - b\n    - c\nafter\nmore\n\nend';
     const { view, cleanup: c } = createTestEditor(content, content.length);
     cleanup = c;
 
     const classes = lineClasses(view);
-    expect(classes[1]).toContain('cm-list-after-text');
-    expect(classes[2]).not.toContain('cm-list-before-text');
+    // Only the blank line (the new paragraph) is marked for space
+    expect(classes.map((cls) => cls.includes('cm-blank-line'))).toEqual([false, false, false, false, false, false, true, false]);
+    expect(classes.join(' ')).not.toMatch(/cm-list-after-text|cm-list-before-text|cm-text-before-text/);
   });
 
   it('puts numbered list markers in their column', () => {
@@ -1549,28 +1550,47 @@ describe('livePreview - following a raw wikilink', () => {
   });
 });
 
-describe('livePreview - the gap after a line of a paragraph', () => {
+describe('livePreview - a new line from Enter', () => {
   let cleanup: () => void;
   afterEach(() => cleanup?.());
 
-  it('marks a short gapped line so CodeMirror does not take the page line height from it', () => {
-    const { view, cleanup: c } = createTestEditor('KR on alumni N\nA longer line of the same paragraph, over twenty.\nEnd\n\nAfter', 0);
+  const enter = (view: EditorView) => {
+    const at = view.state.selection.main.head;
+    view.dispatch({ changes: { from: at, insert: '\n' }, selection: { anchor: at + 1 }, userEvent: 'input' });
+  };
+  const lineClasses = (view: EditorView) =>
+    [...view.contentDOM.querySelectorAll('.cm-line')].map((l) => `${l.textContent}|${l.className}`);
+
+  it('is drawn as the line of text it will be, so typing moves nothing', () => {
+    const doc = 'Topics to see:\n\nBelow.';
+    const { view, cleanup: c } = createTestEditor(doc, 'Topics to see:'.length);
     cleanup = c;
-    // The short line has the gap and the mark; the long one only the gap
-    expect(getTextWithClass(view, 'cm-gap-text')).toEqual(['KR on alumni N']);
-    expect(countClass(view, 'cm-text-before-text')).toBe(2);
+    enter(view);
+    let lines = lineClasses(view);
+    // A full line, not a 16px blank line
+    expect(lines[1]).not.toContain('cm-blank-line');
+
+    view.dispatch({ changes: { from: view.state.selection.main.head, insert: 'hi' }, userEvent: 'input.type' });
+    lines = lineClasses(view);
+    expect(lines[1]).toMatch(/^hi\|/);
+    expect(lines[1]).not.toContain('cm-blank-line');
   });
 
-  it('gives the gap to the drawn line where a hidden comment joins two', () => {
-    const { view, cleanup: c } = createTestEditor(
-      'Before{>>first\nsecond<<} after\nNext line\n\nEnd',
-      0,
-      undefined,
-      [criticMarkupExtension()],
-    );
+  it('with text under it (Enter mid-paragraph or after a heading), is a full line too', () => {
+    const { view, cleanup: c } = createTestEditor('## Ideas\nTopics to see.', '## Ideas'.length);
     cleanup = c;
-    const gapped = [...view.contentDOM.querySelectorAll('.cm-text-before-text')].map((l) => l.textContent);
-    // The drawn line the comment joins takes the gap, as more of the paragraph follows
-    expect(gapped).toEqual(['Before1 after']);
+    enter(view);
+    const lines = lineClasses(view);
+    // The heading keeps its space below, as over text
+    expect(lines[0]).toContain('cm-heading-before-text');
+    expect(lines[1]).not.toContain('cm-blank-line');
+  });
+
+  it('leaves a blank line between paragraphs as it is when the cursor only passes it', () => {
+    const { view, cleanup: c } = createTestEditor('One.\n\nTwo.', 0);
+    cleanup = c;
+    moveCursor(view, 'One.\n'.length);
+    const lines = lineClasses(view);
+    expect(lines[1]).toContain('cm-blank-line');
   });
 });
