@@ -1548,3 +1548,29 @@ describe('livePreview - following a raw wikilink', () => {
     expect(onOpenNewTab).not.toHaveBeenCalled();
   });
 });
+
+describe('livePreview - the gap after a line of a paragraph', () => {
+  let cleanup: () => void;
+  afterEach(() => cleanup?.());
+
+  it('marks a short gapped line so CodeMirror does not take the page line height from it', () => {
+    const { view, cleanup: c } = createTestEditor('KR on alumni N\nA longer line of the same paragraph, over twenty.\nEnd\n\nAfter', 0);
+    cleanup = c;
+    // The short line has the gap and the mark; the long one only the gap
+    expect(getTextWithClass(view, 'cm-gap-text')).toEqual(['KR on alumni N']);
+    expect(countClass(view, 'cm-text-before-text')).toBe(2);
+  });
+
+  it('gives the gap to the drawn line where a hidden comment joins two', () => {
+    const { view, cleanup: c } = createTestEditor(
+      'Before{>>first\nsecond<<} after\nNext line\n\nEnd',
+      0,
+      undefined,
+      [criticMarkupExtension()],
+    );
+    cleanup = c;
+    const gapped = [...view.contentDOM.querySelectorAll('.cm-text-before-text')].map((l) => l.textContent);
+    // The drawn line the comment joins takes the gap, as more of the paragraph follows
+    expect(gapped).toEqual(['Before1 after']);
+  });
+});

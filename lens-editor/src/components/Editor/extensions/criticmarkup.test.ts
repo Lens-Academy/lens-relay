@@ -986,6 +986,24 @@ describe('CriticMarkup Extension', () => {
       expect(view.contentDOM.textContent).not.toContain('a reply');
     });
 
+    it('hides a comment over several lines whole, its line breaks too, with its badge', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor('Before{>>first\nsecond\nthird<<} after\n\nEnd', 0);
+      cleanup = c;
+
+      const lines = [...view.contentDOM.querySelectorAll('.cm-line')].map((l) => l.textContent);
+      expect(lines[0]).toBe('Before1 after');
+      expect(view.contentDOM.textContent).not.toMatch(/first|second|third/);
+      expect(view.contentDOM.querySelector('.cm-comment-collapsed-line')).toBeNull();
+    });
+
+    it('leaves no empty line where a comment of whole lines was', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor('Above\n{>>one\ntwo<<}\nBelow', 0);
+      cleanup = c;
+
+      const lines = [...view.contentDOM.querySelectorAll('.cm-line')].map((l) => l.textContent);
+      expect(lines).toEqual(['Above1', 'Below']);
+    });
+
     it('shows no accept / reject on the text a comment is on, which its card resolves', () => {
       const doc = 'see {==this part==}{>>on the text<<} and {==plain==} end';
       const { view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('this part') + 2);

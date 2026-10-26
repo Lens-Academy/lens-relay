@@ -1732,16 +1732,6 @@
   border-bottom-color: rgb(255, 203, 0);
 }
 
-/* Collapse ghost lines within legacy multi-line comments */
-.cm-comment-collapsed-line {
-  font-size: 0;
-  line-height: 0 !important;
-  padding: 0 !important;
-  min-height: 0 !important;
-  height: 0 !important;
-  overflow: hidden;
-}
-
 /* A comment's marker in the text: Notion's comment indicator, a speech
    bubble and, in grey, the comment's number (its card shows the same) */
 .cm-comment-badge {

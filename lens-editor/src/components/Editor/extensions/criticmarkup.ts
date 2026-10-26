@@ -331,6 +331,119 @@ function runButton(view: EditorView, target: HTMLElement, savedSelection: { from
  * Decorations are rebuilt when the document changes, viewport changes, or selection changes.
  * Delimiters and metadata are always hidden; accept/reject buttons shown when cursor is inside.
  */
+interface CommentBadge {
+  badgeNumber: number;
+  isFirst: boolean;
+  threadFrom: number;
+}
+
+/**
+ * Which comments show a badge, and its number. Section editors can provide a
+ * badge map sliced from the full document, so an open field keeps the same
+ * comment numbers as the course comments sidebar. Threads on highlighted text
+ * ({==text==}{>>…<<}) get none: their highlight marks them, as Notion's
+ * comments (onHighlight, by each comment's from).
+ */
+function commentBadges(state: EditorState, ranges: readonly CriticMarkupRange[]) {
+  const threads = parseThreads([...ranges]);
+  const commentBadgeMap = new Map<number, CommentBadge>();
+  // Translator from local CM positions to absolute Y.Text offsets
+  const translateOffset = state.facet(commentOffsetTranslator);
+  const suppliedBadgeMap = state.field(commentBadgeMapField);
+  if (suppliedBadgeMap) {
+    for (const range of ranges) {
+      if (range.type !== 'comment') continue;
+      const supplied = suppliedBadgeMap.get(range.from);
+      if (!supplied) continue;
+      commentBadgeMap.set(range.from, {
+        badgeNumber: supplied.badgeNumber,
+        isFirst: supplied.isFirstInThread,
+        threadFrom: range.from,
+      });
+    }
+  } else {
+    for (let ti = 0; ti < threads.length; ti++) {
+      const thread = threads[ti];
+      for (let ci = 0; ci < thread.comments.length; ci++) {
+        commentBadgeMap.set(thread.comments[ci].from, {
+          badgeNumber: ti + 1,
+          isFirst: ci === 0,
+          threadFrom: thread.from,
+        });
+      }
+    }
+  }
+
+  const onHighlight = new Set<number>();
+  for (const thread of threads) {
+    const first = ranges.indexOf(thread.comments[0]);
+    const before = ranges[first - 1];
+    if (before?.type === 'highlight' && before.to === thread.from) {
+      for (const comment of thread.comments) onHighlight.add(comment.from);
+    }
+  }
+  return { commentBadgeMap, onHighlight, translateOffset };
+}
+
+/**
+ * Comments, hidden whole, with their badge if they show one; those over
+ * several lines with their line breaks, and one taking up whole lines with
+ * the line break before it too, so no empty line is left where it was.
+ *
+ * In a state field, not the decorations plugin: CodeMirror estimates the
+ * height of lines it has not drawn from their length, leaving out only text
+ * a state field hides. Hidden by the plugin, a comment's text and metadata
+ * counted, so a line with a long comment was guessed several rows tall and
+ * drawn one, and lines hidden over several rows were squashed to no height
+ * by CSS. CodeMirror kept re-measuring against its guesses ("Measure loop
+ * restarted", "Viewport failed to stabilize"), could draw the page shorter
+ * than it is, and scrolling and the outline's jumps went wrong. (Replacing
+ * line breaks needs a state field too.)
+ */
+function buildHiddenComments(state: EditorState): DecorationSet {
+  const ranges = state.field(criticMarkupField);
+  const { commentBadgeMap, onHighlight, translateOffset } = commentBadges(state, ranges);
+  const { doc } = state;
+  const builder = new RangeSetBuilder<Decoration>();
+  let last = -1;
+  for (const range of ranges) {
+    if (range.type !== 'comment') continue;
+    const start = doc.lineAt(range.from);
+    const end = doc.lineAt(range.to);
+    let from = range.from;
+    let to = range.to;
+    if (start.number !== end.number && range.from === start.from && range.to === end.to) {
+      if (from > 0) from -= 1;
+      else if (to < doc.length) to += 1;
+    }
+    if (from < last) from = last;
+    if (from >= to) continue;
+    const badge = onHighlight.has(range.from) ? undefined : commentBadgeMap.get(range.from);
+    builder.add(from, to, Decoration.replace({
+      widget: badge?.isFirst
+        ? new CommentBadgeWidget(badge.badgeNumber, translateOffset(badge.threadFrom), true)
+        : undefined,
+    }));
+    last = to;
+  }
+  return builder.finish();
+}
+
+const hiddenComments = StateField.define<DecorationSet>({
+  create: buildHiddenComments,
+  update(value, tr) {
+    if (
+      tr.docChanged ||
+      tr.effects.some((e) => e.is(setCommentBadgeMap)) ||
+      tr.startState.facet(commentOffsetTranslator) !== tr.state.facet(commentOffsetTranslator)
+    ) {
+      return buildHiddenComments(tr.state);
+    }
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
 export const criticMarkupPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
@@ -406,49 +519,8 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       // Line decorations are added separately (must not be mixed into mark sort)
       const lineDecos: Array<{ from: number; deco: Decoration }> = [];
 
-      // Build comment thread info for badge numbering. Section editors can
-      // provide a badge map sliced from the full document, so an open field
-      // keeps the same comment numbers as the course comments sidebar.
-      const threads = parseThreads(ranges);
-      // Map each comment range's `from` to its badge info
-      const commentBadgeMap = new Map<number, { badgeNumber: number; isFirst: boolean; threadFrom: number }>();
-      // Translator from local CM positions to absolute Y.Text offsets.
+      // Translator from local CM positions to absolute Y.Text offsets
       const translateOffset = view.state.facet(commentOffsetTranslator);
-      const suppliedBadgeMap = view.state.field(commentBadgeMapField);
-      if (suppliedBadgeMap) {
-        for (const range of ranges) {
-          if (range.type !== 'comment') continue;
-          const supplied = suppliedBadgeMap.get(range.from);
-          if (!supplied) continue;
-          commentBadgeMap.set(range.from, {
-            badgeNumber: supplied.badgeNumber,
-            isFirst: supplied.isFirstInThread,
-            threadFrom: range.from,
-          });
-        }
-      } else {
-        for (let ti = 0; ti < threads.length; ti++) {
-          const thread = threads[ti];
-          for (let ci = 0; ci < thread.comments.length; ci++) {
-            commentBadgeMap.set(thread.comments[ci].from, {
-              badgeNumber: ti + 1,
-              isFirst: ci === 0,
-              threadFrom: thread.from,
-            });
-          }
-        }
-      }
-
-      // Threads on highlighted text ({==text==}{>>…<<}): their highlight marks
-      // them, so they get no badge, as Notion's comments; by each comment's from
-      const onHighlight = new Set<number>();
-      for (const thread of threads) {
-        const first = ranges.indexOf(thread.comments[0]);
-        const before = ranges[first - 1];
-        if (before?.type === 'highlight' && before.to === thread.from) {
-          for (const comment of thread.comments) onHighlight.add(comment.from);
-        }
-      }
 
       // Detect bulk selection: if selection spans multiple markup ranges,
       // show a single bulk widget instead of per-range accept/reject buttons
@@ -487,64 +559,9 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         const className = typeClass(range);
         const cursorInside = selectionIntersects(selection, range.from, range.to);
 
-        // Comments: hide all text, show badge widget for first in thread
-        // (in the margin), none for a thread on highlighted text
-        if (range.type === 'comment') {
-          const badgeInfo = onHighlight.has(range.from) ? undefined : commentBadgeMap.get(range.from);
-          const spansLineBreak = view.state.doc.lineAt(range.from).number !== view.state.doc.lineAt(range.to).number;
-
-          if (spansLineBreak) {
-            // Multiline comments can't use Decoration.replace (CM6 plugin limitation).
-            // Hide all text with cm-hidden-syntax marks and place badge widget at start.
-            decorations.push({
-              from: range.from,
-              to: range.to,
-              deco: Decoration.mark({ class: 'cm-hidden-syntax' }),
-            });
-            if (badgeInfo?.isFirst) {
-              decorations.push({
-                from: range.from,
-                to: range.from,
-                deco: Decoration.widget({
-                  widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom), true),
-                  side: -1,
-                }),
-              });
-            }
-
-            // Collapse intermediate ghost lines (lines entirely within hidden comment range)
-            const doc = view.state.doc;
-            const startLine = doc.lineAt(range.from).number;
-            const endLine = doc.lineAt(range.to).number;
-            for (let ln = startLine; ln <= endLine; ln++) {
-              const line = doc.line(ln);
-              const lineFullyHidden = line.from >= range.from && line.to <= range.to;
-              if (lineFullyHidden) {
-                lineDecos.push({
-                  from: line.from,
-                  deco: Decoration.line({ class: 'cm-comment-collapsed-line' }),
-                });
-              }
-            }
-          } else if (badgeInfo?.isFirst) {
-            // First comment in thread (single line): replace entire range with badge
-            decorations.push({
-              from: range.from,
-              to: range.to,
-              deco: Decoration.replace({
-                widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom), true),
-              }),
-            });
-          } else {
-            // Non-first comment in thread (single line): hide entirely
-            decorations.push({
-              from: range.from,
-              to: range.to,
-              deco: Decoration.replace({}),
-            });
-          }
-          continue;
-        }
+        // Comments are hidden, with their badge, by hiddenComments (a state
+        // field, so CodeMirror's height estimates leave their text out)
+        if (range.type === 'comment') continue;
 
         // Non-comment ranges: standard three-decoration pattern
         // Always hide delimiters and metadata, only show colored content
@@ -1314,6 +1331,9 @@ interface CriticMarkupOptions {
   commentBadgeMap?: Map<number, CriticMarkupCommentBadgeInfo>;
 }
 
+/** CriticMarkup in live preview: the decorations plugin and the hidden comments */
+export const criticMarkupLivePreview = [criticMarkupPlugin, hiddenComments];
+
 export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
   const { canAcceptReject = true, commentBadgeMap = null } = options;
   return [
@@ -1322,7 +1342,7 @@ export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
     commentBadgeMapField.init(() => commentBadgeMap),
     suggestionModeField,
     suggestionModeFilter,
-    criticMarkupCompartment.of(criticMarkupPlugin),
+    criticMarkupCompartment.of(criticMarkupLivePreview),
     stickyButtonsPlugin,
     keymap.of(criticMarkupKeymap),
   ];
