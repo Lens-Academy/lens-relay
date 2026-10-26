@@ -436,12 +436,17 @@ describe('HtmlEditor', () => {
     createThread(doc, 'test', { id: 'mine', anchor, author: 'me@x', authorId: 'someone-else', body: 'Same name, other browser' });
     renderEditor(ytext, awareness);
     await placed('mine');
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
-    await userEvent.type(screen.getByRole('button', { name: 'Reply' }), '{enter}');
+    // Nothing to edit or delete, so no ••• menu
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
+    // Opening the card brings its reply bar
+    await userEvent.click(screen.getByText('Same name, other browser'));
     await userEvent.type(screen.getByPlaceholderText('Reply…'), 'My reply');
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
     expect(readThreads(doc)[0].messages.map(m => m.body)).toEqual(['Same name, other browser', 'My reply']);
-    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
+    const menus = screen.getAllByRole('button', { name: 'More actions' });
+    expect(menus).toHaveLength(1);
+    await userEvent.click(menus[0]);
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument();
   });
 
   it('focuses the card when its highlight or badge is clicked in the page', async () => {

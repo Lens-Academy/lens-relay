@@ -12,9 +12,8 @@
   --lens-page-bg: #fff;
   --lens-font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
   --lens-font-mono: "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace;
-  /* Headings and the page title: Source Serif 4 (bundled, main.tsx), whose
-     optical sizes give the large sizes their display shapes */
-  --lens-font-serif: "Source Serif 4 Variable", "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  /* Headings and the page title: Lora, a book serif (bundled, main.tsx) */
+  --lens-font-serif: "Lora Variable", "Lora", Georgia, serif;
   --lens-text: #2c2c2b;
   --lens-text-secondary: #7d7a75;
   --lens-text-tertiary: #a19e99;
@@ -166,13 +165,13 @@
 }
 
 /* Document title above the editor (DocumentTitle.tsx): Notion's page title,
-   in the headings' serif at medium weight. The 6px inset lines it up with
+   in the headings' serif at semibold. The 6px inset lines it up with
    the editor's text, which CodeMirror's line padding insets by 6px. */
 .lens-doc-title {
   font-family: var(--lens-font-serif);
   font-size: 40px;
   line-height: 1.2;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--lens-text);
   padding: 0 6px;
 }
@@ -392,8 +391,29 @@
     border-radius: 50%;
     box-shadow: 0 0 0 2px var(--lens-topbar-bg);
   }
-  .lens-avatar + .lens-avatar {
+  .lens-avatar-stack > * + * {
     margin-left: -6px;
+  }
+  /* Notion's tooltip (Tooltip.tsx): a small dark label under what the
+     pointer is over, drawn on the page so the top bar can't clip it */
+  .lens-tooltip {
+    position: fixed;
+    z-index: 2000;
+    max-width: calc(100vw - 16px);
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    white-space: nowrap;
+    color: #fff;
+    background: #1f1f1f;
+    border-radius: 6px;
+    box-shadow: 0 3px 6px rgba(15, 15, 15, 0.2);
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  :root[data-theme=dark] .lens-tooltip {
+    background: #3a3a3a;
   }
   .lens-avatar-more {
     color: var(--lens-text-secondary);
@@ -423,6 +443,37 @@
   line-height: 0;
 }
 
+/* Syntax coming into view where the cursor goes (syntaxReveal.ts): after a
+   click it grows from nothing as it fades in, so the text beside it slides
+   over; after a key it fades in. The cursor waits until the text is still. */
+@keyframes cm-syntax-grow {
+  from { font-size: 0; opacity: 0; }
+  60% { opacity: 1; }
+}
+@keyframes cm-syntax-fade {
+  from { opacity: 0; }
+}
+.cm-syntax-grow {
+  animation: cm-syntax-grow 200ms cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+.cm-syntax-fade {
+  animation: cm-syntax-fade 180ms ease-out;
+}
+.cm-syntax-growing .cm-cursorLayer {
+  visibility: hidden;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cm-syntax-grow,
+  .cm-syntax-fade { animation: none; }
+  .cm-syntax-growing .cm-cursorLayer { visibility: visible; }
+}
+
+/* A heading's # marks where the cursor is: the heading's own size, font and
+   weight, in grey so its words lead */
+.cm-header-mark {
+  color: var(--lens-text-tertiary);
+}
+
 /* Heading styles - progressively smaller sizes matching Obsidian */
 /* Remove any underlines from headings (from defaultHighlightStyle or other sources) */
 .cm-heading-1,
@@ -447,9 +498,8 @@
 }
 
 /* Notion's heading sizes, 30, 24, 20 and 18px, at line height 1.3, in the
-   serif: medium (500) for the large ones, as the headings of Claude's docs
-   are; the small ones semibold, to stand out from the text. H5 and H6 are
-   body size; H6 is in the secondary text colour. */
+   serif at semibold (600). H5 and H6 are body size; H6 is in the
+   secondary text colour. */
 .cm-heading-1,
 .cm-heading-2,
 .cm-heading-3,
@@ -461,19 +511,19 @@
 
 .cm-heading-1 {
   font-size: 1.875em;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.3;
 }
 
 .cm-heading-2 {
   font-size: 1.5em;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.3;
 }
 
 .cm-heading-3 {
   font-size: 1.25em;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.3;
 }
 
@@ -1053,6 +1103,10 @@
   padding: 12px 8px;
   border-radius: 8px;
   cursor: pointer;
+  transition: opacity 160ms ease;
+}
+.lens-outline.is-open .lens-outline-dashes {
+  opacity: 0;
 }
 .lens-outline-dash {
   display: block;
@@ -1064,6 +1118,8 @@
 .lens-outline-dash.is-active {
   background-color: var(--lens-text);
 }
+/* The headings over the dashes: they fade in and grow from the right edge,
+   the items following one after another; closing is quicker */
 .lens-outline-panel {
   position: absolute;
   top: 50%;
@@ -1072,10 +1128,40 @@
   max-height: min(480px, 70vh);
   overflow-y: auto;
   padding: 6px;
-  transform: translateY(-50%);
   background-color: var(--lens-popover-bg);
   border-radius: 10px;
   box-shadow: var(--lens-popover-shadow);
+  transform-origin: right center;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(10px, -50%) scale(0.96);
+  transition: opacity 120ms ease, transform 140ms ease, visibility 0s linear 140ms;
+}
+.lens-outline-panel.is-open {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(0, -50%);
+  transition: opacity 180ms ease-out, transform 240ms cubic-bezier(0.2, 0.9, 0.3, 1), visibility 0s;
+}
+.lens-outline-panel li {
+  opacity: 0;
+  transform: translateX(6px);
+  transition: opacity 100ms ease, transform 100ms ease;
+}
+.lens-outline-panel.is-open li {
+  opacity: 1;
+  transform: none;
+  transition: opacity 200ms ease-out, transform 240ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  transition-delay: calc(40ms + var(--i, 0) * 16ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lens-outline-panel,
+  .lens-outline-panel.is-open,
+  .lens-outline-panel li,
+  .lens-outline-panel.is-open li {
+    transition-duration: 0s;
+    transition-delay: 0s;
+  }
 }
 .lens-outline-list {
   margin: 0;
@@ -1119,11 +1205,11 @@
   color: var(--lens-text-tertiary);
 }
 /* The page area (EditorArea) is a container: the dashes stay out of the way
-   of the 700px text column, and leave where there is no room beside it */
+   of the 580px text column, and leave where there is no room beside it */
 .lens-page-area {
   container: lens-page / inline-size;
 }
-@container lens-page (max-width: 800px) {
+@container lens-page (max-width: 700px) {
   .lens-outline { display: none; }
 }
 
@@ -1445,6 +1531,19 @@
 .cm-comment-badge:hover {
   background-color: var(--lens-hover-bg);
 }
+/* A comment on a point (no text highlighted) in the page: its badge sits in
+   the column's right padding at its line, out of the text, as Notion marks a
+   block's comments (criticmarkup.ts). Phones keep it in the text. */
+.lens-page-area .cm-content {
+  position: relative;
+}
+@media (min-width: 500px) {
+  .lens-page-area .cm-comment-badge.is-margin {
+    position: absolute;
+    right: -12px;
+    margin-top: 2px;
+  }
+}
 
 /* Focused state is toggled by CommentsLayer via [data-comment-focused] on the
    marker element (both edit-mode badges and read-mode anchors). Per-form
@@ -1505,33 +1604,6 @@
 .lens-comment-card.is-open .lens-comment-number {
   background-color: var(--lens-pressed-bg);
   color: var(--lens-text);
-}
-/* Notion's resolve tick at the card's top right, while the pointer is over
-   the card or it is open */
-.lens-comment-resolve {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin: -2px -6px -2px auto;
-  color: var(--lens-icon-secondary);
-  border-radius: 6px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 100ms;
-}
-.lens-comment-card:hover .lens-comment-resolve,
-.lens-comment-card.is-open .lens-comment-resolve,
-.lens-comment-resolve:focus-visible {
-  opacity: 1;
-}
-.lens-comment-resolve:hover {
-  color: var(--lens-icon);
-  background-color: var(--lens-hover-bg);
-}
-@media (hover: none) {
-  .lens-comment-resolve { opacity: 1; }
 }
 .lens-comment-resolved {
   height: 20px;
@@ -1611,20 +1683,101 @@
   overflow-wrap: anywhere;
 }
 /* Edit and Delete, while the pointer is over the message */
-.lens-comment-tools {
-  grid-row: 1;
-  grid-column: 3;
+/* Notion's message toolbar (CommentCard.tsx): react, resolve and •••, in a
+   small bordered pill at the message's top right, while the pointer is over
+   the message or a menu of it is open */
+.lens-comment-toolbar {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  z-index: 1;
   display: flex;
-  gap: 2px;
+  gap: 1px;
+  padding: 2px;
+  background: var(--lens-popover-bg);
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--lens-card-border), 0 2px 4px rgba(15, 15, 15, 0.06);
   opacity: 0;
-  transition: opacity 100ms;
+  transform: translateY(2px);
+  transition: opacity 120ms, transform 120ms;
+  pointer-events: none;
 }
-.lens-comment-row:hover .lens-comment-tools,
-.lens-comment-tools:focus-within {
+.lens-comment-row:hover .lens-comment-toolbar,
+.lens-comment-toolbar:focus-within,
+.lens-comment-toolbar.is-active {
   opacity: 1;
+  transform: none;
+  pointer-events: auto;
 }
 @media (hover: none) {
-  .lens-comment-tools { opacity: 1; }
+  .lens-comment-toolbar { opacity: 1; transform: none; pointer-events: auto; }
+}
+.lens-comment-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  color: var(--lens-icon-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lens-comment-tool-icon:hover,
+.lens-comment-tool-icon[aria-expanded="true"] {
+  color: var(--lens-icon);
+  background-color: var(--lens-hover-bg);
+}
+/* A message's reactions: Notion's pills, blue-tinted for one's own */
+.lens-comment-reactions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.lens-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lens-text-secondary);
+  background: var(--lens-pill-bg);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px transparent;
+  cursor: pointer;
+}
+.lens-reaction:hover {
+  background: var(--lens-pressed-bg);
+}
+.lens-reaction.is-mine {
+  color: var(--lens-blue);
+  background: var(--lens-bg-blue);
+  box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.45);
+}
+.lens-reaction:disabled {
+  cursor: default;
+}
+.lens-reaction-picker {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+}
+.lens-reaction-choice {
+  width: 28px;
+  height: 28px;
+  font-size: 17px;
+  line-height: 28px;
+  text-align: center;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: transform 100ms;
+}
+.lens-reaction-choice:hover {
+  background: var(--lens-hover-bg);
+  transform: scale(1.15);
 }
 .lens-comment-tool,
 .lens-comment-action {
@@ -1668,6 +1821,26 @@
 }
 .lens-comment-form {
   padding: 8px 12px 6px;
+}
+.lens-comment-replybar {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 8px 12px 10px;
+  padding: 4px 4px 4px 10px;
+  background: var(--lens-page-bg);
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px var(--lens-input-border);
+  transition: box-shadow 100ms;
+}
+.lens-comment-replybar:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.57), 0 0 0 2px rgba(35, 131, 226, 0.2);
+}
+.lens-comment-replybar .lens-comment-input {
+  padding: 2px 0;
+}
+.lens-comment-reply:has(.lens-comment-replybar) {
+  border-top: 0;
 }
 .lens-comment-input {
   display: block;

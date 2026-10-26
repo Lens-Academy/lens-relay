@@ -25,11 +25,12 @@ export const editorTheme = EditorView.theme({
     overflow: 'auto',
     lineHeight: '1.5',
   },
-  // The text column: 644px of text (700 minus the padding and CodeMirror's
-  // line insets), a little narrower than Notion's 708px for shorter lines
+  // The text column: 524px of text (580 minus the padding and CodeMirror's
+  // line insets), about 70 characters a line, a book's measure rather than
+  // Notion's 708px
   '.cm-content': {
     padding: '16px 24px 170px',
-    maxWidth: '700px',
+    maxWidth: '580px',
     marginLeft: 'auto',
     marginRight: 'auto',
   },

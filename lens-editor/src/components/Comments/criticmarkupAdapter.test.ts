@@ -105,6 +105,22 @@ describe('useThreadsFromYText', () => {
     expect(result.current.threads[0].replies).toHaveLength(1);
     expect(result.current.threads[0].replies[0].body).toBe('reply-body');
   });
+
+  it("onReact adds and takes back the user's reaction, grouped by emoji", () => {
+    const { ytext } = makeDoc('A');
+    ytext.insert(1, `{>>${JSON.stringify({ author: 'bob', timestamp: 1716553200000, reactions: [['👍', 'bob']] })}@@hi<<}`);
+
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'alice'));
+    expect(result.current.threads[0].root.reactions).toEqual([{ emoji: '👍', names: ['bob'], mine: false }]);
+
+    act(() => { ytext.insert(0, 'PREFIX '); });
+    act(() => { result.current.callbacks.onReact(result.current.threads[0].root, '👍'); });
+    expect(result.current.threads[0].root.reactions).toEqual([{ emoji: '👍', names: ['bob', 'alice'], mine: true }]);
+
+    act(() => { result.current.callbacks.onReact(result.current.threads[0].root, '👍'); });
+    expect(result.current.threads[0].root.reactions).toEqual([{ emoji: '👍', names: ['bob'], mine: false }]);
+    expect(result.current.threads[0].root.body).toBe('hi');
+  });
 });
 
 describe('a new comment while others edit', () => {

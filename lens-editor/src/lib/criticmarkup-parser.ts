@@ -11,6 +11,9 @@ export interface CriticMarkupRange {
   metadata?: {
     author?: string;
     timestamp?: number;
+    /** A comment's emoji reactions: [emoji, who] pairs (a flat list, so the
+     *  metadata stays one level of braces) */
+    reactions?: Array<[string, string]>;
   };
 }
 
@@ -37,6 +40,11 @@ function extractMetadata(rawContent: string): ParsedContent {
       metadata: {
         author: metadata.author,
         timestamp: metadata.timestamp,
+        ...(Array.isArray(metadata.reactions) && {
+          reactions: metadata.reactions.filter(
+            (r: unknown): r is [string, string] => Array.isArray(r) && typeof r[0] === 'string' && typeof r[1] === 'string',
+          ),
+        }),
       },
       metadataLength,
     };

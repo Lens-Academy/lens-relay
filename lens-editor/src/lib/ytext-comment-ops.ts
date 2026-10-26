@@ -86,6 +86,35 @@ export function removeThreadInYText(ytext: Y.Text, ranges: CriticMarkupRange[], 
 }
 
 /**
+ * Add `who`'s `emoji` reaction to a comment, or take it back if it is there.
+ * Reactions live in the comment's metadata, {"author":…,"reactions":[["👍","Ann"]]},
+ * which keeps one level of braces (the metadata pattern stops at the first `}`).
+ * A comment without metadata takes none.
+ */
+export function toggleReactionInYText(ytext: Y.Text, range: CriticMarkupRange, emoji: string, who: string): void {
+  const metaFrom = range.from + 3;
+  const metaTo = range.contentFrom - 2;
+  if (range.type !== 'comment' || metaTo <= metaFrom) return;
+  let meta: Record<string, unknown>;
+  try {
+    meta = JSON.parse(ytext.toString().slice(metaFrom, metaTo));
+  } catch {
+    return;
+  }
+  const name = who.replace(/[{}"\\]/g, '').trim() || 'anonymous';
+  const reactions = Array.isArray(meta.reactions) ? (meta.reactions as Array<[string, string]>) : [];
+  const at = reactions.findIndex(([e, n]) => e === emoji && n === name);
+  if (at >= 0) reactions.splice(at, 1);
+  else reactions.push([emoji, name]);
+  if (reactions.length > 0) meta.reactions = reactions;
+  else delete meta.reactions;
+  ytext.doc!.transact(() => {
+    ytext.delete(metaFrom, metaTo - metaFrom);
+    ytext.insert(metaFrom, JSON.stringify(meta));
+  });
+}
+
+/**
  * Edit the content of an existing comment (or other criticmarkup range)
  * by replacing the inner content slice. Preserves metadata header and
  * delimiters.

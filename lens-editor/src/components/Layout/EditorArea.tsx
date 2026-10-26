@@ -37,6 +37,7 @@ import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { pinInsertKey, useThreadsFromYText } from '../Comments/criticmarkupAdapter';
 import { commentTarget } from '../Comments/commentTarget';
+import type { ThreadView } from '../Comments/types';
 import { useScrollSource } from '../Comments/useScrollSource';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { PanelDebugOverlay } from '../PanelDebugOverlay';
@@ -168,10 +169,27 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
   // Thread data and mutation callbacks from the criticmarkup adapter.
   const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous', canEdit);
-  // Those who may edit resolve comments (the card's tick)
+  // A link to a thread's place: the page with ?pos= (its UTF-8 offset), which
+  // puts the cursor there when opened
+  const copyCommentLink = useCallback((thread: ThreadView) => {
+    const offset = new TextEncoder().encode(yText.toString().slice(0, Number(thread.key))).length;
+    void navigator.clipboard?.writeText(`${window.location.origin}${window.location.pathname}?pos=${offset}`);
+  }, [yText]);
+  // An opened card stands by its text, so the text comes up a quarter of the
+  // way down the page when it is off screen or low on it (Notion scrolls to
+  // it); the card and its reply bar would otherwise be out of sight
+  const scrollToThread = useCallback((key: string | null) => {
+    if (key == null || !editorView) return;
+    const pos = Math.min(Number(key), editorView.state.doc.length);
+    const page = editorView.scrollDOM.getBoundingClientRect();
+    const at = editorView.coordsAtPos(pos);
+    if (at && at.top >= page.top && at.bottom <= page.top + page.height * 0.6) return;
+    editorView.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: page.height / 4 }) });
+  }, [editorView]);
+  // Those who may edit resolve comments (the card's tick); anyone copies a link
   const commentActions = useMemo(
-    () => (canEdit ? { onResolve: callbacks.onResolve } : undefined),
-    [canEdit, callbacks],
+    () => ({ onCopyLink: copyCommentLink, ...(canEdit && { onResolve: callbacks.onResolve }) }),
+    [canEdit, callbacks, copyCommentLink],
   );
 
   // ScrollSource wrapping the editor's scroll container. Pass the live element
@@ -634,6 +652,9 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onAddComment={callbacks.onAddComment}
               getInsertKey={editorView ? () => pinCommentTarget(editorView) : undefined}
               actions={commentActions}
+              numbered={false}
+              onReact={canWrite ? callbacks.onReact : undefined}
+              onFocusChange={scrollToThread}
             />
           )}
         </div>
@@ -706,6 +727,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onAddComment={canWrite ? callbacks.onAddComment : undefined}
               getInsertKey={editorView && canWrite ? () => pinCommentTarget(editorView) : undefined}
               actions={commentActions}
+              numbered={false}
+              onReact={canWrite ? callbacks.onReact : undefined}
             />
           </MobileDrawer>
 

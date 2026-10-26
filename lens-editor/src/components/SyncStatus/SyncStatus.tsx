@@ -1,4 +1,5 @@
 import { useConnectionStatus } from '../../lib/ydoc-provider';
+import { Tooltip } from '../Tooltip/Tooltip';
 
 type SyncState = 'synced' | 'syncing' | 'offline';
 
@@ -75,19 +76,13 @@ export function SyncStatus() {
   const config = stateConfig[state];
 
   return (
-    <div className="relative group flex items-center">
-      {/* Icon */}
+    <Tooltip label={config.tooltip} className="flex items-center">
       <div className={`flex items-center gap-1 px-1 text-xs ${config.color}`} aria-label={config.tooltip} role="status">
         {state === 'synced' && <CheckIcon className="w-[18px] h-[18px]" />}
         {state === 'syncing' && <SpinnerIcon className="w-4 h-4 animate-spin" />}
         {state === 'offline' && <WarningIcon className="w-4 h-4" />}
         {state === 'offline' && <span>Offline</span>}
       </div>
-
-      {/* Tooltip on hover */}
-      <div className="absolute top-full right-0 mt-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
-        {config.tooltip}
-      </div>
-    </div>
+    </Tooltip>
   );
 }

@@ -969,6 +969,23 @@ describe('CriticMarkup Extension', () => {
       expect(calls).toEqual([[doc.indexOf('{>>'), { fromText: true }]]);
     });
 
+    it('marks a comment on highlighted text by its highlight alone, and a comment on a point in the margin', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'see {==this part==}{>>on the text<<}{>>a reply<<} and here{>>on a point<<} end',
+        0
+      );
+      cleanup = c;
+
+      const badges = [...view.contentDOM.querySelectorAll('.cm-comment-badge')];
+      expect(badges).toHaveLength(1);
+      expect(badges[0].classList.contains('is-margin')).toBe(true);
+      expect(badges[0].textContent).toBe('2');
+      expect(view.contentDOM.querySelector('.cm-comment-target')?.textContent).toBe('this part');
+      // The comments' text stays hidden
+      expect(view.contentDOM.textContent).not.toContain('on the text');
+      expect(view.contentDOM.textContent).not.toContain('a reply');
+    });
+
     it('leaves a highlight without a comment a plain highlight', () => {
       const { view, cleanup: c } = createCriticMarkupEditor('see {==this part==} end', 0);
       cleanup = c;

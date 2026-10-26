@@ -9,6 +9,7 @@ import {
   removeThreadInYText,
   editRangeContentInYText,
   isOwnRange,
+  toggleReactionInYText,
 } from './ytext-comment-ops';
 
 describe('ytext-comment-ops', () => {
@@ -105,6 +106,23 @@ describe('ytext-comment-ops', () => {
     // calls decodeCommentContent before display. We assert the round trip
     // recovers the original.
     expect(decodeCommentContent(range.content)).toBe('line one\nline two\\with-backslash');
+  });
+
+  it('toggles a reaction in the metadata, which the parser reads back, and drops the key when the last goes', () => {
+    ytext.insert(0, 'Body.');
+    insertCommentInYText(ytext, 'nice', 4);
+    const comment = () => parse(ytext.toString()).find(r => r.type === 'comment')!;
+
+    toggleReactionInYText(ytext, comment(), '👍', 'Bob');
+    toggleReactionInYText(ytext, comment(), '👍', 'Carol "C" {x}');
+    expect(comment().metadata?.reactions).toEqual([['👍', 'Bob'], ['👍', 'Carol C x']]);
+    expect(comment().metadata?.author).toBe('alice');
+    expect(decodeCommentContent(comment().content)).toBe('nice');
+
+    toggleReactionInYText(ytext, comment(), '👍', 'Bob');
+    toggleReactionInYText(ytext, comment(), '👍', 'Carol C x');
+    expect(comment().metadata?.reactions).toBeUndefined();
+    expect(ytext.toString()).not.toContain('reactions');
   });
 });
 

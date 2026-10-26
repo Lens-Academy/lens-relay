@@ -16,6 +16,8 @@ export interface MessageView {
   /** Delete only, for someone else's message: anyone with edit access may
    *  clear a Markdown comment once it is addressed. Absent means canModify. */
   canDelete?: boolean;
+  /** Emoji reactions, each with who reacted and whether the current user did */
+  reactions?: Array<{ emoji: string; names: string[]; mine: boolean }>;
 }
 
 /** Where an out-of-band thread points (HTML pages); absent for inline comments. */
@@ -38,6 +40,8 @@ export interface ThreadActions {
   onConfirmAnchor?: (thread: ThreadView) => void;
   /** Pick a new place for the thread in the page. */
   onReattach?: (thread: ThreadView) => void;
+  /** Copy a link to the thread's place in the page. */
+  onCopyLink?: (thread: ThreadView) => void;
 }
 
 export interface ThreadView {

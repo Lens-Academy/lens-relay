@@ -45,6 +45,7 @@ import { wikilinkMetadataChanged } from './wikilinkEffects';
 import { noteEmbeds } from './noteEmbed';
 import { isImageEmbedTarget } from '../../../../shared/embeds';
 import { parseCalloutHeader, CalloutIconWidget } from './callouts';
+import { syntaxReveal } from './syntaxReveal';
 
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
 const USE_LOCAL_R2 = USE_LOCAL_RELAY && import.meta.env.VITE_LOCAL_R2 === 'true';
@@ -631,7 +632,8 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               });
             }
 
-            // HeaderMark (# characters): hide when cursor not on line
+            // HeaderMark (# characters): hide when cursor not on line, and
+            // shown, quiet (index.css)
             if (node.name === 'HeaderMark') {
               if (!cursorOnLine(view, node.from)) {
                 const line = view.state.doc.lineAt(node.from);
@@ -641,6 +643,12 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   from: node.from,
                   to: end,
                   deco: Decoration.mark({ class: HIDDEN_CLASS }),
+                });
+              } else {
+                decorations.push({
+                  from: node.from,
+                  to: node.to,
+                  deco: Decoration.mark({ class: 'cm-header-mark' }),
                 });
               }
             }
@@ -1295,7 +1303,7 @@ export function livePreview(context?: WikilinkContext, { embeds = true }: { embe
     wikilinkFollow, // in both modes
     inEmbedCard.of(!embeds),
     // embeds: false inside an embed card, which never nests another
-    livePreviewCompartment.of([livePreviewPlugin, ...(embeds ? [noteEmbeds] : []), obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
+    livePreviewCompartment.of([livePreviewPlugin, syntaxReveal, ...(embeds ? [noteEmbeds] : []), obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
   ];
 }
 
@@ -1403,7 +1411,7 @@ export function toggleSourceMode(view: EditorView, sourceMode: boolean) {
   view.dispatch({
     effects: [
       livePreviewCompartment.reconfigure(
-        sourceMode ? [sourceHeadingPlugin, obsidianCommentPlugin, frontmatterSourcePlugin, livePreviewTheme] : [livePreviewPlugin, noteEmbeds, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]
+        sourceMode ? [sourceHeadingPlugin, obsidianCommentPlugin, frontmatterSourcePlugin, livePreviewTheme] : [livePreviewPlugin, syntaxReveal, noteEmbeds, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]
       ),
       criticMarkupCompartment.reconfigure(
         sourceMode ? criticMarkupSourcePlugin : criticMarkupPlugin
