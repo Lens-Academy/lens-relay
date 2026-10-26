@@ -253,3 +253,19 @@ describe('jev routes, review round on #195', () => {
     expect((await batch(app, [c])).status).toBe(200); // b's was refunded
   });
 });
+
+describe('jev routes, judgements', () => {
+  it('passes judgements to and from the platform, course files only', async () => {
+    const { app, jev } = mount({ platformUrl: 'https://platform.test', platformKey: 'k' });
+    jev.mockImplementation(async () => new Response('{"judgements":[]}', { status: 200 }));
+    const headers = { 'Content-Type': 'application/json', 'X-Share-Token': token() };
+    const post = (path: string) => app.request('/api/jev/judgements', { method: 'POST', headers, body: JSON.stringify({ path, words: 'w' }) });
+    expect((await post('Lens Edu/a.md')).status).toBe(200);
+    expect((await post('Lens/08-Legal/x.md')).status).toBe(400);
+    expect((await post('Lens Edu/../Lens/x.md')).status).toBe(400);
+    expect((await app.request('/api/jev/judgements?check_id=T 1', { headers })).status).toBe(200);
+    const urls = jev.mock.calls.map(([u]) => String(u));
+    expect(urls).toEqual(['https://platform.test/api/content/course-checks/judgements', 'https://platform.test/api/content/course-checks/judgements?check_id=T%201']);
+    expect((jev.mock.calls[0][1]!.headers as Record<string, string>)['X-Validation-Key']).toBe('k');
+  });
+});

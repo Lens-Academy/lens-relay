@@ -13,6 +13,8 @@ import { requireEduShareToken } from '../edit-share-auth.ts';
  *   GET  /api/jev/corpus  → {meta, rows:[{id, path, line, kind, title, courses, text}]}
  *   POST /api/jev/ask     {model, requests:[{question:{instructions, criteria?}, state}]} → {ps:[...], cached:n}
  *   POST /api/jev/requests {question, presentation, units} → {batches, asked}, built by the platform
+ *   GET  /api/jev/judgements?check_id=T1 → {judgements}; POST one {path, check_id, level, words,
+ *        verdict, by, ...}: people's judgements of course text, kept by the platform
  *
  * Every answer is appended to <cacheDir>/answers.jsonl and reused when the same
  * (model, question, text) comes again, so re-running a phrasing is free. Edit share
@@ -182,6 +184,17 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     return Object.fromEntries(paths.flatMap((p) => { const t = fileCache.get(p)?.text; return typeof t === 'string' ? [[p, t]] : []; }));
   }
 
+  // A call to the platform's course-check endpoints, with its shared key.
+  const toPlatform = async (c: Context, path: string, init: RequestInit) => {
+    if (!config.platformUrl || !config.platformKey) return c.json({ error: 'the platform is not configured (LENS_PLATFORM_URL, ADHOC_VALIDATION_SECRET)' }, 503);
+    const res = await doFetch(`${config.platformUrl.replace(/\/$/, '')}/api/content/course-checks/${path}`, {
+      ...init, headers: { 'Content-Type': 'application/json', 'X-Validation-Key': config.platformKey },
+    }).catch((e: Error) => e);
+    if (res instanceof Error) return c.json({ error: `the platform: ${res.message}` }, 502);
+    const text = await res.text();
+    if (!res.ok) return c.json({ error: `the platform ${res.status}: ${text.slice(0, 300)}` }, res.status === 400 || res.status === 422 ? 400 : 502);
+    return c.body(text, 200, { 'Content-Type': 'application/json' });
+  };
   // The jev calls for a check under its presentation, built by the platform from its own
   // reading of each file (POST /api/content/course-checks/requests), so a Run asks what the
   // live check asks. Body {question, presentation, units: sampled corpus rows}.
@@ -202,15 +215,24 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     } catch (e) {
       return c.json({ error: `reading files from the relay: ${(e as Error).message}` }, 502);
     }
-    const res = await doFetch(`${config.platformUrl.replace(/\/$/, '')}/api/content/course-checks/requests`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Validation-Key': config.platformKey },
-      body: JSON.stringify({ question: body.question, presentation: body.presentation ?? null, units, files }),
-    }).catch((e: Error) => e);
-    if (res instanceof Error) return c.json({ error: `the platform: ${res.message}` }, 502);
-    const text = await res.text();
-    if (!res.ok) return c.json({ error: `the platform ${res.status}: ${text.slice(0, 300)}` }, res.status === 400 ? 400 : 502);
-    return c.body(text, 200, { 'Content-Type': 'application/json' });
+    return toPlatform(c, 'requests', { method: 'POST', body: JSON.stringify({ question: body.question, presentation: body.presentation ?? null, units, files }) });
+  });
+
+  // Judgements (labels) of course text, kept by the platform (lens-platform
+  // core/course_checks/store.judge), where they also settle the live checks' findings.
+
+  app.get('/judgements', async c => {
+    const check = c.req.query('check_id');
+    if (!check) return c.json({ error: 'need check_id' }, 400);
+    return toPlatform(c, `judgements?check_id=${encodeURIComponent(check)}`, { method: 'GET' });
+  });
+  app.post('/judgements', async c => {
+    const body = await c.req.json().catch(() => null);
+    const path = body?.path;
+    if (typeof path !== 'string' || !path.startsWith('Lens Edu/') || path.split('/').includes('..')) {
+      return c.json({ error: 'need a path under "Lens Edu/"' }, 400);
+    }
+    return toPlatform(c, 'judgements', { method: 'POST', body: JSON.stringify(body) });
   });
 
   app.post('/ask', async c => {

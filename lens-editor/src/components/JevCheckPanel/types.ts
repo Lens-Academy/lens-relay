@@ -5,6 +5,8 @@ import type { Level } from '../../lib/jev-presentation';
 export interface Para { id: string; path: string; line: number; kind: string; title: string | null; courses: string[]; text: string }
 export interface CourseInfo { title: string; live: boolean; paragraphs: number; files: number }
 export interface CorpusMeta { title: string; taken: string; commit: string; source: string; kinds: Record<string, number>; courses: Record<string, CourseInfo> }
-export interface Scored extends Para { p: number }
-export interface Run { check: JevCheck; scored: Scored[]; cached: number; unit?: Level; pres?: string; platform?: boolean; tooLong?: number }
+/** A unit of a run and jev's p(yes). `text` is for display; `words`, when the platform built the
+ *  run, are all of them (text is cut at 600 characters), and `answerKey` what jev was shown. */
+export interface Scored extends Para { p: number; words?: string; answerKey?: string }
+export interface Run { check: JevCheck; scored: Scored[]; cached: number; unit?: Level; pres?: string; platform?: boolean; tooLong?: number; leftOut?: number }
 export type Colormap = (p: number) => string;

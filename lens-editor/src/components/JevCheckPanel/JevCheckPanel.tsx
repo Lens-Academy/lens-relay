@@ -17,7 +17,8 @@ import { keyHint, refProblem, refSyntax, renameRef, unitNames } from '../../lib/
 import { InputPicker } from './InputPicker';
 import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary, type Labeler } from './Results';
-import { addLabel, parseLabels } from '../../lib/jev-labels';
+import { labelBody } from '../../lib/jev-labels';
+import { useLabels } from './useLabels';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import type { Para, Run } from './types';
 import { DEFAULT_PRESENTATION, describe, isDefault, LEVELS, presentationBlock, type Level, type Presentation } from '../../lib/jev-presentation';
@@ -46,13 +47,13 @@ const post = async (url: string, body: unknown) => {
 /** One jev call: a shown text and every question asked about it. */
 export interface Batch { state: Record<string, unknown>; questions: { instructions: string; criteria?: { true: string; false: string } }[] }
 /** A unit asked about, the sampled row it came from, and its question: batches[batch].questions[index]. */
-interface Asked { id: string; row: string; path: string; line: number; text: string; batch: number; index: number }
+interface Asked { id: string; row: string; path: string; line: number; text: string; batch: number; index: number; words?: string; answer_key?: string }
 
 async function ask(check: JevCheck, sample: Para[], pres: Presentation): Promise<Run & { first?: Batch }> {
   const question = { instructions: check.question, ...(check.criteria ? { criteria: check.criteria } : {}) };
   // Each paragraph alone needs no reading of the files, so it is built here (as the platform
   // builds it: present.batches with no presentation); any other way, the platform builds it.
-  const { batches, asked }: { batches: Batch[]; asked: Asked[] } = isDefault(pres)
+  const { batches, asked, left_out: leftOut = [] }: { batches: Batch[]; asked: Asked[]; left_out?: string[] } = isDefault(pres)
     ? { batches: sample.map((r) => ({ state: { paragraph: r.text }, questions: [question] })), asked: sample.map((r, i) => ({ ...r, row: r.id, batch: i, index: 0 })) }
     : await post('/api/jev/requests', { question, presentation: presentationBlock(pres), units: sample.map(({ id, path, line, text }) => ({ id, path, line, text })) });
   const data = await post('/api/jev/ask', { model: check.model, requests: batches, ...(pres.long && pres.context !== pres.question ? { longContext: true } : {}) });
@@ -61,9 +62,9 @@ async function ask(check: JevCheck, sample: Para[], pres: Presentation): Promise
   batches.reduce((at, b, i) => { start[i] = at; return at + b.questions.length; }, 0);
   const rows = new Map(sample.map((r) => [r.id, r]));
   // Units jev refused as too long (null) are left out of the run, and counted.
-  const scored = asked.map((a) => ({ ...rows.get(a.row)!, id: a.id, line: a.line, text: a.text, p: data.ps[start[a.batch] + a.index] as number | null }))
+  const scored = asked.map((a) => ({ ...rows.get(a.row)!, id: a.id, line: a.line, text: a.text, words: a.words, answerKey: a.answer_key, p: data.ps[start[a.batch] + a.index] as number | null }))
     .filter((u): u is typeof u & { p: number } => u.p !== null);
-  return { check, unit: pres.question, pres: describe(pres), platform: isDefault(pres), cached: data.cached, tooLong: data.tooLong ?? 0, scored, first: batches[0] };
+  return { check, unit: pres.question, pres: describe(pres), platform: isDefault(pres), cached: data.cached, tooLong: data.tooLong ?? 0, leftOut: leftOut.length, scored, first: batches[0] };
 }
 
 export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
@@ -134,14 +135,13 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const dropped = nowProblems.filter((p) => !nowWords.includes(p));
   const saveProblems = useMemo(() => attempt(() => platformProblems(saveDraft(text))).ok ?? ['the draft cannot be saved'], [text]);
   const latest = result?.run;
-  // Labels live in the check file (lib/jev-labels.ts); a click appends one for the check run.
+  // Labels are the platform's judgements (lib/jev-labels.ts); a click adds one for the check run.
   const { displayName } = useDisplayName();
+  const labels = useLabels(latest?.check.id);
   const labeler: Labeler | undefined = latest && {
-    labels: parseLabels(text),
-    onLabel: (item, label) => writeText(ytext, (t) => addLabel(t, {
-      check: latest.check.id, path: item.path, unit: latest.unit ?? 'paragraph', line: item.line, quote: item.text.replace(/…$/, ''),
-      label, by: displayName || 'someone', at: new Date().toISOString(),
-    })),
+    labels: labels.labels,
+    error: labels.error,
+    onLabel: (item, verdict) => labels.add(labelBody(latest.check.id, { ...item, unit: latest.unit }, verdict, displayName || 'someone')),
   };
   const stale = latest && c && JSON.stringify(latest.check) !== JSON.stringify(c);
   const color = COLORMAPS[cmap];
@@ -226,10 +226,13 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
             <div className="mb-2 rounded border border-violet-300 bg-violet-50 px-2 py-1 text-[13px] text-violet-900">
               Experiment: the platform does not ask this way. It asks about each paragraph alone, so scores here can differ from what agents will see after Save.</div>
           )}
+          {!!latest.leftOut && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-[13px] text-amber-900">
+            {latest.leftOut} sampled paragraph{latest.leftOut === 1 ? '' : 's'} left out: changed in the file since the corpus was built.</div>}
           {!!latest.tooLong && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-[13px] text-amber-900">
             {latest.tooLong} left out: jev refused them as too long (the whole file is too big for jev here).</div>}
           {latest.pres && <div className="mb-1 text-[12px] text-gray-500">{latest.pres}
             {result?.base?.run.pres && result.base.run.pres !== latest.pres && <> · compared with a run where {result.base.run.pres.replace(/^jev /, '')}</>}</div>}
+          {labels.error && <div className="text-[12px] text-red-700">{labels.error}</div>}
           <Summary run={latest} base={result?.base} band={band} onBand={(b) => setBand(band === b ? null : b)} labels={labeler?.labels} />
           <Histogram run={latest} color={color} />
           {band

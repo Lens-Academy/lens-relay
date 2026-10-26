@@ -4,17 +4,17 @@ import { ParaText, ScoreChip } from './ParaText';
 import { agreement, labelFor, type Label } from '../../lib/jev-labels';
 
 const unitsOf = (run: Run) => `${run.unit ?? 'paragraph'}s`;
-import type { Colormap, Para, Run } from './types';
+import type { Colormap, Run, Scored } from './types';
 
 /** The labels of the check run, and how to add one (JevCheckPanel). */
-export interface Labeler { labels: Label[]; onLabel: (item: Para, label: Label['label']) => void }
+export interface Labeler { labels: Label[]; error?: string | null; onLabel: (item: Scored, verdict: Label['verdict']) => void }
 
-const MARK: [Label['label'], string, string][] = [['fail', 'problem', 'bg-red-100 text-red-800 ring-red-300'], ['pass', 'fine', 'bg-emerald-100 text-emerald-800 ring-emerald-300'], ['cant_tell', '?', 'bg-gray-200 text-gray-700 ring-gray-300']];
+const MARK: [Label['verdict'], string, string][] = [['fail', 'problem', 'bg-red-100 text-red-800 ring-red-300'], ['pass', 'fine', 'bg-emerald-100 text-emerald-800 ring-emerald-300'], ['cant_tell', '?', 'bg-gray-200 text-gray-700 ring-gray-300']];
 
 /** Your judgement of one unit: does it have the problem? The newest label shows pressed. */
-function LabelButtons({ run, item, labeler }: { run: Run; item: Para; labeler?: Labeler }) {
+function LabelButtons({ run, item, labeler }: { run: Run; item: Scored; labeler?: Labeler }) {
   if (!labeler) return null;
-  const now = labelFor(labeler.labels, run.check.id, { path: item.path, unit: run.unit, text: item.text })?.label;
+  const now = labelFor(labeler.labels, run.check.id, { ...item, unit: run.unit })?.verdict;
   return (
     <span className="mt-1 flex gap-1">
       {MARK.map(([v, word, on]) => (
@@ -32,7 +32,7 @@ const pct = (x: number) => `${Math.round(100 * x)}%`;
 /** fail / unsure / pass as cards: this run's share, the rule, and the share in `base` (the live check
  *  when a draft ran, else the previous run). Click a card to list that band. */
 export function Summary({ run, base, band, onBand, labels }: { run: Run; base?: { label: string; run: Run }; band: Band | null; onBand: (b: Band) => void; labels?: Label[] }) {
-  const agree = labels && agreement(labels, run.check.id, run.scored.map((u) => ({ path: u.path, unit: run.unit, text: u.text, band: bandOf(run.check, u.p) })));
+  const agree = labels && agreement(labels, run.check.id, run.scored.map((u) => ({ ...u, unit: run.unit, band: bandOf(run.check, u.p) })));
   const now = shares(run.check, run.scored.map((s) => s.p));
   const before = base && base.run.scored.length === run.scored.length ? shares(base.run.check, base.run.scored.map((s) => s.p)) : null;
   return (
