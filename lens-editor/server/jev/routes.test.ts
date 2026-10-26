@@ -314,8 +314,33 @@ describe('jev routes, the latest corpus', () => {
     expect((await requests('abc1234')).status).toBe(200);
     expect(JSON.parse(String(jev.mock.calls[1][1]!.body)).files).toEqual({ 'Lens Edu/a.md': '# A at abc1234' });
     expect(readFile).not.toHaveBeenCalled();
-    // A commit this server never handed out: the file as it is now.
-    await requests('zzz');
-    expect(JSON.parse(String(jev.mock.calls[2][1]!.body)).files).toEqual({ 'Lens Edu/a.md': '# live' });
+    // A commit this server never handed out: reload, not the file as it is now.
+    expect((await requests('zzz')).status).toBe(409);
+  });
+});
+
+describe('jev routes, an unchanged latest corpus', () => {
+  it('asks the platform with the held commit and passes on "unchanged"', async () => {
+    const { app, jev } = mount({ platformUrl: 'https://platform.test', platformKey: 'k' });
+    jev.mockImplementation(async (u) => new Response(JSON.stringify(String(u).includes('have=')
+      ? { unchanged: true } : { meta: { commit: 'c1' }, rows: [], files: {} }), { status: 200 }));
+    const headers = { 'X-Share-Token': token() };
+    await app.request('/api/jev/corpus?latest=1', { headers });
+    expect(await (await app.request('/api/jev/corpus?latest=1&have=c1', { headers })).json()).toEqual({ unchanged: true });
+    // A commit whose texts this server does not hold is fetched whole.
+    await app.request('/api/jev/corpus?latest=1&have=zz', { headers });
+    expect(jev.mock.calls.map(([u]) => String(u).split('/corpus')[1])).toEqual(['', '?have=c1', '']);
+  });
+});
+
+describe('jev routes, a corpus no longer held', () => {
+  it('answers 409 reload for a commit this server never handed out or has dropped', async () => {
+    const { app } = mount({ platformUrl: 'https://platform.test', platformKey: 'k' });
+    const res = await app.request('/api/jev/requests', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+      body: JSON.stringify({ question: { instructions: 'q' }, presentation: { context: 'document' }, commit: 'gone', units: [{ id: 'a', path: 'Lens Edu/a.md', line: 1, text: 'x' }] }),
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/^reload:/);
   });
 });

@@ -1,7 +1,7 @@
 // The paragraphs a run can draw from: the corpus in one fixed shuffled order, filtered by
 // the chosen courses and kinds of text. The sample is the first N of that pool, so it is
 // the same on every run and a larger N only adds paragraphs.
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CorpusMeta, Para } from './types';
 import { relayHeaders } from '../../lib/relay-api';
 
@@ -13,14 +13,16 @@ function fnv(s: string) {
 
 /** The corpus as the course text is now, from the platform (the offline corpus when the
  *  platform has none), its rows in the fixed order. */
-async function fetchCorpus(): Promise<{ meta: CorpusMeta; corpus: Para[] }> {
+async function fetchCorpus(held?: { meta: CorpusMeta; corpus: Para[] }): Promise<{ meta: CorpusMeta; corpus: Para[] }> {
   const get = async (url: string) => {
     const r = await fetch(url, { headers: relayHeaders() });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error);
-    return d as { meta: CorpusMeta; rows: Para[] };
+    return d as { meta: CorpusMeta; rows: Para[]; unchanged?: boolean };
   };
-  const d = await get('/api/jev/corpus?latest=1').catch(() => get('/api/jev/corpus'));
+  const have = held ? `&have=${encodeURIComponent(held.meta.commit)}` : '';
+  const d = await get(`/api/jev/corpus?latest=1${have}`).catch(() => get('/api/jev/corpus'));
+  if (d.unchanged && held) return held;
   return { meta: d.meta, corpus: [...d.rows].sort((a, b) => fnv(a.id) - fnv(b.id)) };
 }
 
@@ -31,7 +33,8 @@ export function useCorpus(onError: (msg: string) => void) {
   useEffect(() => {
     fetchCorpus().then(setState, (e: Error) => onError(`corpus: ${e.message}`));
   }, [onError]);
-  const reload = useCallback(async () => { const d = await fetchCorpus(); setState(d); return d; }, []);
+  const held = state.meta && state.corpus ? { meta: state.meta, corpus: state.corpus } : undefined;
+  const reload = async () => { const d = await fetchCorpus(held); setState(d); return d; };
   return { ...state, reload };
 }
 

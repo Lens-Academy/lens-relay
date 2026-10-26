@@ -173,9 +173,14 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
   // Runs that sample it; the browser gets the rows. Otherwise the offline corpus file.
   app.get('/corpus', async c => {
     if (c.req.query('latest') && config.platformUrl && config.platformKey) {
-      const res = await doFetch(`${config.platformUrl.replace(/\/$/, '')}/api/content/course-checks/corpus`, { headers: { 'X-Validation-Key': config.platformKey } }).catch((e: Error) => e);
+      // The browser says which commit it holds; one this server still has the texts of needs no download.
+      const have = c.req.query('have');
+      const q = have && byCommit.has(have) ? `?have=${encodeURIComponent(have)}` : '';
+      const res = await doFetch(`${config.platformUrl.replace(/\/$/, '')}/api/content/course-checks/corpus${q}`, { headers: { 'X-Validation-Key': config.platformKey } }).catch((e: Error) => e);
       if (res instanceof Error || !res.ok) return c.json({ error: `the platform's corpus: ${res instanceof Error ? res.message : res.status}` }, 502);
-      const { meta, rows, files } = await res.json();
+      const got = await res.json();
+      if (got.unchanged) return c.json({ unchanged: true });
+      const { meta, rows, files } = got;
       byCommit.delete(meta.commit);
       byCommit.set(meta.commit, files);
       while (byCommit.size > 4) byCommit.delete(byCommit.keys().next().value!);
@@ -192,6 +197,8 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
   const fileCache = new Map<string, { at: number; text: string | null }>();
   // File texts of the platform corpora handed out, by commit (the last few).
   const byCommit = new Map<string, Record<string, string>>();
+  // The offline corpus's commit, if there is one.
+  const corpusMetaCommit = () => (existsSync(config.corpusPath) ? JSON.parse(readFileSync(config.corpusPath, 'utf8')).meta?.commit : undefined);
   // The offline corpus's own file texts, reloaded when the file changes.
   // Keyed on both files' mtime and size: two writes within one mtime tick differ in size.
   let snap: { stamp: string; files: Record<string, string> } | null = null;
@@ -246,8 +253,14 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     let files: Record<string, string> = {};
     try {
       if (body.presentation) {
-        // The texts the sample came from: its platform commit's, else the offline corpus's.
-        const snapshot = (typeof body.commit === 'string' && byCommit.get(body.commit)) || corpusFiles();
+        // The texts the sample came from: its platform commit's, else the offline corpus's. A
+        // platform commit this server no longer holds (a restart, or four newer corpora since)
+        // is a 409, so the workbench reloads instead of asking about other texts (Assay, #195).
+        const known = typeof body.commit === 'string' ? byCommit.get(body.commit) : undefined;
+        if (typeof body.commit === 'string' && !known && body.commit !== corpusMetaCommit()) {
+          return c.json({ error: 'reload: this corpus is no longer held here', reload: true }, 409);
+        }
+        const snapshot = known ?? corpusFiles();
         files = { ...(await readFiles(paths.filter((p) => !(p in snapshot)))), ...Object.fromEntries(paths.filter((p) => p in snapshot).map((p) => [p, snapshot[p]])) };
       }
     } catch (e) {

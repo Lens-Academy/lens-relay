@@ -24,7 +24,7 @@ import { CountInput } from './CountInput';
 import { RunChips } from './RunChips';
 import { baseFor, type RunEntry } from './runs';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
-import type { Para, Run } from './types';
+import type { CorpusMeta, Para, Run } from './types';
 import { DEFAULT_PRESENTATION, describe, isDefault, LEVELS, presentationBlock, type Level, type Presentation } from '../../lib/jev-presentation';
 import { PresentationPicker } from './PresentationPicker';
 import { relayHeaders } from '../../lib/relay-api';
@@ -108,12 +108,23 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
     setRunning(true); setErr(null);
     try {
       // With latest course text, every Run first takes the corpus as the text is now.
-      const fresh = latestText ? await corpus.reload() : { corpus: corpus.corpus, meta: corpus.meta };
-      const sample = (poolOf(fresh.corpus, fresh.meta, viewCourses && courses, viewKinds && kinds) ?? []).slice(0, n);
-      const commit = fresh.meta?.commit;
-      const key = sample.map((u) => u.id).join('\n');
-      // Each check as it would be asked: the draft and the live check may differ in presentation.
-      const [r, l] = await Promise.all([ask(c, sample, pres, commit), draft ? ask(live, sample, live.presentation, commit) : null]);
+      const askAll = async (fresh: { corpus: Para[] | null; meta: CorpusMeta | null }) => {
+        const sample = (poolOf(fresh.corpus, fresh.meta, viewCourses && courses, viewKinds && kinds) ?? []).slice(0, n);
+        const commit = fresh.meta?.commit;
+        // Each check as it would be asked: the draft and the live check may differ in presentation.
+        const [r, l] = await Promise.all([ask(c, sample, pres, commit), draft ? ask(live, sample, live.presentation, commit) : null]);
+        return { r, l, key: sample.map((u) => u.id).join('\n') };
+      };
+      let got;
+      try {
+        got = await askAll(latestText ? await corpus.reload() : { corpus: corpus.corpus, meta: corpus.meta });
+      } catch (e) {
+        // The server no longer holds this corpus's texts (a restart, or newer corpora since).
+        if (!(e as Error).message.startsWith('reload:')) throw e;
+        if (!latestText) throw new Error(`The texts of rev ${corpus.meta?.commit} are no longer held by the editor server; turn "latest course text" on to load the course text again.`);
+        got = await askAll(await corpus.reload());
+      }
+      const { r, l, key } = got;
       setSent(r.first);
       const mine = { ...r, sample: key }, draftRun = !!draft;
       setRuns((rs) => [...rs, { run: mine, draft: draftRun, base: baseFor(rs, key, l && { ...l, sample: key }) }]);
