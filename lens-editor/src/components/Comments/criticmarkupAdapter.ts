@@ -10,6 +10,7 @@ import {
   editRangeContentInYText,
   deleteRangeInYText,
   removeThreadInYText,
+  toggleReactionInYText,
 } from '../../lib/ytext-comment-ops';
 
 export interface AdapterCallbacks {
@@ -19,6 +20,8 @@ export interface AdapterCallbacks {
   onDelete: (message: MessageView) => void;
   /** Removes the thread and its highlight, keeping the text (Notion's resolve) */
   onResolve: (thread: ThreadView) => void;
+  /** Adds the current user's emoji reaction to a message, or takes it back */
+  onReact: (message: MessageView, emoji: string) => void;
   /** Returns the new thread's key, when it differs from `key` (a highlight was added) */
   onAddComment: (key: ThreadKey, body: string) => ThreadKey | void;
 }
@@ -115,6 +118,11 @@ export function useThreadsFromYText(
       const id = messageIdFor(range);
       rangeByMessageId.set(id, range);
       const isOwn = range.metadata?.author === currentUserName;
+      // Reactions grouped by emoji, in the order they were first given
+      const byEmoji = new Map<string, string[]>();
+      for (const [emoji, who] of range.metadata?.reactions ?? []) {
+        byEmoji.set(emoji, [...(byEmoji.get(emoji) ?? []), who]);
+      }
       return {
         id,
         author: range.metadata?.author ?? 'unknown',
@@ -124,6 +132,7 @@ export function useThreadsFromYText(
         timestamp: range.metadata?.timestamp != null ? String(range.metadata.timestamp) : '',
         canModify: isOwn,
         canDelete: isOwn || canDeleteAny,
+        reactions: [...byEmoji].map(([emoji, names]) => ({ emoji, names, mine: names.includes(currentUserName) })),
       };
     };
 
@@ -165,6 +174,11 @@ export function useThreadsFromYText(
       onResolve(thread) {
         const live = liveThread(yText, thread.root.id);
         if (live) removeThreadInYText(yText, live.ranges, live.thread.comments);
+      },
+      onReact(message, emoji) {
+        const live = liveThread(yText, message.id);
+        const range = live?.thread.comments.find((c) => messageIdFor(c) === message.id);
+        if (range) toggleReactionInYText(yText, range, emoji, currentUserName);
       },
       onAddComment(key, body) {
         const at = insertPos(yText, key);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { EditorView } from '@codemirror/view';
 import {
   useHeadings,
@@ -25,7 +25,8 @@ function OutlineList({ headings, active, onPick }: {
   return (
     <ul className="lens-outline-list">
       {headings.map((heading, index) => (
-        <li key={`${heading.from}-${index}`}>
+        // --i staggers the items as the page outline opens (index.css)
+        <li key={`${heading.from}-${index}`} style={{ '--i': Math.min(index, 12) } as CSSProperties}>
           <button
             type="button"
             className={`lens-outline-item${index === active ? ' is-active' : ''}`}
@@ -95,7 +96,7 @@ export function PageOutline({ view, stateVersion }: TableOfContentsProps) {
 
   return (
     <nav
-      className="lens-outline"
+      className={`lens-outline${open ? ' is-open' : ''}`}
       aria-label="Table of contents"
       onMouseEnter={show}
       onMouseLeave={hideSoon}
@@ -122,18 +123,18 @@ export function PageOutline({ view, stateVersion }: TableOfContentsProps) {
           />
         ))}
       </button>
-      {open && (
-        <div className="lens-outline-panel">
-          <OutlineList
-            headings={headings}
-            active={active}
-            onPick={(heading) => {
-              setOpen(false);
-              scrollToHeading(view, heading);
-            }}
-          />
-        </div>
-      )}
+      {/* Always there, so it can fade and slide in and out (index.css);
+          hidden, it takes no pointer, focus or screen reader */}
+      <div className={`lens-outline-panel${open ? ' is-open' : ''}`}>
+        <OutlineList
+          headings={headings}
+          active={active}
+          onPick={(heading) => {
+            setOpen(false);
+            scrollToHeading(view, heading);
+          }}
+        />
+      </div>
     </nav>
   );
 }

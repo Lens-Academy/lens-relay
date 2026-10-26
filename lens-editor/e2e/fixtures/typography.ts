@@ -1,4 +1,4 @@
-import '@fontsource-variable/source-serif-4/opsz.css';
+import '@fontsource-variable/lora/wght.css';
 import '../../src/index.css';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';

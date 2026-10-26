@@ -9,6 +9,8 @@ interface AddCommentFormProps {
   autoFocus?: boolean;
   /** Pre-populates the textarea (used by the Edit flow). */
   initialValue?: string;
+  /** "bar": Notion's reply bar, the field and its send arrow on one line, no Cancel */
+  variant?: 'form' | 'bar';
 }
 
 /**
@@ -23,6 +25,7 @@ export function AddCommentForm({
   submitLabel = 'Add',
   autoFocus = true,
   initialValue = '',
+  variant = 'form',
 }: AddCommentFormProps) {
   const [text, setText] = useState(initialValue);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -63,6 +66,40 @@ export function AddCommentForm({
 
   const canSend = text.trim() !== '';
 
+  const sendButton = (
+    <button
+      type="button"
+      onClick={handleSubmit}
+      className="lens-comment-send"
+      data-ready={canSend ? '' : undefined}
+      aria-label={submitLabel}
+      title={submitLabel}
+    >
+      <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+        <circle cx="12" cy="12" r="12" fill="currentColor" />
+        <path d="M12 17V7.5M7.75 11.5 12 7.25l4.25 4.25" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <span className="sr-only">{submitLabel}</span>
+    </button>
+  );
+
+  if (variant === 'bar') {
+    return (
+      <div className="add-comment-form lens-comment-replybar">
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          className="lens-comment-input"
+          rows={1}
+        />
+        {sendButton}
+      </div>
+    );
+  }
+
   return (
     <div className="add-comment-form lens-comment-form">
       <textarea
@@ -82,20 +119,7 @@ export function AddCommentForm({
         >
           Cancel
         </button>
-        <button
-          type="button"
-          onClick={handleSubmit}
-          className="lens-comment-send"
-          data-ready={canSend ? '' : undefined}
-          aria-label={submitLabel}
-          title={submitLabel}
-        >
-          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
-            <circle cx="12" cy="12" r="12" fill="currentColor" />
-            <path d="M12 17V7.5M7.75 11.5 12 7.25l4.25 4.25" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          <span className="sr-only">{submitLabel}</span>
-        </button>
+        {sendButton}
       </div>
     </div>
   );

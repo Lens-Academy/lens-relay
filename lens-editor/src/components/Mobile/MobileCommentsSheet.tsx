@@ -12,6 +12,8 @@ export type PendingCommentAction =
 export interface MobileCommentsSheetProps {
   /** Cards show their thread's number (see CommentsLayer) */
   numbered?: boolean;
+  /** Adds the current user's emoji reaction to a message, or takes it back */
+  onReact?: (message: MessageView, emoji: string) => void;
   threads: ThreadView[];
   pendingAction: PendingCommentAction;
   onPendingActionConsumed: () => void;
@@ -37,7 +39,7 @@ export interface MobileCommentsSheetProps {
  */
 export function MobileCommentsSheet(props: MobileCommentsSheetProps) {
   const {
-    threads, pendingAction, onPendingActionConsumed, onReply, onEdit, onDelete, onAddComment, getInsertKey, numbered = true,
+    threads, pendingAction, onPendingActionConsumed, onReply, onEdit, onDelete, onAddComment, getInsertKey, numbered = true, onReact,
     actions, addTarget, emptyHint, onAddCancel,
   } = props;
   // The pending focus/add request (badge tap, context menu) is consumed at
@@ -124,6 +126,7 @@ export function MobileCommentsSheet(props: MobileCommentsSheetProps) {
             onEdit={onEdit}
             onDelete={onDelete}
             actions={actions}
+            onReact={onReact}
           />
         </div>
       ))}

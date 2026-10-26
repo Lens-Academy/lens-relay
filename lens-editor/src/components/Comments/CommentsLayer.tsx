@@ -46,6 +46,8 @@ export interface CommentsLayerProps {
   /** Cards show their thread's number, as the page's markers do (HTML pages);
    *  not where the text a comment is on marks it (the markdown editor) */
   numbered?: boolean;
+  /** Adds the current user's emoji reaction to a message, or takes it back */
+  onReact?: (message: MessageView, emoji: string) => void;
   /** Resolve a thread key to a screen y, or null if not currently rendered. */
   resolveAnchorY: (key: ThreadKey) => number | null;
   /** Current visible viewport in the same coordinate space as resolveAnchorY. */
@@ -104,6 +106,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     draft,
     emptyHint = 'No comments yet. Select text and choose Add comment (Ctrl+Shift+M).',
     numbered = true,
+    onReact,
   } = props;
 
   // getInsertKey identity may change every render (callers commonly pass
@@ -114,11 +117,17 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
 
   const layerRef = useRef<HTMLDivElement | null>(null);
 
-  const [focusedThreadKey, setFocusedThreadKey] = useState<ThreadKey | null>(null);
+  // The open thread, by its key and its root comment: the key is an offset that
+  // moves when anyone types above, so the root finds the thread again and the
+  // card stays open with its reply bar
+  const [focus, setFocus] = useState<{ key: ThreadKey; rootId?: string } | null>(null);
+  const focusedThreadKey = focus == null || threads.some((t) => t.key === focus.key)
+    ? focus?.key ?? null
+    : threads.find((t) => t.root.id === focus.rootId)?.key ?? null;
 
   // Helper: set focus and fire callback.
   const applyFocus = (key: ThreadKey | null) => {
-    setFocusedThreadKey(key);
+    setFocus(key == null ? null : { key, rootId: threads.find((t) => t.key === key)?.root.id });
     onFocusChange?.(key);
   };
 
@@ -487,6 +496,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
               onEdit={(msg, body) => onEdit(msg, body)}
               onDelete={(msg) => onDelete(msg)}
               actions={actions}
+              onReact={onReact}
             />
           </div>
         );

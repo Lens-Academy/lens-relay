@@ -1,8 +1,10 @@
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { useRef, useState, type ReactElement } from 'react';
+import { createPortal } from 'react-dom';
 import type { ThreadView, MessageView, ThreadKey, ThreadActions, ThreadAnchorInfo } from './types';
 import { formatTimestamp } from '../../lib/format-timestamp';
 import { AddCommentForm } from './AddCommentForm';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { useMenuPopover } from '../Menu/useMenuPopover';
 
 export interface CommentCardProps {
   thread: ThreadView;
@@ -15,7 +17,13 @@ export interface CommentCardProps {
   onDelete: (message: MessageView) => void;
   /** Resolve / re-attach actions, for comment sources that support them. */
   actions?: ThreadActions;
+  /** Adds the current user's emoji reaction to a message, or takes it back
+   *  (comments that keep reactions: the markdown editor's) */
+  onReact?: (message: MessageView, emoji: string) => void;
 }
+
+/** The reactions on offer, as Notion's quick picks */
+const REACTIONS = ['👍', '❤️', '😄', '🎉', '🙏', '👀', '✅', '🔥'];
 
 /** Notion's comment icon: a speech bubble */
 export function CommentIcon({ size = 16 }: { size?: number }) {
@@ -26,12 +34,60 @@ export function CommentIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-/** Notion's resolve icon: a tick in a circle */
+/** Notion's resolve icon: a tick */
 function ResolveIcon() {
   return (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m3.5 8.5 3 3 6-6.5" />
+    </svg>
+  );
+}
+
+/** Notion's add-reaction icon: a smiley with a plus */
+function ReactIcon() {
+  return (
     <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="8" cy="8" r="6.25" />
-      <path d="m5.25 8.25 1.9 1.9 3.6-3.9" />
+      <path d="M13.9 8.6A6 6 0 1 1 8 2a6 6 0 0 1 1.6.2" />
+      <path d="M5.6 9.6a2.9 2.9 0 0 0 4.8 0" />
+      <path d="M6 6.4v.1M10 6.4v.1" strokeWidth="1.8" />
+      <path d="M13 1.6v3.6M11.2 3.4h3.6" />
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+      <circle cx="3.5" cy="8" r="1.2" />
+      <circle cx="8" cy="8" r="1.2" />
+      <circle cx="12.5" cy="8" r="1.2" />
+    </svg>
+  );
+}
+
+/** The ••• menu's icons, as Notion's: a pencil, a link, a bin */
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10.6 2.9a1.5 1.5 0 0 1 2.1 2.1L5.4 12.3l-2.9.8.8-2.9Z" />
+      <path d="m9.5 4 2.5 2.5" />
+    </svg>
+  );
+}
+
+function LinkIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2.3-2.3a2.6 2.6 0 0 0-3.7-3.7l-.9.9" />
+      <path d="M9.2 6.8a2.6 2.6 0 0 0-3.7 0L3.2 9.1a2.6 2.6 0 0 0 3.7 3.7l.9-.9" />
+    </svg>
+  );
+}
+
+function DeleteIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.75 4.25h10.5M6.25 4.25V2.75h3.5v1.5M4.25 4.25l.6 8.4a1 1 0 0 0 1 .95h4.3a1 1 0 0 0 1-.95l.6-8.4" />
     </svg>
   );
 }
@@ -92,30 +148,25 @@ function AnchorLine({ info, thread, actions }: { info: ThreadAnchorInfo; thread:
 }
 
 export function CommentCard(props: CommentCardProps): ReactElement {
-  const { thread, number, focused, onFocus, onReply, onEdit, onDelete, actions } = props;
+  const { thread, number, focused, onFocus, onReply, onEdit, onDelete, actions, onReact } = props;
   const resolved = thread.resolved;
   const canResolve = !resolved && actions?.onResolve != null;
+  const cardRef = useRef<HTMLDivElement>(null);
 
-  const [showReplyForm, setShowReplyForm] = useState(false);
-
-  const root = thread.root;
-  const replies = thread.replies;
-
+  // A click on the card opens it and puts the cursor in its reply bar, as in
+  // Notion; a click on a button or in a field inside it stops before here
   const handleCardClick = () => {
-    // Interactive subtrees stopPropagation, so any click reaching here is on the card body.
-    onFocus(thread.key);
-  };
-
-  const handleReplySubmit = (content: string) => {
-    onReply(thread, content);
-    setShowReplyForm(false);
+    if (!focused) onFocus(thread.key);
+    requestAnimationFrame(() => cardRef.current?.querySelector<HTMLTextAreaElement>('.lens-comment-replybar textarea')?.focus());
   };
 
   // Notion's discussion card (index.css): at rest a faint border, hovered a
   // grey background, open (focused) a shadow; both nudge it left. Messages
-  // are rows with an avatar, joined by a thread line.
+  // are rows with an avatar, joined by a thread line; each has a toolbar
+  // while the pointer is over it. An open card has the reply bar.
   return (
     <div
+      ref={cardRef}
       className={`comments-card lens-comment-card${focused ? ' comments-card--focused is-open' : ''}${resolved ? ' is-resolved' : ''}`}
       data-resolved={resolved ? '' : undefined}
       onClick={handleCardClick}
@@ -135,48 +186,21 @@ export function CommentCard(props: CommentCardProps): ReactElement {
       {thread.anchor && <AnchorLine info={thread.anchor} thread={thread} actions={actions} />}
 
       <div className="lens-comment-thread">
-        <CommentRow
-          message={root}
-          onEdit={onEdit}
-          onDelete={onDelete}
-          resolveButton={canResolve && (
-            // Notion's resolve tick, at the right of the first message
-            <button
-              type="button"
-              className="lens-comment-resolve"
-              title="Resolve"
-              aria-label="Resolve"
-              onClick={stop(() => actions?.onResolve?.(thread))}
-            >
-              <ResolveIcon />
-            </button>
-          )}
-        />
-        {replies.map((reply) => (
+        {[thread.root, ...thread.replies].map((message, index) => (
           <CommentRow
-            key={reply.id}
-            message={reply}
+            key={message.id}
+            message={message}
             onEdit={onEdit}
             onDelete={onDelete}
+            onReact={onReact}
+            onResolve={index === 0 && canResolve ? () => actions?.onResolve?.(thread) : undefined}
+            onCopyLink={actions?.onCopyLink ? () => actions.onCopyLink!(thread) : undefined}
           />
         ))}
       </div>
 
-      {/* Actions row */}
-      <div className="lens-comment-actions">
-        {!showReplyForm && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowReplyForm(true);
-            }}
-            className="lens-comment-action"
-          >
-            Reply
-          </button>
-        )}
-        {resolved && (
+      {resolved && (
+        <div className="lens-comment-actions">
           <span className="lens-comment-note">
             Resolved by {resolved.by}
             {actions?.onReopen && (
@@ -188,15 +212,17 @@ export function CommentCard(props: CommentCardProps): ReactElement {
               </>
             )}
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Reply box */}
-      {showReplyForm && (
+      {/* Notion's reply bar, while the card is open */}
+      {focused && (
         <div className="lens-comment-reply" onClick={(e) => e.stopPropagation()}>
           <AddCommentForm
-            onSubmit={handleReplySubmit}
-            onCancel={() => setShowReplyForm(false)}
+            variant="bar"
+            autoFocus={false}
+            onSubmit={(content) => onReply(thread, content)}
+            onCancel={() => (document.activeElement as HTMLElement | null)?.blur()}
             placeholder="Reply…"
             submitLabel="Send"
           />
@@ -207,24 +233,31 @@ export function CommentCard(props: CommentCardProps): ReactElement {
 }
 
 // ---------------------------------------------------------------------------
-// CommentRow — renders a single comment with author, timestamp, content,
-// author-only Edit, and Delete for the author or (canDelete) anyone with edit access.
+// CommentRow — a message: avatar, author and time, the text and its
+// reactions; and Notion's toolbar while the pointer is over it: react,
+// resolve (on the thread's first message) and ••• (Edit for the author, Copy
+// link, Delete for the author or (canDelete) anyone with edit access).
 // ---------------------------------------------------------------------------
 
 interface CommentRowProps {
   message: MessageView;
   onEdit: (message: MessageView, newBody: string) => void;
   onDelete: (message: MessageView) => void;
-  /** The thread's resolve tick, on its first message */
-  resolveButton?: ReactNode;
+  onReact?: (message: MessageView, emoji: string) => void;
+  /** Resolves the thread: on its first message */
+  onResolve?: () => void;
+  onCopyLink?: () => void;
 }
 
-function CommentRow({ message, onEdit, onDelete, resolveButton }: CommentRowProps) {
+function CommentRow({ message, onEdit, onDelete, onReact, onResolve, onCopyLink }: CommentRowProps) {
   const [editing, setEditing] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const { open: pickerOpen, setOpen: setPickerOpen, toggle: togglePicker, position: pickerAt, buttonRef: pickerButton, menuRef: pickerMenu } = useMenuPopover(236);
+  const { open: moreOpen, setOpen: setMoreOpen, toggle: toggleMore, position: moreAt, buttonRef: moreButton, menuRef: moreMenu } = useMenuPopover(200);
 
   const { author, body, timestamp, canModify } = message;
   const canDelete = message.canDelete ?? canModify;
+  const hasMore = canModify || canDelete || onCopyLink != null;
 
   if (editing) {
     return (
@@ -243,6 +276,21 @@ function CommentRow({ message, onEdit, onDelete, resolveButton }: CommentRowProp
     );
   }
 
+  const menuItem = (label: string, icon: ReactElement, action: () => void) => (
+    <button
+      type="button"
+      role="menuitem"
+      className="lens-menu-item lens-menu-item-compact text-sm"
+      onClick={stop(() => {
+        setMoreOpen(false);
+        action();
+      })}
+    >
+      <span className="lens-menu-item-icon">{icon}</span>
+      {label}
+    </button>
+  );
+
   return (
     <div className="comment-item lens-comment-row">
       {/* Notion's avatar for someone without a photo: their initial */}
@@ -254,52 +302,90 @@ function CommentRow({ message, onEdit, onDelete, resolveButton }: CommentRowProp
         )}
       </div>
       <p className="lens-comment-body">{body}</p>
-      {/* Edit and Delete while the pointer is over the message; the thread's
-          resolve tick after them on its first message */}
-      <div className="lens-comment-side">
-        {(canModify || canDelete) && (
-          <div className="lens-comment-tools">
-            {canModify && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditing(true);
-                }}
-                className="lens-comment-tool"
-              >
-                Edit
-              </button>
-            )}
+      {(message.reactions?.length ?? 0) > 0 && (
+        <div className="lens-comment-reactions">
+          {message.reactions!.map((r) => (
             <button
+              key={r.emoji}
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDeleteOpen(true);
-              }}
-              className="lens-comment-tool"
+              className={`lens-reaction${r.mine ? ' is-mine' : ''}`}
+              title={r.names.join(', ')}
+              aria-pressed={r.mine}
+              disabled={!onReact}
+              onClick={stop(() => onReact?.(message, r.emoji))}
             >
-              Delete
+              <span aria-hidden="true">{r.emoji}</span>
+              <span>{r.names.length}</span>
             </button>
-            <ConfirmDialog
-              open={deleteOpen}
-              onOpenChange={setDeleteOpen}
-              title="Delete comment"
-              description={
-                canModify
-                  ? 'Are you sure you want to delete this comment? This cannot be undone.'
-                  : `Delete ${author}'s comment for everyone? Do this once it is addressed. This cannot be undone.`
-              }
-              onConfirm={() => {
-                setDeleteOpen(false);
-                onDelete(message);
+          ))}
+        </div>
+      )}
+
+      {(onReact || onResolve || hasMore) && (
+        <div className={`lens-comment-toolbar${pickerOpen || moreOpen ? ' is-active' : ''}`} onClick={(e) => e.stopPropagation()}>
+          {onReact && (
+            <button ref={pickerButton} type="button" className="lens-comment-tool-icon" title="Add reaction" aria-label="Add reaction" aria-expanded={pickerOpen} onClick={togglePicker}>
+              <ReactIcon />
+            </button>
+          )}
+          {onResolve && (
+            <button type="button" className="lens-comment-tool-icon lens-comment-resolve" title="Resolve" aria-label="Resolve" onClick={onResolve}>
+              <ResolveIcon />
+            </button>
+          )}
+          {hasMore && (
+            <button ref={moreButton} type="button" className="lens-comment-tool-icon" title="More" aria-label="More actions" aria-haspopup="menu" aria-expanded={moreOpen} onClick={toggleMore}>
+              <MoreIcon />
+            </button>
+          )}
+        </div>
+      )}
+
+      {pickerOpen && createPortal(
+        <div ref={pickerMenu} role="menu" aria-label="Reactions" className="lens-popover lens-reaction-picker fixed z-[1200]" style={{ top: pickerAt.top, left: pickerAt.left }} onClick={(e) => e.stopPropagation()}>
+          {REACTIONS.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              role="menuitem"
+              aria-label={`React with ${emoji}`}
+              className="lens-reaction-choice"
+              onClick={() => {
+                setPickerOpen(false);
+                onReact?.(message, emoji);
               }}
-              confirmLabel="Delete"
-            />
-          </div>
-        )}
-        {resolveButton}
-      </div>
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+      {moreOpen && createPortal(
+        <div ref={moreMenu} role="menu" className="lens-popover fixed z-[1200] p-1" style={{ top: moreAt.top, left: moreAt.left, width: 200 }} onClick={(e) => e.stopPropagation()}>
+          {canModify && menuItem('Edit', <EditIcon />, () => setEditing(true))}
+          {onCopyLink && menuItem('Copy link', <LinkIcon />, onCopyLink)}
+          {canDelete && menuItem('Delete', <DeleteIcon />, () => setDeleteOpen(true))}
+        </div>,
+        document.body,
+      )}
+      {canDelete && (
+        <ConfirmDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          title="Delete comment"
+          description={
+            canModify
+              ? 'Are you sure you want to delete this comment? This cannot be undone.'
+              : `Delete ${author}'s comment for everyone? Do this once it is addressed. This cannot be undone.`
+          }
+          onConfirm={() => {
+            setDeleteOpen(false);
+            onDelete(message);
+          }}
+          confirmLabel="Delete"
+        />
+      )}
     </div>
   );
 }
