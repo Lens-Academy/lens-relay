@@ -21,6 +21,7 @@ function fake(): HistorySource {
   return {
     log: vi.fn(async () => [{ sha: SHA, ts: 5000, author: 'Elias' }]),
     show: vi.fn(async (_sha: string, path: string) => (path === 'Lenses/a.md' ? 'hello\n' : null)),
+    asOf: vi.fn(async () => 7000),
   };
 }
 const get = (app: Hono, url: string, t: string | null = token()) =>
@@ -58,6 +59,7 @@ describe('history routes', () => {
     expect(source.log).toHaveBeenCalledWith('Lenses/a.md');
     expect(body.sessions).toHaveLength(1);
     expect(body.sessions[0]).toMatchObject({ head: SHA, base: null, authors: ['Elias'] });
+    expect(body.asOf).toBe(7000);
   });
 
   it('returns a version, 404 where the file did not exist, 400 for a bad sha', async () => {

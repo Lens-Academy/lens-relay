@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createHistory, groupSessions, parseLog, repoPath, type Version } from './history.ts';
+import { createHistory, groupSessions, indexStarted, parseLog, repoPath, type Version } from './history.ts';
 
 const R = '\x1e', U = '\x1f';
 const MIN = 60_000;
@@ -100,19 +100,87 @@ describe('createHistory on a real repo', () => {
     expect(await h.show(second, 'Lenses/a.md')).toBe('two\n');
     expect(await h.show(first, 'Lenses/other.md')).toBeNull();
   });
-  it('builds a changed-path commit-graph after a log, once', async () => {
-    const h = createHistory({ repoDir: dir, ref: 'staging' });
-    await h.log('Lenses/a.md');
-    await h.refreshIndex();
-    const graph = path.join(dir, '.git/objects/info/commit-graph');
+  it('builds a changed-path commit-graph when a log runs, once per interval', async () => {
+    // A repo of its own: the index state is shared per repo, so other tests' instances must not touch it.
+    const own = await fs.mkdtemp(path.join(os.tmpdir(), 'history-graph-'));
+    execFileSync('git', ['clone', '-q', dir, own]);
+    const graph = path.join(own, '.git/objects/info/commit-graph');
+    const h = createHistory({ repoDir: own, ref: 'origin/staging' });
+    expect(indexStarted(own)).toBe(false);
+    await h.log('Lenses/a.md');                       // no explicit refreshIndex: log must start it
+    expect(indexStarted(own)).toBe(true);
+    await h.refreshIndex();                           // the running build, not a new one
     const stat = await fs.stat(graph);
-    expect(execFileSync('git', ['commit-graph', 'verify'], { cwd: dir }).toString()).toBe('');
+    expect(execFileSync('git', ['commit-graph', 'verify'], { cwd: own }).toString()).toBe('');
     await h.log('Lenses/a.md');
     await h.refreshIndex();
     expect((await fs.stat(graph)).mtimeMs).toBe(stat.mtimeMs);
+    await fs.rm(own, { recursive: true, force: true });
+  });
+  it('reads paths literally: glob and magic pathspecs match no file', async () => {
+    const h = createHistory({ repoDir: dir, ref: 'staging' });
+    expect(await h.log('Lenses/*.md')).toEqual([]);
+    expect(await h.log(':(glob)**')).toEqual([]);
+    expect(await h.show(second, 'Lenses/*.md')).toBeNull();
+  });
+  it('does not show a commit unreachable from the ref', async () => {
+    git('checkout', '-q', '-b', 'side');
+    const stray = await commit('Lenses/a.md', 'side\n', 'X', 4000);
+    git('checkout', '-q', 'staging');
+    const h = createHistory({ repoDir: dir, ref: 'staging' });
+    expect(await h.show(stray, 'Lenses/a.md')).toBeNull();
+    expect(await h.show(second, 'Lenses/a.md')).toBe('two\n');
+  });
+  it('reports the ref tip time as asOf', async () => {
+    const h = createHistory({ repoDir: dir, ref: 'staging' });
+    expect(await h.asOf()).toBe(3_000_000);
   });
   it('refuses a sha that is not a full hex id', async () => {
     const h = createHistory({ repoDir: dir, ref: 'staging' });
     await expect(h.show('staging', 'Lenses/a.md')).rejects.toThrow(/sha/);
+  });
+});
+
+describe('createHistory fetching its own ref', () => {
+  let remote = '', clone = '';
+  const g = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd }).toString();
+  const commitIn = async (cwd: string, body: string, t: number) => {
+    await fs.writeFile(path.join(cwd, 'a.md'), body);
+    g(cwd, 'add', '-A');
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'x', '--author=Elias <x@y>'], {
+      cwd, env: { ...process.env, GIT_AUTHOR_DATE: `@${t} +0000`, GIT_COMMITTER_DATE: `@${t} +0000` },
+    });
+  };
+  beforeAll(async () => {
+    remote = await fs.mkdtemp(path.join(os.tmpdir(), 'history-remote-'));
+    clone = await fs.mkdtemp(path.join(os.tmpdir(), 'history-clone-'));
+    g(remote, 'init', '-q', '-b', 'staging');
+    await commitIn(remote, 'one\n', 1000);
+    g(clone, 'init', '-q', '--bare');
+  });
+  afterAll(async () => {
+    await fs.rm(remote, { recursive: true, force: true });
+    await fs.rm(clone, { recursive: true, force: true });
+  });
+
+  it('fetches before the first read, then at most once per interval', async () => {
+    const h = createHistory({ repoDir: clone, ref: 'refs/history/staging', remoteUrl: remote, branch: 'staging', fetchEveryMs: 60_000 });
+    expect(await h.log('a.md')).toHaveLength(1);
+    await commitIn(remote, 'two\n', 2000);
+    expect(await h.log('a.md')).toHaveLength(1);          // within the interval: no fetch
+    const fresh = createHistory({ repoDir: clone, ref: 'refs/history/staging', remoteUrl: remote, branch: 'staging', fetchEveryMs: 0 });
+    expect(await fresh.log('a.md')).toHaveLength(2);
+    expect(await fresh.asOf()).toBe(2_000_000);
+  });
+  it('keeps serving the last copy when a fetch fails', async () => {
+    const h = createHistory({ repoDir: clone, ref: 'refs/history/staging', remoteUrl: path.join(remote, 'nope'), branch: 'staging', fetchEveryMs: 0 });
+    expect(await h.log('a.md')).toHaveLength(2);
+  });
+  it('fails loudly when it has never fetched and cannot', async () => {
+    const empty = await fs.mkdtemp(path.join(os.tmpdir(), 'history-empty-'));
+    g(empty, 'init', '-q', '--bare');
+    const h = createHistory({ repoDir: empty, ref: 'refs/history/staging', remoteUrl: path.join(remote, 'nope'), branch: 'staging', fetchEveryMs: 0 });
+    await expect(h.log('a.md')).rejects.toThrow(/nope/);  // the fetch's error, not a later 'unknown revision'
+    await fs.rm(empty, { recursive: true, force: true });
   });
 });

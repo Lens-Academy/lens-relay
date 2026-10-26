@@ -25,7 +25,7 @@ function stepChange(box: HTMLElement | null, at: { current: number }) {
 
 export function HistoryPanel({ path, onClose }: { path: string; onClose: () => void }) {
   // Each result carries the request it answers, so a stale one reads as "loading".
-  const [log, setLog] = useState<{ path: string; sessions?: HistorySession[]; error?: string } | null>(null);
+  const [log, setLog] = useState<{ path: string; sessions?: HistorySession[]; asOf?: number; error?: string } | null>(null);
   const [pick, setPick] = useState<{ path: string; i: number }>({ path, i: 0 });
   const [version, setVersion] = useState<{ head: string; text?: string | null; base?: string | null; error?: string } | null>(null);
   const [showChanges, setShowChanges] = useState(true);
@@ -33,12 +33,13 @@ export function HistoryPanel({ path, onClose }: { path: string; onClose: () => v
   useEffect(() => {
     let live = true;
     fetchSessions(path).then(
-      sessions => live && setLog({ path, sessions }),
+      r => live && setLog({ path, sessions: r.sessions, asOf: r.asOf }),
       e => live && setLog({ path, error: String(e.message ?? e) }));
     return () => { live = false; };
   }, [path]);
 
   const sessions = log?.path === path ? log.sessions ?? null : null;
+  const asOf = log?.path === path ? log.asOf : undefined;
   const picked = pick.path === path ? pick.i : 0;
   const session = sessions?.[picked];
   useEffect(() => {
@@ -78,6 +79,11 @@ export function HistoryPanel({ path, onClose }: { path: string; onClose: () => v
           <h2 className="text-sm font-semibold text-gray-800">History</h2>
           <button onClick={onClose} className="text-sm text-gray-500 hover:text-gray-800" title="Close (Esc)">Close</button>
         </div>
+        {asOf !== undefined && (
+          <p className="px-4 pt-2 text-xs text-gray-400" title="Versions come from the git copy of Lens Edu, saved about every 30 seconds">
+            Saved versions up to {day(asOf)}, {time(asOf)}
+          </p>
+        )}
         {!sessions && !error && <p className="p-4 text-sm text-gray-500">Loading…</p>}
         {sessions?.length === 0 && <p className="p-4 text-sm text-gray-500">No saved versions of this file yet.</p>}
         {sessions?.map((s, i) => (

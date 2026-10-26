@@ -26,15 +26,16 @@ async function getJson<T>(url: string): Promise<T> {
   return res.json();
 }
 
+/** The file's editing sessions, and the commit time (ms) of the newest version the server holds. */
 export const fetchSessions = (path: string) =>
-  getJson<{ sessions: HistorySession[] }>(`/api/history/log?path=${encodeURIComponent(path)}`).then(r => r.sessions);
+  getJson<{ sessions: HistorySession[]; asOf: number }>(`/api/history/log?path=${encodeURIComponent(path)}`);
 
 /** The file's text at a version; null if it did not exist then. */
 export async function fetchVersion(path: string, sha: string): Promise<string | null> {
   try {
     return (await getJson<{ text: string }>(`/api/history/file?path=${encodeURIComponent(path)}&sha=${sha}`)).text;
   } catch (e) {
-    if (e instanceof Error && /did not exist/.test(e.message)) return null;
+    if (e instanceof Error && /No such version/.test(e.message)) return null;
     throw e;
   }
 }
