@@ -4,7 +4,7 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree } from '@codemirror/language';
-import { extractHeadings, headingInView, normalizeHeadingLevels, plainHeadingText, rankHeadingLevels, useHeadingInView } from './useHeadings';
+import { extractHeadings, headingInView, normalizeHeadingLevels, plainHeadingText, rankHeadingLevels, scrollToHeading, useHeadingInView } from './useHeadings';
 import type { Heading } from './useHeadings';
 
 /** Helper: build minimal Heading[] from raw levels */
@@ -130,5 +130,24 @@ describe('useHeadingInView', () => {
     rerender({ headings: headingsFromLevels([1, 2, 1]) });
     unmount();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe('scrollToHeading', () => {
+  it('goes to the heading as the page is now, though text was typed above it since the outline was drawn', () => {
+    const view = new EditorView({
+      state: EditorState.create({ doc: '# One\n\ntext\n\n## Two\n\n## Two\n', extensions: [markdown()] }),
+      parent: document.body,
+    });
+    ensureSyntaxTree(view.state, view.state.doc.length, 10_000);
+    const [, firstTwo] = extractHeadings(view.state);
+    view.dispatch({ changes: { from: 0, insert: 'Added above.\n\n' } });
+
+    scrollToHeading(view, firstTwo);
+    // The first of the two "Two"s, where it is now
+    const head = view.state.selection.main.head;
+    expect(view.state.doc.lineAt(head).text).toBe('## Two');
+    expect(head).toBe(view.state.doc.toString().indexOf('## Two'));
+    view.destroy();
   });
 });
