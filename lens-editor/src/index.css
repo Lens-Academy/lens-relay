@@ -756,12 +756,11 @@
 .cm-line.cm-heading-6-line.cm-heading-after-text { padding-top: 28px; }
 .cm-line.cm-heading-line.cm-heading-before-text { padding-bottom: 16px; }
 
-/* A blank line between blocks is Notion's 16px gap between paragraphs, not a
-   full 24px row (livePreview.ts marks them; not in code or frontmatter) */
+/* Spacing is one rule: a blank line, a new paragraph, is 16px of space;
+   lines in a row, of text or of lists at any depth, have none between them.
+   Headings keep their own space above and below. (livePreview.ts marks
+   blank lines; not in code or frontmatter.) */
 .cm-content .cm-line.cm-blank-line { line-height: 16px; }
-/* A line of text with another under it, no blank line between (one Enter):
-   in Notion each Enter starts a new block, 16px below (livePreview.ts) */
-.cm-content .cm-line.cm-text-before-text { padding-bottom: 16px; }
 
 /* Horizontal rule (---, ***, ___) — livePreview.ts marks the line and hides
    the characters. The rule is a background band across the line's text
@@ -1086,15 +1085,7 @@
 .cm-content .cm-line.cm-list-line {
   padding-left: calc(6px + var(--list-hang, 0px));
   text-indent: calc(-1 * var(--list-hang, 0px));
-  /* Notion's 6px between list items */
-  padding-top: 3px;
-  padding-bottom: 3px;
 }
-/* A list touching text above or below it (no blank line between): Notion's
-   16px between blocks (livePreview.ts marks these lines; not next to a
-   heading, whose own padding gives that) */
-.cm-content .cm-line.cm-list-line.cm-list-after-text { padding-top: 16px; }
-.cm-content .cm-line.cm-list-line.cm-list-before-text { padding-bottom: 16px; }
 .cm-content .cm-line.cm-blockquote.cm-list-line {
   padding-left: calc(var(--quote-pad) + var(--list-hang, 0px)) !important;
 }
