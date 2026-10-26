@@ -27,7 +27,7 @@ import {
   WidgetType,
   keymap,
 } from '@codemirror/view';
-import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin, criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
+import { criticMarkupCompartment, criticMarkupLivePreview, criticMarkupSourcePlugin, criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
 import { markdownTableCompartment, markdownTableExtension } from './markdownTable';
 import { createLinkElement } from './linkElement';
 import { createWikilinkElement, getWikilinkContext, inEmbedCard, linksCreate, setWikilinkContext, splitWikilink } from './wikilinkElement';
@@ -947,9 +947,29 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             // each Enter starts a new block, 16px below the last (index.css)
             if (node.name === 'Paragraph' && node.node.parent?.name === 'Document' && !inFrontmatter(view, node.from)) {
               const last = doc.lineAt(node.to).number;
+              const comments = view.state.field(criticMarkupField, false) ?? [];
+              // A line whose break is inside a comment, hidden with it
+              // (criticmarkup.ts), runs on into the next: the drawn line
+              // starts at the first of them, and takes the gap
+              let runStart: number | null = null;
               for (let n = doc.lineAt(node.from).number; n < last; n++) {
                 const line = doc.line(n);
-                decorations.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'cm-text-before-text' }) });
+                const start: number = runStart ?? line.from;
+                if (comments.some((r) => r.type === 'comment' && r.from <= line.to && r.to > line.to)) {
+                  runStart = start;
+                  continue;
+                }
+                runStart = null;
+                decorations.push({ from: start, to: start, deco: Decoration.line({ class: 'cm-text-before-text' }) });
+                if (start !== line.from) continue;
+                // CodeMirror takes the page's line height, which it guesses
+                // every line not drawn by, from the first short line of plain
+                // text, padding and all: this one would give 40px, not 24px,
+                // and its guesses would be so far off that its measuring never
+                // settled. A mark, styling nothing, makes it pass over the line.
+                if (line.length > 0 && line.length <= 20) {
+                  decorations.push({ from: line.from, to: line.to, deco: Decoration.mark({ class: 'cm-gap-text' }) });
+                }
               }
             }
 
@@ -1414,7 +1434,7 @@ export function toggleSourceMode(view: EditorView, sourceMode: boolean) {
         sourceMode ? [sourceHeadingPlugin, obsidianCommentPlugin, frontmatterSourcePlugin, livePreviewTheme] : [livePreviewPlugin, syntaxReveal, noteEmbeds, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]
       ),
       criticMarkupCompartment.reconfigure(
-        sourceMode ? criticMarkupSourcePlugin : criticMarkupPlugin
+        sourceMode ? criticMarkupSourcePlugin : criticMarkupLivePreview
       ),
       markdownTableCompartment.reconfigure(
         sourceMode ? [] : markdownTableExtension()

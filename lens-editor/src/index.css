@@ -1732,16 +1732,6 @@
   border-bottom-color: rgb(255, 203, 0);
 }
 
-/* Collapse ghost lines within legacy multi-line comments */
-.cm-comment-collapsed-line {
-  font-size: 0;
-  line-height: 0 !important;
-  padding: 0 !important;
-  min-height: 0 !important;
-  height: 0 !important;
-  overflow: hidden;
-}
-
 /* A comment's marker in the text: Notion's comment indicator, a speech
    bubble and, in grey, the comment's number (its card shows the same) */
 .cm-comment-badge {
@@ -2630,22 +2620,37 @@ html, body {
   border-radius: 4px;
   cursor: pointer;
 }
-.lens-tree-action:hover {
+.lens-tree-action:hover,
+.lens-tree-actions.is-open .lens-tree-action {
+  color: var(--lens-icon);
   background-color: var(--lens-pressed-bg);
 }
-.lens-create-item {
-  display: block;
-  width: 100%;
-  padding: 4px 8px;
-  font-size: 14px;
-  line-height: 20px;
-  text-align: left;
-  color: var(--lens-text);
-  border-radius: 6px;
-  cursor: pointer;
+/* No browser box after a click; a soft ring for the keyboard */
+.lens-tree-action:focus {
+  outline: none;
 }
-.lens-create-item:hover {
-  background-color: var(--lens-hover-bg);
+.lens-tree-action:focus-visible {
+  box-shadow: 0 0 0 2px rgba(35, 131, 226, 0.35);
+}
+/* The create menu's items. In the components layer, so the utilities on
+   them win: `flex` on "New from template", with its arrow on its row, and
+   `pl-6` on the templates under it (unlayered, display: block and the
+   padding here overrode them) */
+@layer components {
+  .lens-create-item {
+    display: block;
+    width: 100%;
+    padding: 4px 8px;
+    font-size: 14px;
+    line-height: 20px;
+    text-align: left;
+    color: var(--lens-text);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .lens-create-item:hover {
+    background-color: var(--lens-hover-bg);
+  }
 }
 
 /* Dark mode for the app around the page. Its components use Tailwind's
