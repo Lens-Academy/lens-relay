@@ -50,17 +50,17 @@ test.describe('Typography', () => {
     expect(body).toMatchObject({ fontSize: '16px', lineHeight: '24px', color: 'rgb(44, 44, 43)', fontWeight: '400' });
   });
 
-  test('headings are 30, 24, 20 and 18px in Lora, bold', async ({ page }) => {
-    expect(await styleOf(page, 'Q4 operating plan')).toMatchObject({ fontSize: '30px', fontWeight: '700' });
-    expect(await styleOf(page, 'Key results')).toMatchObject({ fontSize: '24px', fontWeight: '700' });
-    expect(await styleOf(page, 'Notes from the meeting')).toMatchObject({ fontSize: '20px', fontWeight: '700' });
-    expect(await styleOf(page, 'Numbers')).toMatchObject({ fontSize: '18px', fontWeight: '700' });
+  test('headings are 30, 24, 20 and 18px in Lora, semibold', async ({ page }) => {
+    expect(await styleOf(page, 'Q4 operating plan')).toMatchObject({ fontSize: '30px', fontWeight: '600' });
+    expect(await styleOf(page, 'Key results')).toMatchObject({ fontSize: '24px', fontWeight: '600' });
+    expect(await styleOf(page, 'Notes from the meeting')).toMatchObject({ fontSize: '20px', fontWeight: '600' });
+    expect(await styleOf(page, 'Numbers')).toMatchObject({ fontSize: '18px', fontWeight: '600' });
     expect((await styleOf(page, 'Key results')).fontFamily).toMatch(/^"Lora Variable"/);
   });
 
   test('a heading keeps its weight while the cursor is on it', async ({ page }) => {
     await cursorAt(page, 'Key results');
-    expect(await styleOf(page, 'Key results')).toMatchObject({ fontSize: '24px', fontWeight: '700' });
+    expect(await styleOf(page, 'Key results')).toMatchObject({ fontSize: '24px', fontWeight: '600' });
   });
 
   test('bold is semibold, and stays so while the cursor is in it', async ({ page }) => {
@@ -72,7 +72,7 @@ test.describe('Typography', () => {
   test('the title is 40px in the serif and starts in line with the text', async ({ page }) => {
     const title = page.locator('.lens-doc-title');
     await expect(title).toHaveCSS('font-size', '40px');
-    await expect(title).toHaveCSS('font-weight', '700');
+    await expect(title).toHaveCSS('font-weight', '600');
     await expect(title).toHaveCSS('font-family', /^"Lora Variable"/);
     const [titleLeft, textLeft] = await page.evaluate(() => {
       const t = document.querySelector('.lens-doc-title')!;
