@@ -2,7 +2,7 @@
 // The frontmatter fields mirror lens-platform core/course_checks/checks.py `Check`.
 import { parse as parseYaml, parseDocument, visit } from 'yaml';
 import { refProblem, unitNames } from './jev-keys';
-import { isDefault, parsePresentation, presentationBlock, type Presentation } from './jev-presentation';
+import { parsePresentation, presentationBlock, type Presentation } from './jev-presentation';
 
 export interface JevCheck {
   id: string;
@@ -298,11 +298,9 @@ export function platformProblems(text: string): string[] {
   if ('criteria' in fm && !(c && typeof c === 'object' && Object.keys(c).sort().join() === 'false,true' && Object.values(c).every((v) => typeof v === 'string')))
     out.push('criteria must have exactly "true" and "false" texts');
   if ('presentation' in fm) {
-    try {
-      // Phase 1: the platform builds these requests but its edit runner still asks each paragraph
-      // alone, so a check asked any other way would silently not run (lens-platform #1381).
-      if (!isDefault(parsePresentation(fm.presentation))) out.push('the platform cannot run a check with this presentation yet; try it here, and save it once the runner asks this way');
-    } catch (e) { out.push((e as Error).message); }
+    // The platform's edit runner asks a check the way its presentation says (lens-platform
+    // #1382) and keeps each call's shown text for replay (#1427): only an unreadable block stops it.
+    try { parsePresentation(fm.presentation); } catch (e) { out.push((e as Error).message); }
   }
   out.push(...wordsProblems(fm));
   const s = fm.skip_folders;
