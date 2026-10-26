@@ -120,26 +120,31 @@ function toSuperscript(n: number): string {
 }
 
 /**
- * Widget that renders a numbered badge for comment threads.
+ * Widget that renders a numbered badge for comment threads. A comment on a
+ * point (no text highlighted) shows it in the margin just right of the text
+ * column, at its line, as Notion marks a block's comments (index.css); a
+ * comment on highlighted text has none, its highlight marks it.
  */
 class CommentBadgeWidget extends WidgetType {
   constructor(
     private number: number,
     private threadFrom: number,
+    private inMargin = false,
   ) {
     super();
   }
 
   toDOM(): HTMLElement {
     const span = document.createElement('span');
-    span.className = 'cm-comment-badge';
+    span.className = this.inMargin ? 'cm-comment-badge is-margin' : 'cm-comment-badge';
     span.textContent = String(this.number);
     span.dataset.commentFrom = String(this.threadFrom);
+    if (this.inMargin) span.title = 'Comment';
     return span;
   }
 
   eq(other: CommentBadgeWidget): boolean {
-    return this.number === other.number && this.threadFrom === other.threadFrom;
+    return this.number === other.number && this.threadFrom === other.threadFrom && this.inMargin === other.inMargin;
   }
 
   ignoreEvent(): boolean {
@@ -434,6 +439,17 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         }
       }
 
+      // Threads on highlighted text ({==text==}{>>…<<}): their highlight marks
+      // them, so they get no badge, as Notion's comments; by each comment's from
+      const onHighlight = new Set<number>();
+      for (const thread of threads) {
+        const first = ranges.indexOf(thread.comments[0]);
+        const before = ranges[first - 1];
+        if (before?.type === 'highlight' && before.to === thread.from) {
+          for (const comment of thread.comments) onHighlight.add(comment.from);
+        }
+      }
+
       // Detect bulk selection: if selection spans multiple markup ranges,
       // show a single bulk widget instead of per-range accept/reject buttons
       const sel = selection.main;
@@ -472,8 +488,9 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         const cursorInside = selectionIntersects(selection, range.from, range.to);
 
         // Comments: hide all text, show badge widget for first in thread
+        // (in the margin), none for a thread on highlighted text
         if (range.type === 'comment') {
-          const badgeInfo = commentBadgeMap.get(range.from);
+          const badgeInfo = onHighlight.has(range.from) ? undefined : commentBadgeMap.get(range.from);
           const spansLineBreak = view.state.doc.lineAt(range.from).number !== view.state.doc.lineAt(range.to).number;
 
           if (spansLineBreak) {
@@ -489,7 +506,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
                 from: range.from,
                 to: range.from,
                 deco: Decoration.widget({
-                  widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom)),
+                  widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom), true),
                   side: -1,
                 }),
               });
@@ -515,7 +532,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
               from: range.from,
               to: range.to,
               deco: Decoration.replace({
-                widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom)),
+                widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom), true),
               }),
             });
           } else {

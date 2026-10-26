@@ -10,6 +10,8 @@ export type PendingCommentAction =
   | null;
 
 export interface MobileCommentsSheetProps {
+  /** Cards show their thread's number (see CommentsLayer) */
+  numbered?: boolean;
   threads: ThreadView[];
   pendingAction: PendingCommentAction;
   onPendingActionConsumed: () => void;
@@ -35,7 +37,7 @@ export interface MobileCommentsSheetProps {
  */
 export function MobileCommentsSheet(props: MobileCommentsSheetProps) {
   const {
-    threads, pendingAction, onPendingActionConsumed, onReply, onEdit, onDelete, onAddComment, getInsertKey,
+    threads, pendingAction, onPendingActionConsumed, onReply, onEdit, onDelete, onAddComment, getInsertKey, numbered = true,
     actions, addTarget, emptyHint, onAddCancel,
   } = props;
   // The pending focus/add request (badge tap, context menu) is consumed at
@@ -115,7 +117,7 @@ export function MobileCommentsSheet(props: MobileCommentsSheetProps) {
         <div key={thread.root.id} data-comment-thread={thread.key}>
           <CommentCard
             thread={thread}
-            number={thread.order}
+            number={numbered ? thread.order : undefined}
             focused={focusedKey === thread.key}
             onFocus={(key) => setFocusedKey(prev => (prev === key ? null : key))}
             onReply={onReply}

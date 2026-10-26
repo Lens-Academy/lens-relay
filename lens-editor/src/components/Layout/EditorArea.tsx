@@ -634,6 +634,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onAddComment={callbacks.onAddComment}
               getInsertKey={editorView ? () => pinCommentTarget(editorView) : undefined}
               actions={commentActions}
+              numbered={false}
             />
           )}
         </div>
@@ -706,6 +707,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onAddComment={canWrite ? callbacks.onAddComment : undefined}
               getInsertKey={editorView && canWrite ? () => pinCommentTarget(editorView) : undefined}
               actions={commentActions}
+              numbered={false}
             />
           </MobileDrawer>
 

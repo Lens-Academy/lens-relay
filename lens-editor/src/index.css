@@ -392,8 +392,29 @@
     border-radius: 50%;
     box-shadow: 0 0 0 2px var(--lens-topbar-bg);
   }
-  .lens-avatar + .lens-avatar {
+  .lens-avatar-stack > * + * {
     margin-left: -6px;
+  }
+  /* Notion's tooltip (Tooltip.tsx): a small dark label under what the
+     pointer is over, drawn on the page so the top bar can't clip it */
+  .lens-tooltip {
+    position: fixed;
+    z-index: 2000;
+    max-width: calc(100vw - 16px);
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    white-space: nowrap;
+    color: #fff;
+    background: #1f1f1f;
+    border-radius: 6px;
+    box-shadow: 0 3px 6px rgba(15, 15, 15, 0.2);
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  :root[data-theme=dark] .lens-tooltip {
+    background: #3a3a3a;
   }
   .lens-avatar-more {
     color: var(--lens-text-secondary);
@@ -1119,11 +1140,11 @@
   color: var(--lens-text-tertiary);
 }
 /* The page area (EditorArea) is a container: the dashes stay out of the way
-   of the 700px text column, and leave where there is no room beside it */
+   of the 580px text column, and leave where there is no room beside it */
 .lens-page-area {
   container: lens-page / inline-size;
 }
-@container lens-page (max-width: 800px) {
+@container lens-page (max-width: 700px) {
   .lens-outline { display: none; }
 }
 
@@ -1445,6 +1466,19 @@
 .cm-comment-badge:hover {
   background-color: var(--lens-hover-bg);
 }
+/* A comment on a point (no text highlighted) in the page: its badge sits in
+   the column's right padding at its line, out of the text, as Notion marks a
+   block's comments (criticmarkup.ts). Phones keep it in the text. */
+.lens-page-area .cm-content {
+  position: relative;
+}
+@media (min-width: 500px) {
+  .lens-page-area .cm-comment-badge.is-margin {
+    position: absolute;
+    right: -12px;
+    margin-top: 2px;
+  }
+}
 
 /* Focused state is toggled by CommentsLayer via [data-comment-focused] on the
    marker element (both edit-mode badges and read-mode anchors). Per-form
@@ -1506,15 +1540,14 @@
   background-color: var(--lens-pressed-bg);
   color: var(--lens-text);
 }
-/* Notion's resolve tick at the card's top right, while the pointer is over
-   the card or it is open */
+/* Notion's resolve tick, at the right of a thread's first message, while the
+   pointer is over the card or it is open */
 .lens-comment-resolve {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
-  margin: -2px -6px -2px auto;
   color: var(--lens-icon-secondary);
   border-radius: 6px;
   cursor: pointer;
@@ -1611,9 +1644,15 @@
   overflow-wrap: anywhere;
 }
 /* Edit and Delete, while the pointer is over the message */
-.lens-comment-tools {
+.lens-comment-side {
   grid-row: 1;
   grid-column: 3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: -6px;
+}
+.lens-comment-tools {
   display: flex;
   gap: 2px;
   opacity: 0;

@@ -43,6 +43,9 @@ export interface CommentsLayerHandle {
 
 export interface CommentsLayerProps {
   threads: ThreadView[];
+  /** Cards show their thread's number, as the page's markers do (HTML pages);
+   *  not where the text a comment is on marks it (the markdown editor) */
+  numbered?: boolean;
   /** Resolve a thread key to a screen y, or null if not currently rendered. */
   resolveAnchorY: (key: ThreadKey) => number | null;
   /** Current visible viewport in the same coordinate space as resolveAnchorY. */
@@ -100,6 +103,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     actions,
     draft,
     emptyHint = 'No comments yet. Select text and choose Add comment (Ctrl+Shift+M).',
+    numbered = true,
   } = props;
 
   // getInsertKey identity may change every render (callers commonly pass
@@ -476,7 +480,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
           >
             <CommentCard
               thread={thread}
-              number={thread.order}
+              number={numbered ? thread.order : undefined}
               focused={focusedThreadKey === thread.key}
               onFocus={handleFocus}
               onReply={(t, body) => onReply(t, body)}

@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react';
+import { useState, type ReactElement, type ReactNode } from 'react';
 import type { ThreadView, MessageView, ThreadKey, ThreadActions, ThreadAnchorInfo } from './types';
 import { formatTimestamp } from '../../lib/format-timestamp';
 import { AddCommentForm } from './AddCommentForm';
@@ -120,9 +120,8 @@ export function CommentCard(props: CommentCardProps): ReactElement {
       data-resolved={resolved ? '' : undefined}
       onClick={handleCardClick}
     >
-      {/* Number, as on the comment's marker in the text, and Notion's
-          resolve tick at the top right */}
-      {(number != null || resolved || canResolve) && (
+      {/* Number, as on the comment's marker in the page (HTML pages) */}
+      {(number != null || resolved) && (
         <div className="lens-comment-card-top">
           {number != null && (
             <span className="lens-comment-number" title={`Comment ${number}`}>
@@ -131,7 +130,17 @@ export function CommentCard(props: CommentCardProps): ReactElement {
             </span>
           )}
           {resolved && <span className="lens-comment-resolved">Resolved</span>}
-          {canResolve && (
+        </div>
+      )}
+      {thread.anchor && <AnchorLine info={thread.anchor} thread={thread} actions={actions} />}
+
+      <div className="lens-comment-thread">
+        <CommentRow
+          message={root}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          resolveButton={canResolve && (
+            // Notion's resolve tick, at the right of the first message
             <button
               type="button"
               className="lens-comment-resolve"
@@ -142,15 +151,6 @@ export function CommentCard(props: CommentCardProps): ReactElement {
               <ResolveIcon />
             </button>
           )}
-        </div>
-      )}
-      {thread.anchor && <AnchorLine info={thread.anchor} thread={thread} actions={actions} />}
-
-      <div className="lens-comment-thread">
-        <CommentRow
-          message={root}
-          onEdit={onEdit}
-          onDelete={onDelete}
         />
         {replies.map((reply) => (
           <CommentRow
@@ -215,9 +215,11 @@ interface CommentRowProps {
   message: MessageView;
   onEdit: (message: MessageView, newBody: string) => void;
   onDelete: (message: MessageView) => void;
+  /** The thread's resolve tick, on its first message */
+  resolveButton?: ReactNode;
 }
 
-function CommentRow({ message, onEdit, onDelete }: CommentRowProps) {
+function CommentRow({ message, onEdit, onDelete, resolveButton }: CommentRowProps) {
   const [editing, setEditing] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -252,47 +254,52 @@ function CommentRow({ message, onEdit, onDelete }: CommentRowProps) {
         )}
       </div>
       <p className="lens-comment-body">{body}</p>
-      {(canModify || canDelete) && (
-        <div className="lens-comment-tools">
-          {canModify && (
+      {/* Edit and Delete while the pointer is over the message; the thread's
+          resolve tick after them on its first message */}
+      <div className="lens-comment-side">
+        {(canModify || canDelete) && (
+          <div className="lens-comment-tools">
+            {canModify && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditing(true);
+                }}
+                className="lens-comment-tool"
+              >
+                Edit
+              </button>
+            )}
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setEditing(true);
+                setDeleteOpen(true);
               }}
               className="lens-comment-tool"
             >
-              Edit
+              Delete
             </button>
-          )}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setDeleteOpen(true);
-            }}
-            className="lens-comment-tool"
-          >
-            Delete
-          </button>
-          <ConfirmDialog
-            open={deleteOpen}
-            onOpenChange={setDeleteOpen}
-            title="Delete comment"
-            description={
-              canModify
-                ? 'Are you sure you want to delete this comment? This cannot be undone.'
-                : `Delete ${author}'s comment for everyone? Do this once it is addressed. This cannot be undone.`
-            }
-            onConfirm={() => {
-              setDeleteOpen(false);
-              onDelete(message);
-            }}
-            confirmLabel="Delete"
-          />
-        </div>
-      )}
+            <ConfirmDialog
+              open={deleteOpen}
+              onOpenChange={setDeleteOpen}
+              title="Delete comment"
+              description={
+                canModify
+                  ? 'Are you sure you want to delete this comment? This cannot be undone.'
+                  : `Delete ${author}'s comment for everyone? Do this once it is addressed. This cannot be undone.`
+              }
+              onConfirm={() => {
+                setDeleteOpen(false);
+                onDelete(message);
+              }}
+              confirmLabel="Delete"
+            />
+          </div>
+        )}
+        {resolveButton}
+      </div>
     </div>
   );
 }
