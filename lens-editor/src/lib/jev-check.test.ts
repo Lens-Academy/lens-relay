@@ -231,11 +231,11 @@ describe('a check file\'s presentation and view', () => {
     const bad = T.replace('fix: f', 'fix: f\npresentation: {context: page}');
     expect(setDraftPresentation(bad, DEFAULT_PRESENTATION)).toContain('draft:');
   });
-  it('refuses to save a presentation the platform cannot run yet, and checks words against it', () => {
-    const saved = saveDraft(setDraftPresentation(T, { context: 'document', question: 'sentence', nest: [] }));
-    const problems = platformProblems(saved);
-    expect(problems.some((p) => /cannot run a check with this presentation yet/.test(p))).toBe(true);
-    expect(problems.some((p) => /`paragraph` in the question: nesting by paragraph is off/.test(p))).toBe(true);
+  it('saves any readable presentation, and checks words against it', () => {
+    const shown = (p: Parameters<typeof setDraftPresentation>[1]) => platformProblems(saveDraft(setDraftPresentation(T, p)));
+    expect(shown({ context: 'document', question: 'paragraph', nest: [] })).toEqual([]);
+    expect(shown({ context: 'document', question: 'sentence', nest: [] })).toEqual([expect.stringMatching(/`paragraph` in the question: nesting by paragraph is off/)]);
+    expect(platformProblems(T.replace('fix: f', 'fix: f\npresentation: {context: page}'))).toHaveLength(1);
   });
   it('keeps a shared view block the check ignores', () => {
     const v = setView(setView(T, 'sample', 10), 'courses', ['a', 'b']);
