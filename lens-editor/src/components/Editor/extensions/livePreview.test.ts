@@ -1574,3 +1574,50 @@ describe('livePreview - the gap after a line of a paragraph', () => {
     expect(gapped).toEqual(['Before1 after']);
   });
 });
+
+describe('livePreview - a new line from Enter', () => {
+  let cleanup: () => void;
+  afterEach(() => cleanup?.());
+
+  const enter = (view: EditorView) => {
+    const at = view.state.selection.main.head;
+    view.dispatch({ changes: { from: at, insert: '\n' }, selection: { anchor: at + 1 }, userEvent: 'input' });
+  };
+  const lineClasses = (view: EditorView) =>
+    [...view.contentDOM.querySelectorAll('.cm-line')].map((l) => `${l.textContent}|${l.className}`);
+
+  it('is drawn as the line of text it will be, so typing moves nothing', () => {
+    const doc = 'Topics to see:\n\nBelow.';
+    const { view, cleanup: c } = createTestEditor(doc, 'Topics to see:'.length);
+    cleanup = c;
+    enter(view);
+    let lines = lineClasses(view);
+    // The line above takes its gap; the new line is not a 16px blank line
+    expect(lines[0]).toContain('cm-text-before-text');
+    expect(lines[1]).not.toContain('cm-blank-line');
+
+    view.dispatch({ changes: { from: view.state.selection.main.head, insert: 'hi' }, userEvent: 'input.type' });
+    lines = lineClasses(view);
+    expect(lines[0]).toContain('cm-text-before-text');
+    expect(lines[1]).toMatch(/^hi\|/);
+  });
+
+  it('with text under it (Enter mid-paragraph or after a heading), spaces that text as it will be', () => {
+    const { view, cleanup: c } = createTestEditor('## Ideas\nTopics to see.', '## Ideas'.length);
+    cleanup = c;
+    enter(view);
+    const lines = lineClasses(view);
+    expect(lines[0]).toContain('cm-heading-before-text');
+    expect(lines[1]).not.toContain('cm-blank-line');
+    expect(lines[1]).toContain('cm-text-before-text');
+  });
+
+  it('leaves a blank line between paragraphs as it is when the cursor only passes it', () => {
+    const { view, cleanup: c } = createTestEditor('One.\n\nTwo.', 0);
+    cleanup = c;
+    moveCursor(view, 'One.\n'.length);
+    const lines = lineClasses(view);
+    expect(lines[1]).toContain('cm-blank-line');
+    expect(lines[0]).not.toContain('cm-text-before-text');
+  });
+});

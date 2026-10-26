@@ -474,6 +474,29 @@ function findObsidianCommentRanges(text: string): TextRange[] {
   }));
 }
 
+/**
+ * The start of the empty line Enter has just made, while the cursor stays on
+ * it and it stays empty: drawn as the line of text it is about to be, even
+ * with text under it (pendingLine in buildDecorations)
+ */
+const newLineField = StateField.define<number | null>({
+  create: () => null,
+  update(value, tr) {
+    const { main } = tr.state.selection;
+    const line = tr.state.doc.lineAt(main.head);
+    if (!main.empty || line.text.trim() !== '') return null;
+    if (tr.docChanged && tr.isUserEvent('input')) {
+      let newline = false;
+      tr.changes.iterChanges((_fromA, _toA, _fromB, _toB, text) => {
+        if (text.lines > 1) newline = true;
+      });
+      if (newline) return line.from;
+    }
+    if (value === null) return null;
+    return (tr.docChanged ? tr.changes.mapPos(value) : value) === line.from ? line.from : null;
+  },
+});
+
 const obsidianCommentRangesField = StateField.define<readonly TextRange[]>({
   create(state) {
     return findObsidianCommentRanges(state.doc.toString());
@@ -572,8 +595,33 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       // Line numbers inside fenced code, whose blank lines keep their height
       const codeLines = new Set<number>();
       const doc = view.state.doc;
+      // The empty line the cursor is on, just made by Enter or with no text
+      // under it: drawn as the line of text it is about to be (full height,
+      // what is above and below it spaced as from text now), so nothing moves
+      // when typing starts, as in Notion. Not a blank line between blocks the
+      // cursor only passes, which keeps its 16px.
+      const pendingLine = (() => {
+        const { main } = selection;
+        if (!main.empty) return -1;
+        const line = doc.lineAt(main.head);
+        if (line.text.trim() !== '') return -1;
+        const justMade = view.state.field(newLineField, false) === line.from;
+        if (!justMade && line.number < doc.lines && doc.line(line.number + 1).text.trim() !== '') return -1;
+        if (inFrontmatter(view, line.from)) return -1;
+        for (let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(line.from, 1); node; node = node.parent) {
+          if (node.name === 'FencedCode' || node.name === 'CodeBlock') return -1;
+        }
+        return line.number;
+      })();
+      /** The kind of top-level block at `pos`: Paragraph, ATXHeading2, BulletList... */
+      const topBlockAt = (pos: number) => {
+        let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(pos, 1);
+        while (node?.parent && node.parent.name !== 'Document') node = node.parent;
+        return node?.name;
+      };
       /** Whether line `n` exists and has text: a block boundary without a blank line. */
-      const hasText = (n: number) => n >= 1 && n <= doc.lines && doc.line(n).text.trim() !== '';
+      const hasText = (n: number) =>
+        n === pendingLine || (n >= 1 && n <= doc.lines && doc.line(n).text.trim() !== '');
       // Text that isn't a heading, whose own padding spaces it from a list
       const hasProse = (n: number) => hasText(n) && !/^ {0,3}#{1,6}(\s|$)/.test(doc.line(n).text);
 
@@ -952,7 +1000,9 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               // (criticmarkup.ts), runs on into the next: the drawn line
               // starts at the first of them, and takes the gap
               let runStart: number | null = null;
-              for (let n = doc.lineAt(node.from).number; n < last; n++) {
+              // Its last line too, when the cursor's new line follows it
+              const end = pendingLine === last + 1 ? last + 1 : last;
+              for (let n = doc.lineAt(node.from).number; n < end; n++) {
                 const line = doc.line(n);
                 const start: number = runStart ?? line.from;
                 if (comments.some((r) => r.type === 'comment' && r.from <= line.to && r.to > line.to)) {
@@ -1126,12 +1176,18 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       }
 
       // Blank lines between blocks draw at Notion's 16px gap between paragraphs
-      // rather than as a full row (index.css), except inside code and frontmatter
+      // rather than as a full row (index.css), except inside code and
+      // frontmatter, and the cursor's new line (pendingLine)
       for (const { from, to } of view.visibleRanges) {
         for (let pos = from; pos <= to; ) {
           const line = doc.lineAt(pos);
           pos = line.to + 1;
-          if (line.text.trim() === '' && !codeLines.has(line.number) && !inFrontmatter(view, line.from)) {
+          if (line.number === pendingLine && pendingLine < doc.lines && topBlockAt(doc.line(pendingLine + 1).from) === 'Paragraph') {
+            // Text under the new line: the two will be one paragraph, so it
+            // takes the gap between its lines
+            decorations.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'cm-text-before-text' }) });
+          }
+          if (line.text.trim() === '' && line.number !== pendingLine && !codeLines.has(line.number) && !inFrontmatter(view, line.from)) {
             decorations.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'cm-blank-line' }) });
           }
         }
@@ -1319,6 +1375,7 @@ export function livePreview(context?: WikilinkContext, { embeds = true }: { embe
     drawSelection(), // Required for proper cursor with hidden content
     frontmatterField, // StateField outside compartment (survives source mode toggle)
     obsidianCommentRangesField,
+    newLineField,
     listHangingIndent, // wrapped list rows align with the item text in both modes
     wikilinkFollow, // in both modes
     inEmbedCard.of(!embeds),
