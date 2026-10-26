@@ -11,9 +11,9 @@ export function linkHref(url: string): string | null {
 }
 
 /**
- * Whether a link leaves the editor for the web, and so (when written as
- * [text](url)) gets the external-link icon: an http(s) URL, written with its scheme or as www.…, on another host.
- * Email addresses, links to this editor and relative paths don't.
+ * Whether a link leaves the editor for the web: an http(s) URL, written with
+ * its scheme or as www.…, on another host. Email addresses, links to this
+ * editor and relative paths don't.
  */
 export function isExternalUrl(url: string): boolean {
   const match = /^(?:https?:\/\/|www\.)([^/?#]*)/i.exec(url);
@@ -28,7 +28,7 @@ export function isExternalUrl(url: string): boolean {
  * [text](url) link to the web ends in the external-link icon; a bare URL
  * or <autolink> shows its address already, so it gets none.
  */
-export function createLinkElement(label: string | Node, url: string, isMarkdownLink = false): HTMLElement {
+export function createLinkElement(label: string | Node, url: string, isMarkdownLink: boolean): HTMLElement {
   const span = document.createElement('span');
   span.append(label);
 

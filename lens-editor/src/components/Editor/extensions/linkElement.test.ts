@@ -39,7 +39,7 @@ describe('isExternalUrl', () => {
 describe('createLinkElement', () => {
   it('opens in a new tab without giving the page a handle on the editor', () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
-    createLinkElement('x', 'https://a.org').click();
+    createLinkElement('x', 'https://a.org', true).click();
     expect(open).toHaveBeenCalledWith('https://a.org', '_blank', 'noopener,noreferrer');
     open.mockRestore();
   });
@@ -53,7 +53,7 @@ describe('createLinkElement', () => {
   });
 
   it('shows no icon after a bare URL or autolink, which shows its address already', () => {
-    const el = createLinkElement('https://a.org', 'https://a.org');
+    const el = createLinkElement('https://a.org', 'https://a.org', false);
     expect(el.className).toBe('cm-link-widget');
     expect(el.querySelector('.cm-link-external-icon')).toBeNull();
   });
@@ -67,7 +67,7 @@ describe('createLinkElement', () => {
   });
 
   it('renders a refused link as plain text', () => {
-    const el = createLinkElement('x', 'javascript:alert(1)');
+    const el = createLinkElement('x', 'javascript:alert(1)', true);
     expect(el.className).toBe('');
     expect(el.textContent).toBe('x');
   });
