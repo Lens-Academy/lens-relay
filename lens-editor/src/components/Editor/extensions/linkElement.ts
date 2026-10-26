@@ -11,10 +11,24 @@ export function linkHref(url: string): string | null {
 }
 
 /**
- * The clickable external link shown in live preview, shared by the inline
- * LinkWidget (livePreview.ts) and table cells (markdownTable.ts).
+ * Whether a link leaves the editor for the web: an http(s) URL, written with
+ * its scheme or as www.…, on another host. Email addresses, links to this
+ * editor and relative paths don't.
  */
-export function createLinkElement(label: string | Node, url: string): HTMLElement {
+export function isExternalUrl(url: string): boolean {
+  const match = /^(?:https?:\/\/|www\.)([^/?#]*)/i.exec(url);
+  if (!match) return false;
+  const host = match[1].replace(/^[^@]*@/, '').toLowerCase();
+  return host !== '' && host !== window.location.host.toLowerCase();
+}
+
+/**
+ * The clickable external link shown in live preview, shared by the inline
+ * LinkWidget (livePreview.ts) and table cells (markdownTable.ts). A
+ * [text](url) link to the web ends in the external-link icon; a bare URL
+ * or <autolink> shows its address already, so it gets none.
+ */
+export function createLinkElement(label: string | Node, url: string, isMarkdownLink: boolean): HTMLElement {
   const span = document.createElement('span');
   span.append(label);
 
@@ -22,6 +36,12 @@ export function createLinkElement(label: string | Node, url: string): HTMLElemen
   if (!href) return span;
 
   span.className = 'cm-link-widget';
+  if (isMarkdownLink && isExternalUrl(url)) {
+    const icon = document.createElement('span');
+    icon.className = 'cm-link-external-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    span.appendChild(icon);
+  }
   span.style.cursor = 'pointer';
   span.onclick = (e) => {
     e.preventDefault();

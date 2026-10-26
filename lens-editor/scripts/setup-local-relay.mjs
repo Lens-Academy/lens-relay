@@ -380,6 +380,29 @@ See [[Syllabus]] for the course outline and [[Resources/Links]] for useful refer
 This section was recently suggested by AI.++}
 `,
       },
+      // Every kind of link live preview renders, to check which ones get the
+      // external-link icon (web links only).
+      {
+        path: '/Link Kinds.md',
+        id: 'c0000017-0000-4000-8000-000000000017',
+        type: 'markdown',
+        version: 0,
+        content: `# Link kinds
+
+A web link in a sentence: read [the Y.js introduction](https://docs.yjs.dev/getting-started/a-collaborative-editor) before the first session, and the [CodeMirror guide](https://codemirror.net/docs/guide/) after it.
+
+- Wikilink: [[Course Notes]]
+- Bare URL: https://relay.md/
+- Autolink: <https://y-sweet.dev/>
+- Email: [write to us](mailto:team@example.org)
+- Relative link: [the syllabus](Syllabus.md)
+
+| Tool | Link |
+| --- | --- |
+| Y.js | [Docs](https://docs.yjs.dev/) |
+| Notes | [[Course Notes]] |
+`,
+      },
       {
         path: '/Syllabus.md',
         id: 'c0000005-0000-4000-8000-000000000005',

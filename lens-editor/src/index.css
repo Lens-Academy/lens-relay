@@ -74,6 +74,8 @@
   --lens-card-shadow: 0 0 0 1px rgba(15, 15, 15, 0.04), 0 3px 6px rgba(15, 15, 15, 0.04), 0 9px 24px rgba(15, 15, 15, 0.08);
   /* Notion's comment icon, a speech bubble, as a mask for icons in CSS */
   --lens-comment-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.3' stroke-linejoin='round'%3E%3Cpath d='M3.5 2.75h9a1.75 1.75 0 0 1 1.75 1.75v5.5A1.75 1.75 0 0 1 12.5 11.75H8.5l-3 2.5v-2.5h-2A1.75 1.75 0 0 1 1.75 10V4.5A1.75 1.75 0 0 1 3.5 2.75Z'/%3E%3C/svg%3E");
+  /* A square with an arrow out of it, after links to the web */
+  --lens-external-link-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6'/%3E%3Cpath d='m21 3-9 9'/%3E%3Cpath d='M15 3h6v6'/%3E%3C/svg%3E");
   --lens-popover-bg: #fff;
   --lens-popover-shadow: 0 0 0 1px rgba(15, 15, 15, 0.05), 0 3px 6px rgba(15, 15, 15, 0.1), 0 9px 24px rgba(15, 15, 15, 0.2);
   --lens-input-bg: rgba(242, 241, 238, 0.6);
@@ -858,6 +860,23 @@
   text-decoration-color: var(--lens-link-underline);
   text-underline-offset: 10%;
   cursor: pointer;
+}
+
+/* After a link to the web: a small square with an arrow out of it, in the
+   link's colour (extensions/linkElement.ts). The word joiner keeps it on the
+   line of the link's last word. */
+.cm-link-external-icon::before {
+  content: '\2060';
+}
+.cm-link-external-icon::after {
+  content: '';
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-left: 0.2em;
+  background-color: currentColor;
+  -webkit-mask: var(--lens-external-link-icon) center / contain no-repeat;
+  mask: var(--lens-external-link-icon) center / contain no-repeat;
 }
 
 /* Wikilink widget — a link to another doc, in Notion's style for links to
