@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { RunChips, type RunEntry } from './RunChips';
+import { RunChips } from './RunChips';
+import { baseFor, type RunEntry } from './runs';
 import type { Run } from './types';
 
 const run = (question: string, sample: string, pres?: string, unit = 'paragraph'): Run =>
@@ -28,5 +29,16 @@ describe('RunChips', () => {
   it('shows nothing for a single run', () => {
     const { container } = render(<RunChips runs={[{ run: run('Q', 'A'), draft: false }]} shown={0} onShow={() => {}} />);
     expect(container.textContent).toBe('');
+  });
+});
+
+describe('baseFor', () => {
+  it('compares with the live run, else the newest earlier run over the same sample', () => {
+    const a1 = { run: run('1', 'A'), draft: true }, b = { run: run('2', 'B'), draft: true }, a2 = { run: run('3', 'A'), draft: true };
+    expect(baseFor([a1, b, a2], 'A', null)?.run).toBe(a2.run);
+    expect(baseFor([a1, b], 'A', null)?.run).toBe(a1.run);
+    expect(baseFor([b], 'A', null)).toBeUndefined();
+    const live = run('live', 'A');
+    expect(baseFor([a1], 'A', live)).toEqual({ label: 'live', run: live });
   });
 });

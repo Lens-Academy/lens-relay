@@ -1,8 +1,7 @@
 // The runs of this visit as a row of chips: click one to show it. A run over a different sample
 // of paragraphs than the one shown is marked, since its numbers do not compare.
 import type { Run } from './types';
-
-export interface RunEntry { run: Run; draft: boolean; base?: { label: string; run: Run } }
+import type { RunEntry } from './runs';
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 /** What jev saw, short: "paragraph alone", or "document › paragraph" (shown › asked about). */

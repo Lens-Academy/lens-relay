@@ -20,7 +20,8 @@ import { BandList, Histogram, Percentiles, Summary, type Labeler } from './Resul
 import { labelBody } from '../../lib/jev-labels';
 import { useLabels } from './useLabels';
 import { CountInput } from './CountInput';
-import { RunChips, type RunEntry } from './RunChips';
+import { RunChips } from './RunChips';
+import { baseFor, type RunEntry } from './runs';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import type { Para, Run } from './types';
 import { DEFAULT_PRESENTATION, describe, isDefault, LEVELS, presentationBlock, type Level, type Presentation } from '../../lib/jev-presentation';
@@ -108,7 +109,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
       const [r, l] = await Promise.all([ask(c, sample, pres), draft ? ask(live, sample, live.presentation) : null]);
       setSent(r.first);
       const mine = { ...r, sample: key }, draftRun = !!draft;
-      setRuns((rs) => [...rs, { run: mine, draft: draftRun, base: l ? { label: 'live', run: { ...l, sample: key } } : rs.length ? { label: 'was', run: rs[rs.length - 1].run } : undefined }]);
+      setRuns((rs) => [...rs, { run: mine, draft: draftRun, base: baseFor(rs, key, l && { ...l, sample: key }) }]);
       setShown(null);
     } catch (e) { setErr((e as Error).message); } finally { setRunning(false); }
   }
@@ -151,7 +152,10 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
     error: labels.error,
     onLabel: (item, verdict) => labels.add(labelBody(latest.check.id, { ...item, unit: latest.unit }, verdict, displayName || 'someone')),
   };
-  const stale = latest && c && JSON.stringify(latest.check) !== JSON.stringify(c);
+  // The banner and the draft bar are about the newest run; an older one is only being looked at.
+  const newest = runs.length ? runs[runs.length - 1].run : undefined;
+  const older = shown !== null && shown < runs.length - 1;
+  const stale = !older && newest && c && JSON.stringify(newest.check) !== JSON.stringify(c);
   const color = COLORMAPS[cmap];
 
   // contain:inline-size: the panel takes the editor's width and never sets it. Its one-line texts
@@ -182,7 +186,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           {live.enabled && !dropped.length && nowWords.length > 0 && (
             <div className="rounded-md bg-red-50 px-3 py-2 text-[13px] text-red-800">The platform runs this check, but its words name units jev is never shown, so its answers mean little: {nowWords.join('; ')}.</div>
           )}
-          <DraftBar draft={!!draft} problems={saveProblems} lastRun={latest?.platform === false ? 'Your last run was an experiment, not how the platform asks.' : undefined} onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
+          <DraftBar draft={!!draft} problems={saveProblems} lastRun={newest?.platform === false ? 'Your last run was an experiment, not how the platform asks.' : undefined} onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
           <Field label="Question" value={c.question} live={live.question} onCommit={set(['question'])} hint={keyHint(c.question, pres)} shape={pres} />
           <Field label="Yes means" value={c.criteria?.true ?? ''} live={live.criteria?.true ?? ''} onCommit={set(['criteria', 'true'])} shape={pres} />
           <Field label="No means" value={c.criteria?.false ?? ''} live={live.criteria?.false ?? ''} onCommit={set(['criteria', 'false'])} shape={pres} />
@@ -228,6 +232,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
       )}
       {latest && (
         <div className="px-4 pb-4 pt-3">
+          {older && <div className="mb-2 rounded bg-gray-100 px-2 py-1 text-gray-700">Showing run #{shown + 1} of {runs.length}, an earlier run.</div>}
           {stale && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-amber-800">The check changed since this run. Run again to see the new phrasing.</div>}
           {latest.platform === false && (
             <div className="mb-2 rounded border border-violet-300 bg-violet-50 px-2 py-1 text-[13px] text-violet-900">

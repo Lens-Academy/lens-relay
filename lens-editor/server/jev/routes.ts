@@ -173,21 +173,23 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     return c.body(readFileSync(config.corpusPath, 'utf8'), 200, { 'Content-Type': 'application/json' });
   });
 
-  // Course files as they are now, read through the relay (a minute's cache), so an edit made
-  // in the editor reaches the next Run.
+  // Course files as they are now, read through the relay (a minute's cache), for files the corpus
+  // does not hold. A file it holds is asked about as the corpus read it (corpusFiles below), so an
+  // edit to it reaches a Run only after the corpus is rebuilt.
   const readFile = config.readFile ?? (config.filesDir ? readFromDir(config.filesDir) : (p: string) => readRelayDocAtPath(p));
   const fileCache = new Map<string, { at: number; text: string | null }>();
   // The corpus's own file texts, reloaded when the file changes.
-  let snap: { mtime: number; files: Record<string, string> } | null = null;
+  // Keyed on both files' mtime and size: two writes within one mtime tick differ in size.
+  let snap: { stamp: string; files: Record<string, string> } | null = null;
   function corpusFiles(): Record<string, string> {
     const path = config.corpusPath.replace(/\.json$/, '-files.json');
     if (!existsSync(path)) return {};
-    const mtime = statSync(path).mtimeMs;
-    if (snap?.mtime !== mtime) {
+    const stamp = [path, config.corpusPath].map((p) => { const st = statSync(p); return `${st.mtimeMs}:${st.size}`; }).join('|');
+    if (snap?.stamp !== stamp) {
       const files = JSON.parse(readFileSync(path, 'utf8'));
       const corpus = JSON.parse(readFileSync(config.corpusPath, 'utf8'));
       if (files.taken !== corpus.meta?.taken) throw new Error('the corpus and corpus-files.json are from different builds; rebuild the corpus');
-      snap = { mtime, files: files.files };
+      snap = { stamp, files: files.files };
     }
     return snap.files;
   }
