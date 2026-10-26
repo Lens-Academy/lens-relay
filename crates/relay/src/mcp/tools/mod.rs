@@ -75,7 +75,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }),
         json!({
             "name": "read",
-            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit. Image attachments (png, jpg, jpeg, gif, webp up to 5 MiB) come back as an image content block you can look at, preceded by a line with the path, byte size and sha256; .svg attachments come back as their XML text. In Lens Edu, reading an article, video transcript or lens first shows its concept relationships (rows from Lens Edu/Concepts/ files) in a block marked as context, not part of the file; edit them in the concept file.",
+            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Returns at most 2000 lines per call unless you pass limit (lines are never shortened); when lines remain, the output ends with a notice like '[Showing lines 1-2000 of 3412. 1412 more lines not shown. Call read again with offset=2001 to continue.]' — a read without that notice reached the end of the document. Supports partial reads via offset and limit. Image attachments (png, jpg, jpeg, gif, webp up to 5 MiB) come back as an image content block you can look at, preceded by a line with the path, byte size and sha256; .svg attachments come back as their XML text. In Lens Edu, reading an article, video transcript or lens first shows its concept relationships (rows from Lens Edu/Concepts/ files) in a block marked as context, not part of the file; edit them in the concept file.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
@@ -87,11 +87,11 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
                     },
                     "offset": {
                         "type": "number",
-                        "description": "The line number to start reading from. Only provide if the document is too large to read at once"
+                        "description": "The 1-based line number to start reading from. Only provide if the document is too large to read at once; the truncation notice names the offset to continue from."
                     },
                     "limit": {
                         "type": "number",
-                        "description": "The number of lines to read. Only provide if the document is too large to read at once."
+                        "description": "The number of lines to read (default 2000). Only provide if the document is too large to read at once."
                     },
                     "session_id": {
                         "type": "string",

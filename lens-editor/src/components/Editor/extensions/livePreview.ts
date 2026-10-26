@@ -25,17 +25,21 @@ import {
   Decoration,
   drawSelection,
   WidgetType,
+  keymap,
 } from '@codemirror/view';
-import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin } from './criticmarkup';
+import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin, criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
 import { markdownTableCompartment, markdownTableExtension } from './markdownTable';
 import { createLinkElement } from './linkElement';
+import { createWikilinkElement, getWikilinkContext, inEmbedCard, linksCreate, setWikilinkContext, splitWikilink } from './wikilinkElement';
+import type { WikilinkContext } from './wikilinkElement';
 import { pastedLinkField } from './pasteLink';
 import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontmatterEnabled } from './frontmatter';
 import { listHangingIndent } from './listHangingIndent';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
-import { RangeSetBuilder, Compartment, EditorSelection, StateField } from '@codemirror/state';
+import { RangeSetBuilder, Compartment, EditorSelection, StateField, Prec } from '@codemirror/state';
+import type { EditorState } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { wikilinkMetadataChanged } from './wikilinkEffects';
 import { noteEmbeds } from './noteEmbed';
@@ -88,18 +92,7 @@ const HASHTAG_EXCLUDED_NODES = new Set([
   'URL',
 ]);
 
-/**
- * WikilinkContext for navigation callbacks
- * Set via livePreview() function parameter
- */
-export interface WikilinkContext {
-  onClick: (pageName: string) => void;
-  onOpenNewTab?: (pageName: string) => void;
-  isResolved: (pageName: string) => boolean;
-}
-
-// Module-scoped context (set by livePreview factory)
-let wikilinkContext: WikilinkContext | null = null;
+export type { WikilinkContext } from './wikilinkElement';
 
 /**
  * Context for resolving ![[image]] embeds — set via updateImageEmbedContext()
@@ -135,34 +128,8 @@ class WikilinkWidget extends WidgetType {
     this.resolved = resolved;
   }
 
-  toDOM(): HTMLElement {
-    const span = document.createElement('span');
-    span.className = 'cm-wikilink-widget';
-
-    // Add unresolved class if document doesn't exist
-    if (!this.resolved) {
-      span.classList.add('unresolved');
-    }
-
-    span.textContent = this.displayText;
-    span.style.cursor = 'pointer';
-    span.onclick = (e) => {
-      e.preventDefault();
-      if (!wikilinkContext) return;
-      if (e.ctrlKey || e.metaKey) {
-        wikilinkContext.onOpenNewTab?.(this.pageName);
-      } else {
-        wikilinkContext.onClick(this.pageName);
-      }
-    };
-    span.onmousedown = (e) => { if (e.button === 1) e.preventDefault(); };
-    span.onauxclick = (e) => {
-      if (e.button === 1) {
-        e.preventDefault();
-        wikilinkContext?.onOpenNewTab?.(this.pageName);
-      }
-    };
-    return span;
+  toDOM(view: EditorView): HTMLElement {
+    return createWikilinkElement(this.pageName, this.displayText, this.resolved, () => linksCreate(view));
   }
 
   eq(other: WikilinkWidget): boolean {
@@ -819,10 +786,8 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 const contentNode = node.node.getChild('WikilinkContent');
                 if (!contentNode) return;
                 const raw = view.state.doc.sliceString(contentNode.from, contentNode.to);
-                const pipeIndex = raw.indexOf('|');
-                const content = pipeIndex !== -1 ? raw.substring(0, pipeIndex) : raw;
                 // [[target|alias]] shows the alias; a blank alias falls back to the target
-                const alias = pipeIndex !== -1 ? raw.substring(pipeIndex + 1) : '';
+                const { target: content, alias } = splitWikilink(raw);
 
                 // Detect ![[...]] image embed: leading '!' plus an image file extension.
                 // Without an image extension, fall through to render as a regular wikilink
@@ -860,6 +825,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   return false;
                 }
 
+                const wikilinkContext = getWikilinkContext();
                 const resolved = wikilinkContext ? wikilinkContext.isResolved(content) : true;
                 decorations.push({
                   from: node.from,
@@ -1253,6 +1219,62 @@ export const sourceReadOnlyCompartment = new Compartment();
 const livePreviewTheme = EditorView.theme({});
 
 /**
+ * The target of the [[wikilink]] at pos (without its |alias), or null. For a
+ * cursor, a position right after `]]` is on the link; for a click (`clicked`),
+ * only the character after pos counts.
+ */
+export function wikilinkTargetAt(state: EditorState, pos: number, clicked = false): string | null {
+  for (const side of clicked ? [1] as const : [1, -1] as const) {
+    for (let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, side); node; node = node.parent) {
+      if (node.name !== 'Wikilink') continue;
+      const content = node.getChild('WikilinkContent');
+      if (!content) return null;
+      return splitWikilink(state.doc.sliceString(content.from, content.to)).target;
+    }
+  }
+  return null;
+}
+
+/**
+ * Following a wikilink shown as its raw text (the cursor is in it, or source
+ * mode), where the widget's click handlers are not: Mod-Enter on it and
+ * Mod-click open it in a new tab, creating the file if it doesn't exist.
+ */
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+
+const wikilinkFollow = [
+  Prec.high(keymap.of([{
+    key: 'Mod-Enter',
+    run: (view) => {
+      const head = view.state.selection.main.head;
+      const target = wikilinkTargetAt(view.state, head);
+      const wikilinkContext = getWikilinkContext();
+      if (!target || !wikilinkContext?.onOpenNewTab) return false;
+      // On a suggestion a reviewer may accept, Mod-Enter accepts it (criticMarkupKeymap)
+      const { from, to } = view.state.selection.main;
+      if (view.state.facet(canAcceptRejectFacet)
+        && view.state.field(criticMarkupField, false)?.some((r) => from <= r.to && to >= r.from)) return false;
+      wikilinkContext.onOpenNewTab(target, linksCreate(view));
+      return true;
+    },
+  }])),
+  EditorView.domEventHandlers({
+    mousedown: (e, view) => {
+      // Mod as in keymaps: on a Mac Ctrl-click is the context menu
+      const wikilinkContext = getWikilinkContext();
+      if (e.button !== 0 || !(IS_MAC ? e.metaKey : e.ctrlKey) || !wikilinkContext?.onOpenNewTab) return false;
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      const target = pos === null ? null : wikilinkTargetAt(view.state, pos, true);
+      if (!target) return false;
+      // Not a second cursor (Mod-click's default): follow the link
+      e.preventDefault();
+      wikilinkContext.onOpenNewTab(target, linksCreate(view));
+      return true;
+    },
+  }),
+];
+
+/**
  * Live preview extension with all necessary components
  *
  * Includes:
@@ -1263,13 +1285,15 @@ const livePreviewTheme = EditorView.theme({});
  */
 export function livePreview(context?: WikilinkContext, { embeds = true }: { embeds?: boolean } = {}) {
   if (context) {
-    wikilinkContext = context;
+    setWikilinkContext(context);
   }
   return [
     drawSelection(), // Required for proper cursor with hidden content
     frontmatterField, // StateField outside compartment (survives source mode toggle)
     obsidianCommentRangesField,
     listHangingIndent, // wrapped list rows align with the item text in both modes
+    wikilinkFollow, // in both modes
+    inEmbedCard.of(!embeds),
     // embeds: false inside an embed card, which never nests another
     livePreviewCompartment.of([livePreviewPlugin, ...(embeds ? [noteEmbeds] : []), obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
   ];
@@ -1280,7 +1304,7 @@ export function livePreview(context?: WikilinkContext, { embeds = true }: { embe
  * Call this when metadata changes to update navigation and resolution.
  */
 export function updateWikilinkContext(context: WikilinkContext | undefined) {
-  wikilinkContext = context ?? null;
+  setWikilinkContext(context ?? null);
 }
 
 /**
