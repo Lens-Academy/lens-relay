@@ -660,6 +660,15 @@ describe('livePreview - markdown links', () => {
     expect(hasClass(view, 'cm-link-widget')).toBe(false);
   });
 
+  it('ends a [text](url) web link with the external-link icon, but not a bare URL or autolink', () => {
+    const content = '[Example](https://example.com) and https://a.org and <https://b.org> end';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const widgets = Array.from(view.contentDOM.querySelectorAll('.cm-link-widget'));
+    expect(widgets.map(w => w.querySelector('.cm-link-external-icon') !== null)).toEqual([true, false, false]);
+  });
+
   it('widget displays link text', () => {
     const content = '[Click Here](url) end';
     const { view, cleanup: c } = createTestEditor(content, 20);

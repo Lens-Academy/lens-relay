@@ -9,7 +9,8 @@
  * - # markers hidden when cursor not on heading line
  * - Bold/italic text shows formatted when cursor moves away
  * - Asterisks/underscores hidden when cursor not on that text
- * - Links render as clickable underlined text, web links with an external-link icon
+ * - Links render as clickable underlined text, [text](url) links to the web
+ *   with an external-link icon
  * - Inline code shows with distinct background styling
  * - Bullet list markers replaced with dot (•) widget
  * - Checklists rendered as interactive checkboxes with toggle
@@ -140,24 +141,26 @@ class WikilinkWidget extends WidgetType {
 
 /**
  * LinkWidget - Renders links as clickable underlined text, with an external-link
- * icon after links to the web (linkElement.ts)
+ * icon after [text](url) links to the web (linkElement.ts)
  */
 class LinkWidget extends WidgetType {
   private text: string;
   private url: string;
+  private isMarkdownLink: boolean;
 
-  constructor(text: string, url: string) {
+  constructor(text: string, url: string, isMarkdownLink: boolean) {
     super();
     this.text = text;
     this.url = url;
+    this.isMarkdownLink = isMarkdownLink;
   }
 
   toDOM(): HTMLElement {
-    return createLinkElement(this.text, this.url);
+    return createLinkElement(this.text, this.url, this.isMarkdownLink);
   }
 
   eq(other: LinkWidget): boolean {
-    return this.text === other.text && this.url === other.url;
+    return this.text === other.text && this.url === other.url && this.isMarkdownLink === other.isMarkdownLink;
   }
 }
 
@@ -784,7 +787,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                     from: node.from,
                     to: node.to,
                     deco: Decoration.replace({
-                      widget: new LinkWidget(linkText, linkUrl),
+                      widget: new LinkWidget(linkText, linkUrl, true),
                     }),
                   });
                 }
@@ -824,7 +827,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   from: node.from,
                   to: node.to,
                   deco: Decoration.replace({
-                    widget: new LinkWidget(url, url),
+                    widget: new LinkWidget(url, url, false),
                   }),
                 });
               }

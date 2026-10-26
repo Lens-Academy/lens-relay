@@ -133,7 +133,7 @@ function renderInlineNode(target: Node, source: string, node: SyntaxNode): void 
       } else {
         label.appendChild(document.createTextNode(url));
       }
-      const link = createLinkElement(label, url);
+      const link = createLinkElement(label, url, node.name === 'Link');
       // Refused schemes come back as plain text, which should still edit the cell
       if (link.classList.contains('cm-link-widget')) {
         // Keep the press from focusing the cell, which would swap the rendered

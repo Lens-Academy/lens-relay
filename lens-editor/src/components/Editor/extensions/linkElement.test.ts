@@ -44,17 +44,23 @@ describe('createLinkElement', () => {
     open.mockRestore();
   });
 
-  it('shows the external-link icon after a web link, without adding text', () => {
-    const el = createLinkElement('x', 'https://a.org');
+  it('shows the external-link icon after a [text](url) web link, without adding text', () => {
+    const el = createLinkElement('x', 'https://a.org', true);
     expect(el.className).toBe('cm-link-widget');
     expect(el.lastElementChild?.className).toBe('cm-link-external-icon');
     expect(el.lastElementChild?.getAttribute('aria-hidden')).toBe('true');
     expect(el.textContent).toBe('x');
   });
 
+  it('shows no icon after a bare URL or autolink, which shows its address already', () => {
+    const el = createLinkElement('https://a.org', 'https://a.org');
+    expect(el.className).toBe('cm-link-widget');
+    expect(el.querySelector('.cm-link-external-icon')).toBeNull();
+  });
+
   it('shows no icon after an email or relative link', () => {
     for (const url of ['mailto:a@b.com', 'a@b.com', 'Syllabus.md']) {
-      const el = createLinkElement('x', url);
+      const el = createLinkElement('x', url, true);
       expect(el.className).toBe('cm-link-widget');
       expect(el.querySelector('.cm-link-external-icon')).toBeNull();
     }
