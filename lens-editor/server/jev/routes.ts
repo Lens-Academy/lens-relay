@@ -168,7 +168,19 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
 
   app.use('*', requireEditLink);
 
-  app.get('/corpus', c => {
+  // ?latest=1: the platform's corpus at its content commit (lens-platform
+  // core/course_checks/corpus.py), whose file texts are kept here under that commit for the
+  // Runs that sample it; the browser gets the rows. Otherwise the offline corpus file.
+  app.get('/corpus', async c => {
+    if (c.req.query('latest') && config.platformUrl && config.platformKey) {
+      const res = await doFetch(`${config.platformUrl.replace(/\/$/, '')}/api/content/course-checks/corpus`, { headers: { 'X-Validation-Key': config.platformKey } }).catch((e: Error) => e);
+      if (res instanceof Error || !res.ok) return c.json({ error: `the platform's corpus: ${res instanceof Error ? res.message : res.status}` }, 502);
+      const { meta, rows, files } = await res.json();
+      byCommit.delete(meta.commit);
+      byCommit.set(meta.commit, files);
+      while (byCommit.size > 4) byCommit.delete(byCommit.keys().next().value!);
+      return c.json({ meta, rows });
+    }
     if (!existsSync(config.corpusPath)) return c.json({ error: `no corpus at ${config.corpusPath}` }, 404);
     return c.body(readFileSync(config.corpusPath, 'utf8'), 200, { 'Content-Type': 'application/json' });
   });
@@ -178,7 +190,9 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
   // edit to it reaches a Run only after the corpus is rebuilt.
   const readFile = config.readFile ?? (config.filesDir ? readFromDir(config.filesDir) : (p: string) => readRelayDocAtPath(p));
   const fileCache = new Map<string, { at: number; text: string | null }>();
-  // The corpus's own file texts, reloaded when the file changes.
+  // File texts of the platform corpora handed out, by commit (the last few).
+  const byCommit = new Map<string, Record<string, string>>();
+  // The offline corpus's own file texts, reloaded when the file changes.
   // Keyed on both files' mtime and size: two writes within one mtime tick differ in size.
   let snap: { stamp: string; files: Record<string, string> } | null = null;
   function corpusFiles(): Record<string, string> {
@@ -232,7 +246,8 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     let files: Record<string, string> = {};
     try {
       if (body.presentation) {
-        const snapshot = corpusFiles();
+        // The texts the sample came from: its platform commit's, else the offline corpus's.
+        const snapshot = (typeof body.commit === 'string' && byCommit.get(body.commit)) || corpusFiles();
         files = { ...(await readFiles(paths.filter((p) => !(p in snapshot)))), ...Object.fromEntries(paths.filter((p) => p in snapshot).map((p) => [p, snapshot[p]])) };
       }
     } catch (e) {

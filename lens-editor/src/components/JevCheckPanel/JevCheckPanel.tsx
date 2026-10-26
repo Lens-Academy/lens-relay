@@ -19,6 +19,7 @@ import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary, type Labeler } from './Results';
 import { labelBody } from '../../lib/jev-labels';
 import { useLabels } from './useLabels';
+import { EditableText } from './editable';
 import { CountInput } from './CountInput';
 import { RunChips } from './RunChips';
 import { baseFor, type RunEntry } from './runs';
@@ -52,13 +53,13 @@ export interface Batch { state: Record<string, unknown>; questions: { instructio
 /** A unit asked about, the sampled row it came from, and its question: batches[batch].questions[index]. */
 interface Asked { id: string; row: string; path: string; line: number; text: string; batch: number; index: number; words?: string; answer_key?: string }
 
-async function ask(check: JevCheck, sample: Para[], pres: Presentation): Promise<Run & { first?: Batch }> {
+async function ask(check: JevCheck, sample: Para[], pres: Presentation, commit?: string): Promise<Run & { first?: Batch }> {
   const question = { instructions: check.question, ...(check.criteria ? { criteria: check.criteria } : {}) };
   // Each paragraph alone needs no reading of the files, so it is built here (as the platform
   // builds it: present.batches with no presentation); any other way, the platform builds it.
   const { batches, asked, left_out: leftOut = [] }: { batches: Batch[]; asked: Asked[]; left_out?: string[] } = isDefault(pres)
     ? { batches: sample.map((r) => ({ state: { paragraph: r.text }, questions: [question] })), asked: sample.map((r, i) => ({ ...r, row: r.id, batch: i, index: 0 })) }
-    : await post('/api/jev/requests', { question, presentation: presentationBlock(pres), units: sample.map(({ id, path, line, text }) => ({ id, path, line, text })) });
+    : await post('/api/jev/requests', { question, presentation: presentationBlock(pres), commit, units: sample.map(({ id, path, line, text }) => ({ id, path, line, text })) });
   const data = await post('/api/jev/ask', { model: check.model, requests: batches, ...(pres.long && pres.context !== pres.question ? { longContext: true } : {}) });
   // ps answers the batches' questions in order.
   const start: number[] = [];
@@ -75,6 +76,9 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const parsed = useMemo(() => attempt(() => parseCheckFile(text)), [text]);
   const [err, setErr] = useState<string | null>(null);
   const corpus = useCorpus(setErr);
+  // Use latest course text on every Run (Lauren, 2026-10-26). Off: the corpus stays as loaded,
+  // and paragraphs cannot be opened for editing, since the live file may differ from it.
+  const [latestText, setLatestText] = useState(true);
   // The view everyone who opens this file shares (useView.ts).
   const [n, setN] = useView(ytext, text, 'sample', 200);
   const [pctSpec, setPctSpec] = useView(ytext, text, 'percentiles', DEFAULT_PCTS);
@@ -103,10 +107,13 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
     if (!c || !live || !pool) return;
     setRunning(true); setErr(null);
     try {
-      const sample = pool.slice(0, n);
+      // With latest course text, every Run first takes the corpus as the text is now.
+      const fresh = latestText ? await corpus.reload() : { corpus: corpus.corpus, meta: corpus.meta };
+      const sample = (poolOf(fresh.corpus, fresh.meta, viewCourses && courses, viewKinds && kinds) ?? []).slice(0, n);
+      const commit = fresh.meta?.commit;
       const key = sample.map((u) => u.id).join('\n');
       // Each check as it would be asked: the draft and the live check may differ in presentation.
-      const [r, l] = await Promise.all([ask(c, sample, pres), draft ? ask(live, sample, live.presentation) : null]);
+      const [r, l] = await Promise.all([ask(c, sample, pres, commit), draft ? ask(live, sample, live.presentation, commit) : null]);
       setSent(r.first);
       const mine = { ...r, sample: key }, draftRun = !!draft;
       setRuns((rs) => [...rs, { run: mine, draft: draftRun, base: baseFor(rs, key, l && { ...l, sample: key }) }]);
@@ -164,6 +171,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   return (
     <section className="mx-0 my-4 rounded-lg sm:mx-6 border border-gray-200 bg-white text-sm shadow-sm [contain:inline-size]" data-testid="jev-check-panel"
       onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); run(); } }}>
+      <EditableText.Provider value={latestText}>
       <header className="flex items-baseline justify-between border-b border-gray-100 px-4 py-2.5">
         <span className="text-[13px] font-semibold text-gray-800">Jev check {c && <span className="font-normal text-gray-500">· {c.id}</span>}</span>
         <span className="flex items-baseline gap-3">
@@ -222,6 +230,10 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           <InputPicker meta={corpus.meta} pool={pool} n={n} {...chosen(corpus.meta, viewCourses && courses, viewKinds && kinds)}
             onCourses={(x) => setCourses([...x])} onKinds={(x) => setKinds([...x])} />
         )}
+        <label className="flex items-center gap-1" title="Use the latest course text on every Run? Off keeps this text, so runs compare, and paragraphs cannot be opened for editing.">
+          <input type="checkbox" checked={latestText} onChange={(e) => setLatestText(e.target.checked)} /> latest course text
+          {corpus.meta && <span className="text-gray-400">{latestText ? 'using latest' : `using rev ${corpus.meta.commit}`}</span>}
+        </label>
       </div>
 
       {err && <div className="px-4 py-2 text-red-700">{err}</div>}
@@ -253,6 +265,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
             : <Percentiles run={latest} pcts={pcts.ok ?? []} color={color} labeler={labeler} />}
         </div>
       )}
+      </EditableText.Provider>
     </section>
   );
 }

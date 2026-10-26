@@ -296,3 +296,26 @@ describe('jev routes, the corpus\'s own files', () => {
     expect(again.status).toBe(502);
   });
 });
+
+describe('jev routes, the latest corpus', () => {
+  it('hands out the platform corpus without its files, and a Run of that commit asks about those texts', async () => {
+    const readFile = vi.fn(async () => '# live');
+    const { app, jev } = mount({ readFile, platformUrl: 'https://platform.test', platformKey: 'k' });
+    jev.mockImplementation(async (u) => String(u).endsWith('/corpus')
+      ? new Response(JSON.stringify({ meta: { commit: 'abc1234' }, rows: [{ id: 'r' }], files: { 'Lens Edu/a.md': '# A at abc1234' } }), { status: 200 })
+      : new Response('{"batches":[],"asked":[]}', { status: 200 }));
+    const headers = { 'Content-Type': 'application/json', 'X-Share-Token': token() };
+    const got = await (await app.request('/api/jev/corpus?latest=1', { headers })).json();
+    expect(got).toEqual({ meta: { commit: 'abc1234' }, rows: [{ id: 'r' }] });
+    const requests = (commit: string) => app.request('/api/jev/requests', {
+      method: 'POST', headers,
+      body: JSON.stringify({ question: { instructions: 'q' }, presentation: { context: 'document' }, commit, units: [{ id: 'a', path: 'Lens Edu/a.md', line: 1, text: 'x' }] }),
+    });
+    expect((await requests('abc1234')).status).toBe(200);
+    expect(JSON.parse(String(jev.mock.calls[1][1]!.body)).files).toEqual({ 'Lens Edu/a.md': '# A at abc1234' });
+    expect(readFile).not.toHaveBeenCalled();
+    // A commit this server never handed out: the file as it is now.
+    await requests('zzz');
+    expect(JSON.parse(String(jev.mock.calls[2][1]!.body)).files).toEqual({ 'Lens Edu/a.md': '# live' });
+  });
+});

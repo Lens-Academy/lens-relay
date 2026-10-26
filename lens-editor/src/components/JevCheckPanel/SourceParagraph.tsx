@@ -2,7 +2,8 @@
 // edits and comments made here are edits and comments in that file. One paragraph is live at
 // a time across the tab (lib/embed-docs.ts); Escape or a click outside closes it, and so does
 // focus leaving it for nowhere, which is what Escape does under Vimium (it takes the key).
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { EditableText } from './editable';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
@@ -30,7 +31,9 @@ const theme = EditorView.theme({
 
 export function SourceParagraph({ para }: { para: Para }) {
   const { metadata } = useNavigation();
-  const { canEdit } = useAuth();
+  const { canEdit: mayEdit } = useAuth();
+  const editableHere = useContext(EditableText);
+  const canEdit = mayEdit && editableHere;
   const { displayName } = useDisplayName();
   const nameRef = useRef(displayName);
   useEffect(() => { nameRef.current = displayName; }, [displayName]);
