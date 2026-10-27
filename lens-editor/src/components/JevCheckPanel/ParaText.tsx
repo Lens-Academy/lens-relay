@@ -12,6 +12,17 @@ export function ScoreChip({ p, color }: { p: number; color: Colormap }) {
   );
 }
 
+/** The lowest and highest of jev's answers to one request; amber when they fall in different
+ *  bands, so the verdict is down to chance. */
+export function Spread({ samples, wobbly }: { samples?: number[]; wobbly: boolean }) {
+  if (!samples || samples.length < 2) return null;
+  const lo = Math.min(...samples), hi = Math.max(...samples);
+  return (
+    <span title={`jev's ${samples.length} answers: ${samples.map((x) => x.toFixed(2)).join(', ')}${wobbly ? ', in different bands' : ''}`}
+      className={`font-mono text-[10px] tabular-nums ${wobbly ? 'text-amber-600' : 'text-gray-400'}`}>{lo.toFixed(2)}–{hi.toFixed(2)}</span>
+  );
+}
+
 function SourceLink({ para }: { para: Para }) {
   const { metadata } = useNavigation();
   const id = metadata?.['/' + para.path]?.id;

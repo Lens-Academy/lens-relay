@@ -344,3 +344,40 @@ describe('jev routes, a corpus no longer held', () => {
     expect((await res.json()).error).toMatch(/^reload:/);
   });
 });
+
+// Lauren, 2026-10-27, on asking each call three times: "in the workbench, that sounds great
+// yeah". jev answers the same call differently (by up to 0.15), so a run can ask each request
+// `samples` times; the cache keeps every answer and asks only for the ones it lacks.
+describe('jev routes, samples', () => {
+  const askN = (app: Hono, texts: string[], samples?: unknown) => app.request('/api/jev/ask', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+    body: JSON.stringify({ model: 'jev-1.14.0', samples, requests: texts.map((t) => ({ question: Q, state: { paragraph: t } })) }),
+  });
+  const counting = () => { let n = 0; return vi.fn<typeof fetch>(async () => jevReply([0.2, 0.4, 0.9][n++ % 3])); };
+
+  it('asks each request as often as asked, and answers the mean with every sample', async () => {
+    const jev = counting();
+    const { app } = mount({ fetchImpl: jev });
+    const got = await (await askN(app, ['a'], 3)).json();
+    expect(jev).toHaveBeenCalledTimes(3);
+    expect([...got.samples[0]].sort()).toEqual([0.2, 0.4, 0.9]);
+    expect(got.ps[0]).toBeCloseTo(0.5);
+    expect(await (await askN(app, ['a'], 3)).json()).toMatchObject({ cached: 1 });
+    expect(jev).toHaveBeenCalledTimes(3);
+  });
+  it('asks only for the samples the cache lacks, and charges each one', async () => {
+    const jev = counting();
+    const { app } = mount({ fetchImpl: jev, charsPerHour: 3 * ONE });
+    expect((await askN(app, ['a'])).status).toBe(200);
+    expect((await askN(app, ['a'], 3)).status).toBe(200);
+    expect(jev).toHaveBeenCalledTimes(3);
+    expect((await askN(app, ['b'], 3)).status).toBe(429);
+  });
+  it('answers one sample as before when none are asked for', async () => {
+    const { app } = mount();
+    expect(await (await askN(app, ['a'])).json()).toEqual({ ps: [0.7], cached: 0 });
+  });
+  it.each([0, 6, 1.5, 'x'])('refuses samples=%s', async (n) => {
+    expect((await askN(mount().app, ['a'], n)).status).toBe(400);
+  });
+});

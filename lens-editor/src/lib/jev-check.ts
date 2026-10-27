@@ -110,6 +110,12 @@ export function bandOf(check: JevCheck, p: number): Band {
   return p >= check.fail_at ? 'fail' : p < check.pass_below ? 'pass' : 'unsure';
 }
 
+/** Whether jev's answers to one request, asked several times, fall in different bands: such a
+ *  unit's verdict is down to chance, which matters most when setting the thresholds. */
+export function wobbles(check: JevCheck, samples: number[]): boolean {
+  return new Set(samples.map((p) => bandOf(check, p))).size > 1;
+}
+
 export function bandRule(check: JevCheck, b: Band): string {
   return b === 'fail' ? `p ≥ ${check.fail_at}` : b === 'pass' ? `p < ${check.pass_below}` : `${check.pass_below} ≤ p < ${check.fail_at}`;
 }
