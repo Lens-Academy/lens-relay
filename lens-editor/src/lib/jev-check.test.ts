@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PRESENTATION } from './jev-presentation';
-import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, platformWordProblems, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares , platformProblems, setDraftPresentation, readView, setView} from './jev-check';
+import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, platformWordProblems, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares , platformProblems, setDraftPresentation, readView, setView, wobbles} from './jev-check';
 
 const T1 = `---
 id: T1
@@ -112,6 +112,12 @@ describe('bands', () => {
   const c = parseCheck(T1);
   it('puts the thresholds in the right band', () => {
     expect([0.8, 0.79, 0.5, 0.49].map((p) => bandOf(c, p))).toEqual(['fail', 'unsure', 'unsure', 'pass']);
+  });
+  it('says when one request\'s answers fall in different bands', () => {
+    expect(wobbles(c, [0.81, 0.95, 0.8])).toBe(false);
+    expect(wobbles(c, [0.81, 0.79])).toBe(true);
+    expect(wobbles(c, [0.49, 0.5])).toBe(true);
+    expect(wobbles(c, [0.3])).toBe(false);
   });
   it('states each rule and counts shares', () => {
     expect(bandRule(c, 'unsure')).toBe('0.5 ≤ p < 0.8');

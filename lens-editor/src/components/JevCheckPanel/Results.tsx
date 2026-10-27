@@ -1,6 +1,6 @@
 // A run's results: the band cards, the histogram, and either the percentile rows or one band's list.
-import { BANDS, bandOf, bandRule, histogram, percentileRows, shares, type Band } from '../../lib/jev-check';
-import { ParaText, ScoreChip } from './ParaText';
+import { BANDS, bandOf, bandRule, histogram, percentileRows, shares, wobbles, type Band } from '../../lib/jev-check';
+import { ParaText, ScoreChip, Spread } from './ParaText';
 import { agreement, labelFor, type Label } from '../../lib/jev-labels';
 
 const unitsOf = (run: Run) => `${run.unit ?? 'paragraph'}s`;
@@ -34,6 +34,7 @@ const pct = (x: number) => `${Math.round(100 * x)}%`;
 export function Summary({ run, base, band, onBand, labels }: { run: Run; base?: { label: string; run: Run }; band: Band | null; onBand: (b: Band) => void; labels?: Label[] }) {
   const agree = labels && agreement(labels, run.check.id, run.scored.map((u) => ({ ...u, unit: run.unit, band: bandOf(run.check, u.p) })));
   const now = shares(run.check, run.scored.map((s) => s.p));
+  const wobbly = run.scored.filter((u) => u.samples && wobbles(run.check, u.samples)).length;
   const before = base && base.run.scored.length === run.scored.length ? shares(base.run.check, base.run.scored.map((s) => s.p)) : null;
   return (
     <div>
@@ -49,6 +50,8 @@ export function Summary({ run, base, band, onBand, labels }: { run: Run; base?: 
         ))}
       </div>
       <div className="mt-1 text-[11px] text-gray-400">{run.scored.length} {unitsOf(run)}, {run.cached} from cache
+        {(run.samples ?? 1) > 1 && <span>, each asked {run.samples} times (scores are the mean)
+          {wobbly > 0 && <span className="text-amber-600">; {wobbly} with answers in different bands</span>}</span>}
         {agree && agree.labelled > 0 && <span className="ml-2 text-gray-600">· your labels: {agree.agree} agree, {agree.disagree} disagree, {agree.unsure} unsure, of {agree.labelled} labelled here</span>}</div>
     </div>
   );
@@ -88,7 +91,7 @@ export function Percentiles({ run, pcts, color, labeler }: { run: Run; pcts: num
       {percentileRows(run.scored, pcts).map(({ at, item }) => (
         // Narrow first column (percentile over score), so the text gets the width on a phone.
         <li key={`${at}-${item.id}`} className="grid grid-cols-[3.5rem_1fr] gap-3 py-2">
-          <span className="flex flex-col items-start gap-1"><ScoreChip p={item.p} color={color} /><span className="font-mono text-[10px] text-gray-400">at {at}</span></span>
+          <span className="flex flex-col items-start gap-1"><ScoreChip p={item.p} color={color} /><Spread samples={item.samples} wobbly={!!item.samples && wobbles(run.check, item.samples)} /><span className="font-mono text-[10px] text-gray-400">at {at}</span></span>
           <div className="min-w-0"><ParaText para={item} /><LabelButtons run={run} item={item} labeler={labeler} /></div>
         </li>
       ))}
@@ -108,7 +111,7 @@ export function BandList({ run, band, color, onClear, labeler }: { run: Run; ban
       <ol className="divide-y divide-gray-100">
         {items.map((item) => (
           <li key={item.id} className="grid grid-cols-[3.5rem_1fr] gap-3 py-2">
-            <ScoreChip p={item.p} color={color} />
+            <span className="flex flex-col items-start gap-1"><ScoreChip p={item.p} color={color} /><Spread samples={item.samples} wobbly={!!item.samples && wobbles(run.check, item.samples)} /></span>
             <div className="min-w-0"><ParaText para={item} /><LabelButtons run={run} item={item} labeler={labeler} /></div>
           </li>
         ))}

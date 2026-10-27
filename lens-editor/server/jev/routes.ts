@@ -58,6 +58,7 @@ const CALL_MAX_QUESTIONS = 1000;
 // Relay reads per /files request: at most this many files, this many at a time.
 const MAX_FILES = 300;
 const FILE_WORKERS = 4;
+const MAX_SAMPLES = 5;
 
 export function loadJevConfig(env: NodeJS.ProcessEnv = process.env): JevConfig {
   const cacheDir = env.JEV_CACHE_DIR || join(homedir(), '.cache', 'jev-workbench');
@@ -82,10 +83,11 @@ type Question = { instructions: string; criteria?: { true: string; false: string
 const requireEditLink = requireEduShareToken({ minRole: 'edit' });
 const budgetKey = (c: Context) => (shareTokenFromHeaders(c.req.header('X-Share-Token'), c.req.header('Authorization')) ?? '').slice(-24);
 
-/** answers.jsonl as a map from hash to p, loaded once and appended to as answers come. */
+/** answers.jsonl as a map from hash to every p jev gave for it (it answers the same call
+ *  differently), loaded once and appended to as answers come. */
 function answerCache(dir: string) {
   const file = join(dir, 'answers.jsonl');
-  let map: Map<string, number> | null = null;
+  let map: Map<string, number[]> | null = null;
   const load = () => {
     if (map) return map;
     map = new Map();
@@ -96,7 +98,7 @@ function answerCache(dir: string) {
       // the file with a newline so the next append starts a line of its own.
       for (const line of raw.split('\n')) {
         if (!line) continue;
-        try { const r = JSON.parse(line); if (typeof r.h === 'string' && typeof r.p === 'number') map.set(r.h, r.p); } catch { /* partial line */ }
+        try { const r = JSON.parse(line); if (typeof r.h === 'string' && typeof r.p === 'number') map.set(r.h, [...(map.get(r.h) ?? []), r.p]); } catch { /* partial line */ }
       }
       if (raw && !raw.endsWith('\n')) appendFileSync(file, '\n');
     }
@@ -104,7 +106,7 @@ function answerCache(dir: string) {
   };
   return {
     get: (h: string) => load().get(h),
-    put: (h: string, p: number, model: string) => { load().set(h, p); appendFileSync(file, JSON.stringify({ h, p, model, ts: Date.now() }) + '\n'); },
+    put: (h: string, p: number, model: string) => { const m = load(); m.set(h, [...(m.get(h) ?? []), p]); appendFileSync(file, JSON.stringify({ h, p, model, ts: Date.now() }) + '\n'); },
   };
 }
 
@@ -301,26 +303,37 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     // does not certify, so cached apart from normal answers.
     const long = body.longContext === true;
     if (reqs.length > MAX_TEXTS) return c.json({ error: `at most ${MAX_TEXTS} requests at once` }, 400);
-    // Each distinct uncached request is asked once, however often it repeats.
+    // How many answers each request needs (jev answers one call differently each time).
+    const samples = body.samples ?? 1;
+    if (!Number.isInteger(samples) || samples < 1 || samples > MAX_SAMPLES) return c.json({ error: `samples is a whole number from 1 to ${MAX_SAMPLES}` }, 400);
+    // Each distinct request is asked as often as the cache lacks answers, however often it repeats.
     const hashes = reqs.map((r) => reqHash(long ? `${model}+long` : model, r));
     const todo = new Map<string, Req>();
-    reqs.forEach((r, i) => { if (cache.get(hashes[i]) === undefined) todo.set(hashes[i], r); });
+    const need = new Map<string, number>();
+    reqs.forEach((r, i) => {
+      const lack = samples - (cache.get(hashes[i])?.length ?? 0);
+      if (lack > 0) { todo.set(hashes[i], r); need.set(hashes[i], lack); }
+    });
 
     const key = budgetKey(c);
     const now = Date.now();
     let w = used.get(key);
     if (!w || now - w.start >= 3600_000) used.set(key, w = { start: now, n: 0 });
-    // Questions about the same state share a call, as many as fit.
+    // Questions about the same state share a call, as many as fit; each further sample is
+    // another round of calls.
     const calls: { state: Record<string, unknown>; hs: string[]; qs: Question[]; cost: number }[] = [];
-    const open = new Map<string, (typeof calls)[number]>();
-    for (const [h, r] of todo) {
-      const k = stateKey(r.state);
-      let call = open.get(k);
-      if (!call || call.qs.length >= CALL_MAX_QUESTIONS || call.cost + questionChars(r.question) > (long ? LONG_CALL_MAX_CHARS : CALL_MAX_CHARS)) {
-        calls.push(call = { state: r.state, hs: [], qs: [], cost: JSON.stringify(r.state).length });
-        open.set(k, call);
+    for (let round = 0; round < samples; round++) {
+      const open = new Map<string, (typeof calls)[number]>();
+      for (const [h, r] of todo) {
+        if (need.get(h)! <= round) continue;
+        const k = stateKey(r.state);
+        let call = open.get(k);
+        if (!call || call.qs.length >= CALL_MAX_QUESTIONS || call.cost + questionChars(r.question) > (long ? LONG_CALL_MAX_CHARS : CALL_MAX_CHARS)) {
+          calls.push(call = { state: r.state, hs: [], qs: [], cost: JSON.stringify(r.state).length });
+          open.set(k, call);
+        }
+        call.hs.push(h); call.qs.push(r.question); call.cost += questionChars(r.question);
       }
-      call.hs.push(h); call.qs.push(r.question); call.cost += questionChars(r.question);
     }
     const total = calls.reduce((a, x) => a + x.cost, 0);
     if (w.n + total > config.charsPerHour) {
@@ -348,7 +361,13 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
       w.n -= total - answered; // refund what was never answered
       return c.json({ error: (failure as Error).message }, 502);
     }
-    return c.json({ ps: hashes.map((h) => (tooLong.has(h) ? null : cache.get(h)!)), cached: hashes.filter((h) => !todo.has(h)).length, ...(tooLong.size ? { tooLong: tooLong.size } : {}) });
+    const got = hashes.map((h) => (tooLong.has(h) ? null : cache.get(h)!.slice(0, samples)));
+    return c.json({
+      ps: got.map((g) => g && g.reduce((a, x) => a + x, 0) / g.length),
+      ...(samples > 1 ? { samples: got } : {}),
+      cached: hashes.filter((h) => !todo.has(h)).length,
+      ...(tooLong.size ? { tooLong: tooLong.size } : {}),
+    });
   });
   return app;
 }
