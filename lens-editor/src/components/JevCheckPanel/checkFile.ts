@@ -19,8 +19,12 @@ export function writeText(ytext: Y.Text, change: (text: string) => string) {
   if (after === before) return;
   let a = 0;
   while (a < before.length && before[a] === after[a]) a++;
+  // The shared end may not reach into the shared start in either text, or the shorter one
+  // keeps a piece of the start twice (T7, 2026-10-27: "  presentation:…" before "  pass_below"
+  // left "  p" behind).
+  const room = Math.min(before.length, after.length) - a;
   let b = 0;
-  while (b < before.length - a && before[before.length - 1 - b] === after[after.length - 1 - b]) b++;
+  while (b < room && before[before.length - 1 - b] === after[after.length - 1 - b]) b++;
   ytext.doc!.transact(() => {
     ytext.delete(a, before.length - a - b);
     ytext.insert(a, after.slice(a, after.length - b));
