@@ -11,13 +11,13 @@ describe('labels are the platform\'s judgements of words, at a level, in a file'
     // Without words (each paragraph alone: the corpus text is whole), the text is the words.
     expect(labelBody('T1', { path: 'Lens Edu/a.md', text: 'Short.' }, 'fail', 'L').words).toBe('Short.');
   });
-  it('the newest label on exactly this unit counts: same file, level and words', () => {
+  it('the newest label on these words at this level counts, in any file', () => {
     const labels = [lab({}), lab({ verdict: 'pass' }), lab({ check_id: 'T5' })];
     const u = { path: 'Lens Edu/a.md', text: 'METR  measures\ntask length.' };
     expect(labelFor(labels, 'T1', u)?.verdict).toBe('pass');
     expect(labelFor(labels, 'T9', u)).toBeUndefined();
     expect(labelFor([lab({ words: 'Why?' })], 'T1', { path: 'Lens Edu/a.md', text: 'Why? Because of METR.' })).toBeUndefined();
-    expect(labelFor(labels, 'T1', { ...u, path: 'Lens Edu/b.md' })).toBeUndefined();
+    expect(labelFor(labels, 'T1', { ...u, path: 'Lens Edu/b.md' })?.verdict).toBe('pass');  // same words, another file
     expect(labelFor([lab({ level: 'sentence' })], 'T1', u)).toBeUndefined();
     expect(labelFor([lab({ level: 'sentence' })], 'T1', { ...u, unit: 'sentence' })?.verdict).toBe('fail');
     // Case counts, as on the platform.
