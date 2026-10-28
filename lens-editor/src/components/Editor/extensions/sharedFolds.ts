@@ -183,8 +183,10 @@ class SharedFoldStore {
     this.map = ydoc.getMap<SharedFold>(FOLDS_MAP);
   }
 
-  /** Start of the line a fold is anchored to, or null when it can't be found
-   *  or no longer sits at a line start. 'gone' when the character it was
+  /** Start of the line a fold is anchored to (the line holding the
+   *  character it was anchored to, which text typed before it on the same
+   *  line moves), or null when it can't be found. 'gone' when that character
+   *  was
    *  anchored to was deleted: Yjs would resolve it to whatever follows, and
    *  fold some other line. 'later' when that character hasn't arrived yet
    *  (the map and the text sync independently). */
@@ -198,7 +200,7 @@ class SharedFoldStore {
       }
       const abs = Y.createAbsolutePositionFromRelativePosition(rel, this.ydoc);
       if (!abs || abs.type !== this.ytext || abs.index > state.doc.length) return null;
-      return state.doc.lineAt(abs.index).from === abs.index ? abs.index : null;
+      return state.doc.lineAt(abs.index).from;
     } catch {
       return null;
     }
@@ -351,12 +353,13 @@ class SharedFoldsView {
     if (update.docChanged) this.schedule();
     if (!this.store.canWrite) return;
     // Folds CodeMirror opened or closed itself (its placeholder click, other
-    // fold commands, a local delete touching a fold), as line starts mapped
+    // fold commands, an edit replacing or deleting folded text), as line
+    // starts mapped
     // to the update's final state, which is what the Y.Text shows: this runs
     // after yCollab has written the update's edits
     let opened: number[] = [];
     let closed: number[] = [];
-    let deleted = false;
+    let dropped = false;
     for (const tr of update.transactions) {
       opened = opened.map((pos) => tr.changes.mapPos(pos, 1));
       closed = closed.map((pos) => tr.changes.mapPos(pos, 1));
@@ -365,7 +368,7 @@ class SharedFoldsView {
         if (e.is(unfoldEffect)) opened.push(tr.state.doc.lineAt(e.value.from).from);
         else if (e.is(foldEffect)) closed.push(tr.state.doc.lineAt(e.value.from).from);
       }
-      if (tr.docChanged && tr.isUserEvent('delete')) {
+      if (tr.docChanged) {
         const after = foldedRanges(tr.state);
         foldedRanges(tr.startState).between(0, tr.startState.doc.length, (from, to) => {
           const mFrom = tr.changes.mapPos(from, 1);
@@ -375,10 +378,10 @@ class SharedFoldsView {
             if (a === mFrom && b === mTo) kept = true;
           });
           if (kept) return;
-          // Its line deleted too: pruned below
+          dropped = true;
+          // Unless its line was deleted too (pruned below)
           const start = tr.changes.mapPos(tr.startState.doc.lineAt(from).from, 1, MapMode.TrackDel);
-          if (start === null) deleted = true;
-          else opened.push(start);
+          if (start !== null) opened.push(start);
         });
       }
     }
@@ -388,7 +391,7 @@ class SharedFoldsView {
     const lines = (starts: number[]) =>
       starts.map((pos) => state.doc.lineAt(pos)).filter((line, i) => line.from === starts[i]);
     this.store.remove(lines(opened), state);
-    if (deleted) this.store.prune(state);
+    if (dropped) this.store.prune(state);
     this.store.add(lines(closed).filter((line) => foldRangeOf(state, line.number)), state);
   }
 
@@ -405,12 +408,13 @@ class FoldToggleWidget extends WidgetType {
   constructor(
     readonly folded: boolean,
     readonly indented: boolean,
+    readonly shared: boolean,
   ) {
     super();
   }
 
   eq(other: FoldToggleWidget) {
-    return other.folded === this.folded && other.indented === this.indented;
+    return other.folded === this.folded && other.indented === this.indented && other.shared === this.shared;
   }
 
   toDOM() {
@@ -421,7 +425,7 @@ class FoldToggleWidget extends WidgetType {
     button.setAttribute('role', 'button');
     button.setAttribute('aria-label', this.folded ? 'Unfold' : 'Fold');
     button.setAttribute('aria-expanded', String(!this.folded));
-    button.title = this.folded ? 'Unfold (for everyone)' : 'Fold (for everyone)';
+    button.title = `${this.folded ? 'Unfold' : 'Fold'} (${this.shared ? 'for everyone' : 'only for you: view only'})`;
     button.innerHTML =
       '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     wrap.appendChild(button);
@@ -437,6 +441,7 @@ function buildArrows(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { state } = view;
   const lines = state.field(foldLinesField);
+  const shared = stores.get(view)?.canWrite ?? false;
   for (const { from, to } of view.visibleRanges) {
     let pos = from;
     while (pos <= to) {
@@ -445,7 +450,7 @@ function buildArrows(view: EditorView): DecorationSet {
         // After the indentation, so a nested item's arrow is by its bullet
         const at = line.from + /^[ \t]*/.exec(line.text)![0].length;
         const folded = !!foldOnLine(state, line);
-        builder.add(at, at, Decoration.widget({ widget: new FoldToggleWidget(folded, at > line.from), side: 1 }));
+        builder.add(at, at, Decoration.widget({ widget: new FoldToggleWidget(folded, at > line.from, shared), side: 1 }));
       }
       pos = line.to + 1;
     }

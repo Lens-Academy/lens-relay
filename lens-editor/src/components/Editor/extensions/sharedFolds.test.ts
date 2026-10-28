@@ -237,6 +237,36 @@ describe('sharedFolds', () => {
     expect(a.getMap(FOLDS_MAP).size).toBe(0);
   });
 
+  it('typing at the start of a folded line keeps it folded for everyone', async () => {
+    const { a, b } = pair();
+    const va = editor(a);
+    const vb = editor(b);
+    clickArrow(va, 3);
+    await tick();
+    vb.dispatch({ changes: { from: vb.state.doc.line(3).from, insert: '#' }, userEvent: 'input.type' });
+    await tick();
+    expect(foldedLines(va)).toEqual([3]);
+    const vc = editor(b);
+    await tick();
+    expect(foldedLines(vc)).toEqual([3]);
+    expect(a.getMap(FOLDS_MAP).size).toBe(1);
+  });
+
+  it('typing over a folded block removes its fold for everyone', async () => {
+    const { a, b } = pair();
+    const va = editor(a);
+    const vb = editor(b);
+    clickArrow(va, 9);
+    await tick();
+    va.dispatch({
+      changes: { from: va.state.doc.line(8).from, to: va.state.doc.length, insert: 'x' },
+      userEvent: 'input.type',
+    });
+    await tick();
+    expect(a.getMap(FOLDS_MAP).size).toBe(0);
+    expect(foldedLines(vb)).toEqual([]);
+  });
+
   it('the keyboard folds the block the cursor is in, for everyone', async () => {
     const { a, b } = pair();
     const va = editor(a);
