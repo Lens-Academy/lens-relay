@@ -122,4 +122,28 @@ Lauren said "I like it as an initial version" and gave these four points, quoted
 - "in the history list, show how many things changed in a given row, and a preview of what the first one was"
 - "lots of "unknown" in the history, seems slightly distracting"
 
-Status: not started. The first version ships as a ready pull request before these.
+Status: not started. The first version is merged (5f720000) and was deployed to the production editor on 2026-10-28.
+
+### How Strata reads each point (2026-10-28, before building)
+
+Lauren may overrule any of these readings. Each one names what gets built.
+
+1. "Like gdocs, related groups of changes." Google Docs lists editing sessions, and each
+   session opens with a small arrow into the separate saves inside it. The panel will do
+   the same. A session row gets an arrow, and each save inside it can be opened on its own,
+   showing only what that save changed.
+2. "Show formatted markdown, closer to how the editor sees it." The version is shown in a
+   read-only copy of the editor itself, with the same headings, links, tables and suggestion
+   marks. Added text is marked green, and removed text appears struck through in red where it
+   used to be.
+3. "How many things changed in a row, and a preview of the first one." Each row will say
+   how many separate places changed, for example "3 changes". It also previews the first
+   one, for example "causes → leads". A change is a run of edits with fewer than four
+   unchanged words between them.
+4. "Lots of unknown." Rows with no recorded author show no author line at all, instead of
+   the word "unknown". AI authors are written plainly, so "ai:opus-5.5:Andreas" becomes
+   "Andreas (AI)".
+
+Assay's review asked for one more change. The server will fetch new versions in the
+background, so no reader waits for GitHub.
+

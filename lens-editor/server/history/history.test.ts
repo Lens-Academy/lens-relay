@@ -135,6 +135,22 @@ describe('createHistory on a real repo', () => {
     const h = createHistory({ repoDir: dir, ref: 'staging' });
     expect(await h.asOf()).toBe(3_000_000);
   });
+  it('reads many versions in one go, with null where the file did not exist', async () => {
+    const h = createHistory({ repoDir: dir, ref: 'staging' });
+    expect(await h.showMany([
+      { sha: first, path: 'Lenses/a.md' },
+      { sha: second, path: 'Lenses/a.md' },
+      { sha: first, path: 'Lenses/other.md' },
+      { sha: second, path: 'Lenses/a.md' },
+    ])).toEqual(['one\n', 'two\n', null, 'two\n']);
+    expect(await h.showMany([])).toEqual([]);
+    expect(await h.showMany([{ sha: first, path: 'Lenses' }, { sha: first, path: 'Lenses/a.md' }])).toEqual([null, 'one\n']);  // a folder is not a file
+  });
+  it('keeps bytes intact across files in one batch (multi-byte text, no trailing newline)', async () => {
+    const h = createHistory({ repoDir: dir, ref: 'staging' });
+    const sha = await commit('Lenses/u.md', 'héllo → wörld', 'Elias', 5000);
+    expect(await h.showMany([{ sha, path: 'Lenses/u.md' }, { sha, path: 'Lenses/a.md' }])).toEqual(['héllo → wörld', 'two\n']);
+  });
   it('refuses a sha that is not a full hex id', async () => {
     const h = createHistory({ repoDir: dir, ref: 'staging' });
     await expect(h.show('staging', 'Lenses/a.md')).rejects.toThrow(/sha/);
@@ -168,7 +184,11 @@ describe('createHistory fetching its own ref', () => {
     expect(await h.log('a.md')).toHaveLength(1);
     await commitIn(remote, 'two\n', 2000);
     expect(await h.log('a.md')).toHaveLength(1);          // within the interval: no fetch
+    // A copy exists, so a due fetch runs in the background: this read is served from the old
+    // copy at once, and the next read (after the fetch lands) sees the new commit.
     const fresh = createHistory({ repoDir: clone, ref: 'refs/history/staging', remoteUrl: remote, branch: 'staging', fetchEveryMs: 0 });
+    expect(await fresh.log('a.md')).toHaveLength(1);
+    await fresh.fetched();
     expect(await fresh.log('a.md')).toHaveLength(2);
     expect(await fresh.asOf()).toBe(2_000_000);
   });
