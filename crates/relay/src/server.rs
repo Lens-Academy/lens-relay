@@ -1012,6 +1012,8 @@ pub struct Server {
     metrics: Arc<RelayMetrics>,
     link_indexer: Option<Arc<LinkIndexer>>,
     search_index: Option<Arc<SearchIndex>>,
+    /// Removes the search index directory when the Server is dropped.
+    _search_index_dir: Option<SearchIndexDir>,
     search_ready: Arc<std::sync::atomic::AtomicBool>,
     search_tx: Option<tokio::sync::mpsc::Sender<String>>,
     search_pending: Option<Arc<DashMap<String, link_indexer::PendingEntry>>>,
@@ -1054,6 +1056,15 @@ pub struct WorkerReceivers {
         tokio::sync::mpsc::Receiver<String>,
         Arc<DashMap<String, link_indexer::PendingEntry>>,
     )>,
+}
+
+/// Deletes the search index directory on drop.
+struct SearchIndexDir(std::path::PathBuf);
+
+impl Drop for SearchIndexDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 impl Server {
@@ -1134,6 +1145,7 @@ impl Server {
                 None
             }
         };
+        let search_index_dir = search_index.is_some().then(|| SearchIndexDir(index_path));
         let search_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         // Create search channel and pending map (workers spawned later via spawn_workers)
@@ -1187,6 +1199,7 @@ impl Server {
             metrics,
             link_indexer: Some(link_indexer),
             search_index,
+            _search_index_dir: search_index_dir,
             search_ready,
             search_tx: search_tx_final,
             search_pending: search_pending_final,
@@ -3642,6 +3655,7 @@ impl Server {
             metrics: RelayMetrics::new().expect("metrics init should not fail in tests"),
             link_indexer: None,
             search_index: None,
+            _search_index_dir: None,
             search_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             search_tx: None,
             search_pending: None,
@@ -3682,6 +3696,7 @@ impl Server {
             metrics: RelayMetrics::new().expect("metrics init should not fail in tests"),
             link_indexer: None,
             search_index: Some(search_index),
+            _search_index_dir: None,
             search_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             search_tx: None,
             search_pending: None,
@@ -8224,6 +8239,26 @@ async fn metrics_endpoint(State(_server_state): State<Arc<Server>>) -> Result<St
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[tokio::test]
+    async fn search_index_dir_is_removed_when_server_is_dropped() {
+        let (server, _receivers) = Server::new(
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            Vec::new(),
+            CancellationToken::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        let dir = server._search_index_dir.as_ref().unwrap().0.clone();
+        assert!(dir.exists());
+        drop(server);
+        assert!(!dir.exists());
+    }
     use axum::body::{to_bytes, Body};
     use axum::http::{Method, Request};
     use serde_json::Value as JsonValue;
