@@ -248,19 +248,33 @@ hint WEUR, Standard storage class, private):
 0 * * * * nice -n 10 /root/lens-relay/scripts/r2-backup.sh >> /var/log/r2-backup.log 2>&1
 ```
 
-| Tier | Prefix | Made | Kept |
-|------|--------|------|------|
-| Hourly | `hourly/YYYY-MM-DD-HH/` | every hour | 24 |
-| Daily | `daily/YYYY-MM-DD/` | first hourly of the day | 22 days |
-| Weekly | `weekly/YYYY-WW/` | once a week, from the oldest daily | ~26 weeks |
+| Tier | Prefix | Holds | Made | Kept |
+|------|--------|-------|------|------|
+| Daily | `daily/YYYY-MM-DD/` | every object | first run of the day | 22 days |
+| Hourly | `hourly/YYYY-MM-DD-HH/` | objects changed since the last snapshot | every hour with a change | that day and the next |
+| Weekly | `weekly/YYYY-WW/` | every object | once a week, from the oldest daily | ~26 weeks |
+| | `current/` | the newest backed-up version of every object | every run | |
 
-Every snapshot is a full copy of the bucket. Source and destination use the
-same rclone remote (`r2bk`), so each copy is a server-side `CopyObject`
-inside Cloudflare and no data passes through prod; a run takes a few minutes
-at low priority. Expiry goes by the date in the snapshot name, not object
-age. A failed copy is removed so the next run starts clean. Cost is mostly
-requests: ~8k objects per snapshot is ~6M Class A operations a month (about
-$23); storage is ~30 GB.
+An object has changed when its MD5 differs from its copy in `current/`. The
+script lists both sides with `--fast-list` (one call per 1,000 objects) and
+compares the lists; rclone's `--compare-dest` would send one request per
+object. `current/` only takes versions that a snapshot holds, so after a
+failed run it is behind, never ahead, and the next run copies the difference
+again. Each daily copy resets `current/`, which also drops deleted objects.
+Source and destination use the same rclone remote (`r2bk`), so each copy is a
+server-side `CopyObject` inside Cloudflare and no data passes through prod.
+Expiry goes by the date in the snapshot name, not object age. A failed copy
+is removed so the next run starts clean.
+
+Cost is requests: R2 bills each list call and each copy (Class A, $4.50 per
+million after the first million a month). On 28 Oct 2026 the bucket held
+10,721 objects and 1 to 17 changed in an hour, so an hourly run made about
+40 Class A requests and the daily copy about 10,700: under 0.5M a month.
+Copying every object every hour, as the script did before, made about 21M
+(~$90). Storage is ~30 GB.
+
+`scripts/r2-backup.test.sh` runs both scripts over two simulated days against
+local folders (CI: `.github/workflows/r2-backup.yml`).
 
 - **Credentials:** R2 API token `relay-backup-job` (Object Read & Write on
   `lens-relay-storage` and `lens-relay-backups` only), configured as the
@@ -275,15 +289,24 @@ $23); storage is ~30 GB.
   uploaded into the bucket under their original names, so they expire on
   their original schedule.
 
-**Restoring.** Copying back writes into the live bucket, and the relay keeps
-loaded documents in memory and saves them over the store, so make sure the
-document is not loaded (or stop the relay) before copying:
+**Restoring.** An hour is put back together from its day's daily copy and
+that day's hourly snapshots up to it, in order. `scripts/r2-backup-restore.sh`
+does this into an empty folder and refuses the live bucket. Copying back
+writes into the live bucket, and the relay keeps loaded documents in memory
+and saves them over the store, so make sure the document is not loaded (or
+stop the relay) before copying:
 
 ```bash
-rclone lsf --dirs-only r2bk:lens-relay-backups/hourly                 # list snapshots
-rclone copy r2bk:lens-relay-backups/hourly/<snapshot>/<doc> /tmp/restore/<doc>   # inspect first
-rclone copy r2bk:lens-relay-backups/hourly/<snapshot>/<doc> r2bk:lens-relay-storage/<doc>
+rclone lsf --dirs-only r2bk:lens-relay-backups/hourly                         # hours with a change
+scripts/r2-backup-restore.sh 2026-10-28-14 /tmp/restore <doc>                 # <doc> as it was at 14:00
+rclone copy /tmp/restore/<doc> r2bk:lens-relay-storage/<doc>                  # after inspecting it
 ```
+
+Leave out `<doc>` for the whole bucket (~600 MB). A whole bucket put back
+together this way also holds the documents deleted from storage earlier that
+day. For a day whose hourly snapshots are gone, the result is the start of that
+day, and the script says so. A weekly snapshot is complete: copy from it
+directly.
 
 ## Key Files
 

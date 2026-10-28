@@ -34,7 +34,7 @@ commits as already upstream.
    commits is lost. Never merge, never force-push from git-sync.
 4. Copies a purge must still reach: GitHub's cached unreachable commits (GitHub Support,
    "removing sensitive data"), other clones (e.g. stale `~/lens/lens-folder-relay` on flowerbox),
-   R2 backups (`lens-relay-backups`, hourly/daily/weekly doc snapshots).
+   R2 backups (`lens-relay-backups`: daily, weekly and hourly doc snapshots, and `current/`).
 5. Cheaper first: close the upload-then-scrub paths. Luc's Fireflies agent and Hamza's Team call
    recordings both scrub BEFORE upload; the leak needs a path that uploads first.
 
