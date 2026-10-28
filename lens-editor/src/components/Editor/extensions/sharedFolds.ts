@@ -40,10 +40,12 @@ export interface SharedFold {
 
 /** Per line (index = line number - 1): heading level (1-6), 0 for other
  *  lines that may start a fold, -1 for lines that may not (frontmatter,
- *  fenced code, blank); and the indentation width (tabs as 4 columns). */
+ *  fenced code, blank); the indentation width (tabs as 4 columns); whether
+ *  it is blank. Arrays, as the arrows ask for many lines' ranges per edit. */
 interface FoldLines {
   kind: Int8Array;
   indent: Int32Array;
+  blank: Uint8Array;
 }
 
 const HEADING_RE = /^(#{1,6})(?:[ \t]|$)/;
@@ -62,12 +64,14 @@ function indentWidth(text: string): number {
 export function scanFoldLines(doc: EditorState['doc']): FoldLines {
   const kind = new Int8Array(doc.lines);
   const indent = new Int32Array(doc.lines);
+  const blank = new Uint8Array(doc.lines);
   let fence: string | null = null;
   let frontmatter = false;
   for (let n = 1; n <= doc.lines; n++) {
     const text = doc.line(n).text;
     const i = n - 1;
     indent[i] = indentWidth(text);
+    blank[i] = text.trim() ? 0 : 1;
     if (n === 1 && text.trim() === '---') {
       frontmatter = true;
       kind[i] = -1;
@@ -91,14 +95,14 @@ export function scanFoldLines(doc: EditorState['doc']): FoldLines {
       kind[i] = -1;
       continue;
     }
-    if (!text.trim()) {
+    if (blank[i]) {
       kind[i] = -1;
       continue;
     }
     const h = HEADING_RE.exec(text);
     kind[i] = h ? h[1].length : 0;
   }
-  return { kind, indent };
+  return { kind, indent, blank };
 }
 
 const foldLinesField = StateField.define<FoldLines>({
@@ -109,7 +113,7 @@ const foldLinesField = StateField.define<FoldLines>({
 /** The range folding line `n` hides (from its end to the end of the last
  *  line it covers), or null when the line folds nothing. */
 export function foldRangeOf(state: EditorState, n: number, lines = state.field(foldLinesField, false) ?? scanFoldLines(state.doc)): { from: number; to: number } | null {
-  const { kind, indent } = lines;
+  const { kind, indent, blank } = lines;
   const k = kind[n - 1];
   if (k === undefined || k < 0) return null;
   let last = n;
@@ -117,11 +121,11 @@ export function foldRangeOf(state: EditorState, n: number, lines = state.field(f
     for (let m = n + 1; m <= state.doc.lines; m++) {
       const km = kind[m - 1];
       if (km > 0 && km <= k) break;
-      if (km !== -1 || state.doc.line(m).text.trim()) last = m;
+      if (!blank[m - 1]) last = m;
     }
   } else {
     for (let m = n + 1; m <= state.doc.lines; m++) {
-      if (!state.doc.line(m).text.trim()) continue;
+      if (blank[m - 1]) continue;
       if (kind[m - 1] > 0 || indent[m - 1] <= indent[n - 1]) break;
       last = m;
     }
