@@ -12,6 +12,7 @@
 //   npx tsx scripts/jev.ts save T2      the draft becomes the live check (the panel's Save)
 //   npx tsx scripts/jev.ts discard T2   the draft is dropped (the panel's Discard)
 //   npx tsx scripts/jev.ts enable T2    the live check runs on agents' edits (the panel's Enable)
+//   npx tsx scripts/jev.ts disable T2   it stops (enabled: false)
 //
 // The editor server's /api/jev routes run in this process (server/jev/routes.ts), so a run
 // shares the server's answer cache and asks the platform to build its calls. Environment:
@@ -160,6 +161,7 @@ async function main() {
     if (!advice?.trim()) throw new Error('usage: fix <id> <advice>');
     return void (await write(path, (t) => setCheckFields(t, [{ path: ['fix'], value: advice }])));
   }
+  if (cmd === 'disable') return void (await write(path, (t) => setCheckFields(t, [{ path: ['enabled'], value: false }])));
   if (cmd === 'enable') {
     // As the panel's Enable: a check goes live only with no problems at all, placeholders included.
     const problems = platformProblems(text);
