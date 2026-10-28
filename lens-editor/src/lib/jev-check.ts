@@ -234,6 +234,12 @@ criteria:
 fix: "…"
 ---
 
+## How to pass (for editing agents)
+
+${UNWRITTEN} Until it is, go by the question and criteria at the top of this file. (Authors: replace this with what the check flags and concrete ways to fix a flagged line; editing agents are sent here from every flag.)
+
+## Notes
+
 Why this check exists, and examples of what it should and should not catch.
 `;
 }
@@ -287,8 +293,15 @@ const PLACEHOLDER = /^(?:Does )?(?:`\w+` )?…\??$/;
 /** The subset of platformProblems(text) that is about the words, not about loading the check. */
 export function platformWordProblems(text: string): string[] {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  try { return m ? wordsProblems(pyyamlLoad(m[1])) : []; } catch { return []; }
+  let words: string[] = [];
+  try { words = m ? wordsProblems(pyyamlLoad(m[1])) : []; } catch { /* not loadable: platformProblems says so */ }
+  return [...words, ...unwritten(text)];
 }
+// The new-check template's How-to-pass placeholder: agents are sent to that section from every
+// flag, so a check is not enabled while it still says this (Assay, #222).
+const UNWRITTEN = '*Not written yet.*';
+const unwritten = (text: string) =>
+  text.includes(UNWRITTEN) ? ['the "How to pass" section is not written yet: editing agents are sent there from every flag'] : [];
 
 export function platformProblems(text: string): string[] {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -314,7 +327,7 @@ export function platformProblems(text: string): string[] {
     // #1382) and keeps each call's shown text for replay (#1427): only an unreadable block stops it.
     try { parsePresentation(fm.presentation); } catch (e) { out.push((e as Error).message); }
   }
-  out.push(...wordsProblems(fm));
+  out.push(...wordsProblems(fm), ...unwritten(text));
   const s = fm.skip_folders;
   if ('skip_folders' in fm && !(Array.isArray(s) && s.every((v) => typeof v === 'string'))) out.push('skip_folders must be a list of folder names');
   return out;

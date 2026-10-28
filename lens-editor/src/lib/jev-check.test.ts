@@ -170,6 +170,13 @@ describe('newCheckText', () => {
     expect(c.question).toContain('`paragraph`');
   });
   it('refuses ids and names that would make a bad file', () => {
+    // Agents are told to read this section of a check's file (lens-platform runner.TIGHT).
+    expect(newCheckText('T6', 'x')).toContain('\n## How to pass (for editing agents)\n');
+    // Until the section is written, Enable is blocked (the panel disables it on any platformProblems).
+    const fresh = newCheckText('T6', 'x');
+    expect(platformProblems(fresh).some((p) => p.includes('How to pass'))).toBe(true);
+    const written = fresh.replace(/\*Not written yet\.\*[^\n]*/, 'Name the noun meant.');
+    expect(platformProblems(written).some((p) => p.includes('How to pass'))).toBe(false);
     expect(() => newCheckText('6 x', 'n')).toThrow();
     expect(() => newCheckText('T6', 'a/b')).toThrow();
   });
