@@ -304,6 +304,13 @@ describe('sharedFolds', () => {
     press(va, '{', { ctrlKey: true, shiftKey: true, keyCode: 219 } as KeyboardEventInit);
     await tick();
     expect(foldedLines(vb)).toEqual([1]);
+    // The cursor left the folded block, so moving it keeps the fold
+    expect(va.state.selection.main.head).toBe(va.state.doc.line(1).to);
+    va.dispatch({ selection: { anchor: 0 } });
+    expect(foldedLines(va)).toEqual([1]);
+    press(va, '}', { ctrlKey: true, shiftKey: true, keyCode: 221 } as KeyboardEventInit);
+    await tick();
+    expect(foldedLines(vb)).toEqual([]);
   });
 
   it('a read-only viewer sees shared folds but folds only for themselves', async () => {

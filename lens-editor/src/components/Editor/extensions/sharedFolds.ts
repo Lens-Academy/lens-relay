@@ -20,7 +20,7 @@
  * search) open for this client only; a local delete that clears a fold
  * (CodeMirror drops folds a deletion touches) removes it for everyone.
  */
-import { Annotation, MapMode, Prec, RangeSetBuilder, StateField } from '@codemirror/state';
+import { Annotation, EditorSelection, MapMode, Prec, RangeSetBuilder, StateField } from '@codemirror/state';
 import type { EditorState, Extension, Line } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
@@ -510,7 +510,19 @@ function foldCursorLines(fold: boolean) {
       const line = fold ? foldableLineAt(view.state, range.head) : view.state.doc.lineAt(range.head);
       if (line && !!foldOnLine(view.state, line) !== fold) lines.push(line);
     }
-    return lines.length > 0 && setFolded(view, lines, fold);
+    if (!lines.length || !setFolded(view, lines, fold)) return false;
+    // A cursor inside a block it just folded would open it again (for this
+    // client only) on its next move: put it at the end of the folded line
+    if (fold) {
+      const ranges = view.state.selection.ranges.map((range) => {
+        for (const it = foldedRanges(view.state).iter(0); it.value; it.next()) {
+          if (it.from < range.head && it.to >= range.head) return EditorSelection.cursor(it.from);
+        }
+        return range;
+      });
+      view.dispatch({ selection: EditorSelection.create(ranges, view.state.selection.mainIndex) });
+    }
+    return true;
   };
 }
 
