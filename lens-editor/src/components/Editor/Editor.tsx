@@ -11,7 +11,7 @@ import {
 } from '@codemirror/view';
 import { EditorState, Prec } from '@codemirror/state';
 import { defaultKeymap } from '@codemirror/commands';
-import { indentOnInput, indentUnit, syntaxHighlighting, bracketMatching, foldKeymap } from '@codemirror/language';
+import { indentOnInput, indentUnit, syntaxHighlighting, bracketMatching } from '@codemirror/language';
 import { editorTheme, markdownHighlightStyle } from './editorTheme';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
@@ -32,6 +32,7 @@ import { useYDoc, useYjsProvider } from '../../lib/ydoc-provider'
 import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment, updateImageEmbedContext } from './extensions/livePreview';
 import { codeBlockCopyButton } from './extensions/codeBlockCopyButton';
 import { videoCutButtons, videoCutCallback, type VideoCutLine } from './extensions/videoCutButtons';
+import { sharedFolds } from './extensions/sharedFolds';
 import { readAloud } from './extensions/readAloud';
 import { VideoCutDock } from './VideoCutDock';
 import { markdownTableCompartment, markdownTableExtension } from './extensions/markdownTable';
@@ -479,7 +480,6 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           ),
           ...searchKeymap,
           ...yUndoManagerKeymap,
-          ...foldKeymap,
           ...completionKeymap,
           ...lintKeymap,
         ]),
@@ -521,6 +521,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         remoteCarets({ ytext, awareness: provider.awareness }),
         // Must come after yCollab: reads the Y.Text during plugin update()
         authorshipExtension(ytext),
+        // Headings and indented blocks fold, for everyone on the page. After
+        // yCollab too: matches fold anchors against the Y.Text in update()
+        sharedFolds(ydoc, ytext, { canWrite: !readOnly }),
         // Large pastes get a temporary clientID + "who wrote this?" popover
         ...(readOnly
           ? []

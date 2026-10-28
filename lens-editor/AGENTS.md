@@ -97,6 +97,9 @@ doc.getMap('users')          // PermanentUserData: actor key → { ids, ds, meta
 doc.getMap('activity_v0')    // direct AI edits: event id → { ts, actor, kind, old, new, client, clock_from, clock_to, anchor, … }
                              // written by the relay's MCP edit path, pruned after 7 days; read by src/lib/activity.ts
                              // for the editor's "Recent" authorship mode and served on /recent via GET /recent-changes
+doc.getMap('folds_v0')       // folded headings and indented blocks, shared by everyone on the page:
+                             // fold id → { anchor (Y.RelativePosition JSON of the folded line's start), at }
+                             // (src/components/Editor/extensions/sharedFolds.ts); the text itself is unchanged
 doc.getMap('comments_v0')    // HTML pages only: comment threads, thread id → Y.Map { anchor, status, createdAt,
                              // createdBy, resolvedAt?, resolvedBy?, seen?, originalQuote?, messages: Y.Map<id, {…}> }
                              // (src/components/HtmlEditor/comments/thread-store.ts; the relay's comments MCP tool)

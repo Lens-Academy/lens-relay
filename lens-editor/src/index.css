@@ -1128,6 +1128,72 @@
   tab-size: 30px;
 }
 
+/* Fold arrows (extensions/sharedFolds.ts), left of a heading or of a line
+   with more-indented lines under it, as in Obsidian: shown on hover and
+   always while folded. The anchor is zero-width and one line tall, so the
+   arrow sits in the margin, centred on the line's first row, left of the
+   authorship bar. */
+.cm-fold-toggle-anchor {
+  position: relative;
+  display: inline-block;
+  width: 0;
+  height: 1lh;
+  vertical-align: top;
+  text-indent: 0;
+}
+.cm-fold-toggle {
+  position: absolute;
+  right: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--lens-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, transform 0.1s;
+  user-select: none;
+}
+/* Indented lines have no authorship bar beside them */
+.cm-fold-toggle-indented .cm-fold-toggle {
+  right: 4px;
+}
+.cm-line:hover .cm-fold-toggle,
+.cm-fold-toggle.cm-fold-toggle-folded {
+  opacity: 1;
+}
+.cm-fold-toggle:hover {
+  color: var(--lens-text);
+  background: var(--lens-hover-bg);
+}
+.cm-fold-toggle-folded {
+  transform: translateY(-50%) rotate(-90deg);
+}
+@media (hover: none) {
+  .cm-fold-toggle { opacity: 0.5; }
+}
+/* Phones: no margin beside the text, so the arrows go in its padding */
+@media not all and (min-width: 500px) {
+  .cm-fold-toggle { right: 0; width: 16px; }
+}
+/* What a fold hides, after its line */
+.cm-content .cm-foldPlaceholder {
+  margin-left: 6px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: var(--lens-hover-bg);
+  color: var(--lens-text-tertiary);
+  font-family: var(--lens-font-sans);
+  font-size: 14px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
 /* Checklist checkbox — Notion's: a 16px square with a dark 1.5px border,
    filled blue with a white tick when checked */
 .cm-checkbox {
