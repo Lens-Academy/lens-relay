@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as Y from 'yjs';
 import {
   checkRelayArticleUrls,
   createRelayAttachment,
   createRelayDoc,
+  editRelayDoc,
   findRelayAttachmentByHash,
   RelayAttachmentConflictError,
   updateRelayDoc,
@@ -183,5 +185,43 @@ describe('findRelayAttachmentByHash', () => {
 
     mockFetch.mockResolvedValueOnce(jsonResponse(200, { found: false }));
     expect(await findRelayAttachmentByHash('Lens Edu', 'cd'.repeat(32))).toBeNull();
+  });
+});
+
+// editRelayDoc: the CLI's way to change a check file as the editor does.
+describe('editRelayDoc', () => {
+  // A relay holding one document: auth, its state, and the updates posted to it.
+  function relayWith(text: string) {
+    const doc = new Y.Doc();
+    doc.getText('contents').insert(0, text);
+    const posted: Uint8Array[] = [];
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/auth')) return jsonResponse(200, { baseUrl: 'http://localhost:8090/d/x', token: 't' });
+      if (url.endsWith('/as-update')) {
+        const bytes = Y.encodeStateAsUpdate(doc);
+        return { ok: true, status: 200, statusText: '', headers: new Headers(), arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+      }
+      if (url.endsWith('/update')) { posted.push(new Uint8Array(init!.body as Uint8Array)); return jsonResponse(200, ''); }
+      throw new Error(`unexpected ${url}`);
+    });
+    return { doc, posted };
+  }
+
+  it('sends only the change, which applies cleanly to the relay\'s copy', async () => {
+    const { doc, posted } = relayWith('enabled: false\nrest\n');
+    const sent = await editRelayDoc('x', (d) => {
+      const t = d.getText('contents');
+      t.delete(9, 5); t.insert(9, 'true');
+    });
+    expect(sent).toBe(true);
+    expect(posted).toHaveLength(1);
+    Y.applyUpdate(doc, posted[0]);
+    expect(doc.getText('contents').toString()).toBe('enabled: true\nrest\n');
+  });
+
+  it('sends nothing when the edit changes nothing', async () => {
+    const { posted } = relayWith('same\n');
+    expect(await editRelayDoc('x', () => {})).toBe(false);
+    expect(posted).toHaveLength(0);
   });
 });

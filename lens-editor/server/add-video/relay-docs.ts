@@ -95,16 +95,14 @@ export async function upsertRelayDocReturningId(
 }
 
 /**
- * Read a document's current markdown back out of the relay.
- *
- * Documents are Y.Docs, so this mints a doc-scoped token, pulls the encoded
- * state and reads the `contents` Y.Text -- the same round-trip the editor
- * does over websocket.
+ * A doc-scoped session on a relay document and its current state: mints a
+ * full-access doc token with the server token and pulls the encoded state, the
+ * same round-trip the editor does over websocket.
  */
-export async function readRelayDocText(
+async function loadRelayDoc(
   docId: string,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<{ doc: Y.Doc; baseUrl: string; token: string }> {
   const { url, token } = getRelayConfig();
 
   const authResp = await fetchBytesWithTimeout(`${url}/doc/${docId}/auth`, {
@@ -136,9 +134,51 @@ export async function readRelayDocText(
 
   const doc = new Y.Doc();
   Y.applyUpdate(doc, new Uint8Array(docResp.bytes));
+  return { doc, ...auth };
+}
+
+/** The markdown of a document (its `contents` Y.Text). */
+export async function readRelayDocText(
+  docId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { doc } = await loadRelayDoc(docId, signal);
   const text = doc.getText("contents").toString();
   doc.destroy();
   return text;
+}
+
+/**
+ * Change a document in place: `edit` changes the loaded Y.Doc, and only what it
+ * changed is sent back (POST <doc>/update), so text and authorship elsewhere in
+ * the document are untouched, as when the editor writes. Returns whether it
+ * sent anything. A collaborator's write between the load and the send merges
+ * as any concurrent Yjs edit does.
+ */
+export async function editRelayDoc(
+  docId: string,
+  edit: (doc: Y.Doc) => void,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const { doc, baseUrl, token } = await loadRelayDoc(docId, signal);
+  try {
+    const before = Y.encodeStateVector(doc);
+    edit(doc);
+    const after = Y.encodeStateVector(doc);
+    if (after.length === before.length && after.every((b, i) => b === before[i])) return false;
+    const update = Y.encodeStateAsUpdate(doc, before);
+    const resp = await fetchBytesWithTimeout(`${baseUrl}/update`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+      body: update,
+      timeoutMs: RELAY_WRITE_TIMEOUT_MS,
+      signal,
+    });
+    if (!resp.ok) throw new Error(`Relay doc update failed: ${resp.status} ${bytesToText(resp.bytes)}`);
+    return true;
+  } finally {
+    doc.destroy();
+  }
 }
 
 /**

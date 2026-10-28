@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import { readView, setView, type View } from '../../lib/jev-check';
-import { writeText } from './checkFile';
+import { writeText } from '../../lib/ytext';
 
 const PAUSE_MS = 800;
 
