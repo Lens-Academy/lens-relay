@@ -8,8 +8,8 @@
  *
  *   - reading cards (`::card[[lens|title]]`, alone or inside a
  *     `:::require_x_optional_lenses{x=1}` list), which a person adds below
- *     the text that names the readings; a list whose readings a module
- *     lists becomes a choice group there instead (course-files.ts);
+ *     the text that names the readings. A card whose reading is in a
+ *     choice group of the module leaves the lens (course-files.ts);
  *   - which transcript a video belongs to.
  */
 

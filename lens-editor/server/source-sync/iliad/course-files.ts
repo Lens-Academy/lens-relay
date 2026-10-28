@@ -322,31 +322,31 @@ function checkRemovals(removes: string[], emptied: Worksheet[], commit: string, 
   );
 }
 
-/** A card list of the hand import (`:::require_x_optional_lenses{x=k}`): k of its readings. */
-interface ListChoice {
-  pick: number;
-  /** The files of its cards, full paths. */
-  readings: string[];
-  /** The lens it was in. */
+/** A card block of a lens, and where it is after the run. */
+interface PlacedCard {
+  /** The lens it was in, and the block as it was there. */
   lens: LensState;
   block: string;
-  /** The lens that holds it after the run, and the card there; none when its lens is retired with its heading. */
+  /** For a card list of the hand import (`:::require_x_optional_lenses{x=k}`): k, and the files of its cards (full paths). */
+  pick?: number;
+  readings: string[];
+  /** The lens that holds it after the run, and the card there; none for a list whose lens is retired with its heading. */
   holder?: { lens: LensAfter; card: Card };
 }
 
 /**
  * Give each card of the course to the lens that holds it after the run: the
  * one with the card's heading, else the one that continues the lens the card
- * was in. Returns the readings that a card points to, and the card lists of
- * the hand import, which arrangeChoices may turn into choice groups
- * (settleLists then takes them out of their lenses).
+ * was in. Returns the readings that a card points to, and the cards placed,
+ * which settleCards takes out of their lenses once arrangeChoices has made
+ * the groups.
  */
-function placeCards(state: CourseState, after: LensAfter[], moved: ReadonlyMap<string, string>, removes: string[]): { carded: Set<string>; lists: ListChoice[] } {
+function placeCards(state: CourseState, after: LensAfter[], moved: ReadonlyMap<string, string>, removes: string[]): { carded: Set<string>; placed: PlacedCard[] } {
   const holder = new Map<string, LensAfter>();
   for (const lens of after) for (const atom of lens.input.planned.atoms) holder.set(lensKey(lens.worksheet.slug, atom.anchor), lens);
   const continues = new Map(after.flatMap((lens) => (lens.old ? [[lens.old, lens] as const] : [])));
   const carded = new Set<string>();
-  const lists: ListChoice[] = [];
+  const placed: PlacedCard[] = [];
   for (const old of state.lenses) {
     for (const card of old.cards) {
       const lens = holder.get(lensKey(old.slug, card.anchor)) ?? continues.get(old);
@@ -355,17 +355,14 @@ function placeCards(state: CourseState, after: LensAfter[], moved: ReadonlyMap<s
         removes.push(...cardsDropped(card.block, old));
         continue;
       }
-      for (const reading of linkTargets(card.block, old.path)) carded.add(reading);
-      if (!lens) {
-        lists.push({ ...list!, lens: old, block: card.block });
-        continue;
-      }
-      const placed = { ...card, block: relink(card.block, old.path, lens.path, moved) };
-      lens.cards.push(placed);
-      if (list) lists.push({ ...list, lens: old, block: card.block, holder: { lens, card: placed } });
+      const readings = linkTargets(card.block, old.path);
+      for (const reading of readings) carded.add(reading);
+      const at = lens && { ...card, block: relink(card.block, old.path, lens.path, moved) };
+      if (lens && at) lens.cards.push(at);
+      placed.push({ lens: old, block: card.block, readings, ...(list ? { pick: list.pick } : {}), ...(lens && at ? { holder: { lens, card: at } } : {}) });
     }
   }
-  return { carded, lists };
+  return { carded, placed };
 }
 
 const cardsDropped = (block: string, lens: LensState): string[] =>
@@ -375,16 +372,26 @@ const cardsDropped = (block: string, lens: LensState): string[] =>
     .map((line) => `Card dropped: ${cardNames(line)} in the lens "${lens.title}" (${lens.path}). Why: the lens is retired, and the heading the card stood under is gone from the source.`);
 
 /**
- * A card list leaves its lens when a choice group in a module holds every
- * reading it names: the group asks what the list asked. Any other list stays
- * where placeCards put it, or, when its lens is retired, is dropped like any
- * card.
+ * Once the modules have their groups, a card whose reading a group holds
+ * leaves its lens: the module offers the reading, in the group (the form of
+ * the groups made by hand on 27 Oct 2026). A card list leaves only when a
+ * group holds every reading it names, as the group then asks what the list
+ * asked; a list that stays, of a lens retired with its heading, is dropped
+ * like any card.
  */
-function settleLists(lists: ListChoice[], grouped: ReadonlySet<string>, removes: string[]): void {
-  for (const list of lists) {
-    if (list.readings.every((path) => grouped.has(path))) {
-      if (list.holder) list.holder.lens.cards.splice(list.holder.lens.cards.indexOf(list.holder.card), 1);
-    } else if (!list.holder) removes.push(...cardsDropped(list.block, list.lens));
+function settleCards(placed: PlacedCard[], grouped: ReadonlySet<string>, removes: string[]): void {
+  for (const card of placed) {
+    if (card.pick !== undefined && !card.readings.every((path) => grouped.has(path))) {
+      if (!card.holder) removes.push(...cardsDropped(card.block, card.lens));
+      continue;
+    }
+    if (!card.holder) continue;
+    const { lens, card: at } = card.holder;
+    // The relinked block has the old block's lines, one for one.
+    const was = card.block.split("\n");
+    const kept = at.block.split("\n").filter((_, i) => card.pick === undefined && !(was[i].startsWith("::card") && grouped.has(linkTargets(was[i], card.lens.path)[0])));
+    if (kept.some((line) => line.startsWith("::card"))) at.block = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    else lens.cards.splice(lens.cards.indexOf(at), 1);
   }
 }
 
@@ -555,7 +562,7 @@ const REFUSED_IN_GROUP = /^(?:optional|hide)::.*(?:\n|$)/gm;
  *
  * The readings in a group at the end go into `grouped`.
  */
-function arrangeChoices(draft: Draft, lists: ListChoice[], reread: boolean, grouped: Set<string>, warnings: string[]): void {
+function arrangeChoices(draft: Draft, cards: PlacedCard[], reread: boolean, grouped: Set<string>, warnings: string[]): void {
   const level = (entry: Entry): number => (entry.block ? headingLevel(entry.block.raw) : 1);
   const items: (Entry | Group)[] = [];
   for (let i = 0; i < draft.entries.length; i++) {
@@ -585,7 +592,7 @@ function arrangeChoices(draft: Draft, lists: ListChoice[], reread: boolean, grou
     const markdown = lens.input.planned.atoms.flatMap((atom) => atom.parts.flatMap((part) => (part.kind === "text" ? [part.markdown] : []))).join("\n\n");
     // A card list becomes a group only whole: else it stays in the lens, and asks there what it asked.
     const proposals = [
-      ...lists.filter((list) => list.holder?.lens === lens).map(({ pick, readings }) => ({ pick, takes: (reading: Reading) => readings.includes(reading.path), all: new Set(readings).size })),
+      ...cards.flatMap(({ pick, readings, holder }) => (pick !== undefined && holder?.lens === lens ? [{ pick, takes: (reading: Reading) => readings.includes(reading.path), all: new Set(readings).size }] : [])),
       ...(changed ? choicesIn(markdown) : []).map(({ pick, options }) => {
         const spellings = new Set(options.flatMap(sameWork));
         return { pick, takes: (reading: Reading) => reading.url !== null && sameWork(reading.url).some((spelling) => spellings.has(spelling)), all: 0 };
@@ -672,7 +679,7 @@ export function planCourseFiles(state: CourseState, input: SyncInput, options: P
     }));
     return { from: module, path, title: module.title, head: module.head + preamble, entries };
   });
-  const { carded, lists } = placeCards(state, after, moved, removes);
+  const { carded, placed } = placeCards(state, after, moved, removes);
 
   // ---- Modules: retired lenses out. So is a lens whose section went to a
   // worksheet of another day: it is placed again below, with the new lenses.
@@ -713,9 +720,9 @@ export function planCourseFiles(state: CourseState, input: SyncInput, options: P
   const grouped = new Set<string>();
   for (const draft of drafts) {
     draft.entries = draft.entries.filter((entry, i, all) => !(entry.lostEntry && (i + 1 === all.length || all[i + 1].kind === "submodule")));
-    if (draft.entries.some((entry) => entry.lens)) arrangeChoices(draft, lists, state.rules !== SYNC_RULES, grouped, warnings);
+    if (draft.entries.some((entry) => entry.lens)) arrangeChoices(draft, placed, state.rules !== SYNC_RULES, grouped, warnings);
   }
-  settleLists(lists, grouped, removes);
+  settleCards(placed, grouped, removes);
 
   // A worksheet the schedule still lists, of which no lens is left: its page is empty, or all of it is hidden.
   const emptied = input.worksheets.flatMap(({ worksheet }) => {

@@ -603,6 +603,16 @@ describe("planCourseFiles", () => {
       expect(await secondRun(files)).toEqual([]);
     });
 
+    it("takes a card out of its lens when a group holds its reading, and keeps the other cards", async () => {
+      const carded = { ...OFFERED, [OVERVIEW]: OFFERED[OVERVIEW].replace("framework](https://example.org/pf).", "framework](https://example.org/pf).\n\n::card[[../Lenses/rsp|RSP]]\n\n::card[[../Lenses/cev|CEV]]\n\n::card[[../Lenses/pf|Preparedness]]") };
+      const { files, first } = await synced(carded);
+      expect(files.files.get(A2)).toBe(A2_GROUP);
+      expect(splitFrontmatter(files.files.get(OVERVIEW)!).body).toContain("framework](https://example.org/pf).\n\n::card[[../Lenses/cev|CEV]]\n");
+      expect(files.files.get(OVERVIEW)).not.toMatch(/card\[\[\.\.\/Lenses\/(rsp|pf)/);
+      expect(first.removes).toEqual([]);
+      expect(await secondRun(files)).toEqual([]);
+    });
+
     it("leaves a card list in its lens when no group can hold all of it", async () => {
       const inNoModule = listing(LIST.replace(/:::$/, "::card[[../Lenses/tiling|Tiling]]\n:::"));
       const afterAnotherDay = { ...LISTED, [A1]: MINI[A1].replace(/\n# Lens: CEV[\s\S]*$/, "\n"), [A2]: `${MINI[A2]}\n\n# Lens: CEV\nsource:: [[../Lenses/cev]]\n\n# Lens: Corrigibility\nsource:: [[../Lenses/corrigibility]]\n` };

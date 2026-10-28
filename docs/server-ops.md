@@ -549,7 +549,11 @@ The sync puts the readings after an Iliad lens into a group in three cases:
 - The lens's text says to pick ("Pick one", "one of these papers"), and a
   list of the readings follows.
 - A card list of the hand import (`:::require_x_optional_lenses{x=k}`) in
-  the lens asks for k of them. The card list then leaves the lens.
+  the lens asks for k of them.
+
+A card in a lens whose reading is now in a group leaves the lens, because
+the module offers the reading in the group. A card list leaves only when a
+group holds every reading it names.
 
 The sync reads the text for this only when the text is new or changed, or
 when `SYNC_RULES` changes. So a person who takes readings out of a group
