@@ -272,7 +272,8 @@ Only the production server writes synced files: the Vite dev server syncs only i
 a whole course is not one article, so it has its own steps, named in `iliad/types.ts`: read the published
 site at one source commit (`snapshot.ts`), turn each worksheet's built MDX into Lens markdown (`convert.ts`),
 group it into lenses (`plan.ts`), and compose, move and write the lens, module and course files
-(`course-files.ts`). Learner progress is keyed on a lens `id`, so a lens is pinned to the place it starts at
+(`course-files.ts`). Readings the source offers as a choice go into a `# Choose:` group: `choices.ts`
+reads the text, `arrangeChoices` in `course-files.ts` writes the groups. Learner progress is keyed on a lens `id`, so a lens is pinned to the place it starts at
 in the source (`upstream_key` in its frontmatter) and found again by its text when that place is renamed;
 nothing but the files records which lenses exist. Off until `ILIAD_SYNC_COURSE` names the course file; only
 the production server writes, and `npx tsx scripts/iliad-sync.ts` runs it against a directory. Operating it:

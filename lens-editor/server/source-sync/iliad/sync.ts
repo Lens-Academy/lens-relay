@@ -2,8 +2,9 @@
  * One run of the Iliad course sync, and the loop that repeats it.
  *
  * A run does nothing when the course file already records the commit
- * iliad-intensive.org was built from: that check costs one request to the
- * site and one file read, so it can repeat every few minutes. Otherwise it
+ * iliad-intensive.org was built from, and the version of the sync's rules
+ * (SYNC_RULES): that check costs one request to the site and one file read,
+ * so it can repeat every few minutes. Otherwise it
  * reads the whole source and the whole course, and writes what differs.
  *
  * A run that fails changes nothing it cannot finish later: the course file's
@@ -12,11 +13,11 @@
 
 import { repeatEvery, type SyncLog } from "../runner";
 import { convertWorksheet } from "./convert";
-import { applyFilePlan, planCourseFiles, type LensInput, type SyncInput } from "./course-files";
+import { applyFilePlan, planCourseFiles, SYNC_RULES, type LensInput, type SyncInput } from "./course-files";
 import { readCourseState, type CourseState } from "./course-state";
 import { toHostableImage } from "./figures";
 import { LAYOUT, type Layout } from "./layout";
-import { field, splitFrontmatter } from "./module-file";
+import { field, splitFrontmatter, withoutSuggestions } from "./module-file";
 import { adoptPin, planCourse } from "./plan";
 import { publishedCommit, readSnapshot } from "./snapshot";
 import { summarizeLens, type AskModel } from "./summaries";
@@ -65,7 +66,8 @@ export async function syncCourse({ files, layout = LAYOUT, source = LIVE, ask, d
   if (course === null) {
     throw new Error(`the course file "${layout.course}" does not exist. If it was moved, set ILIAD_SYNC_COURSE to its new path and restart the lens-editor container`);
   }
-  if (!force && field(splitFrontmatter(course).data, "upstream_commit") === commit) {
+  const recorded = splitFrontmatter(withoutSuggestions(course)).data;
+  if (!force && field(recorded, "upstream_commit") === commit && field(recorded, "sync_rules") === SYNC_RULES) {
     return { commit, changed: false, written: [], moved: [], retired: [], warnings: [] };
   }
 

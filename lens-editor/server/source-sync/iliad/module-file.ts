@@ -95,6 +95,33 @@ export function blockFile(block: Block, file: string): string | null {
   return link ? linkTarget(file, link) : null;
 }
 
+/** The number of `#` of a block's heading; 1 for a block that has none. */
+export const headingLevel = (raw: string): number => raw.match(/^(#{1,6})\s/)?.[1].length ?? 1;
+
+/** `raw` with its heading at `level`. */
+export const atLevel = (raw: string, level: number): string => raw.replace(/^#{1,6}(?=\s)/, "#".repeat(level));
+
+// Pending CriticMarkup suggestions, each with the text it has while nobody
+// has accepted it: an addition is not there yet, a deletion is, a
+// substitution has its old text. Comments and highlights are not changes and
+// stay. The forms and their metadata prefix (`{"author":..}@@`) are those of
+// lens-platform's publisher (content_processor criticmarkup-forms.ts); the
+// editor's parser (src/lib/criticmarkup-parser.ts) reads the same forms, but
+// the server does not ship the editor's code. An addition ends at its first
+// "++}", so its prefix may not end in "++".
+const SUGGESTIONS: [RegExp, string][] = [
+  [/\{\+\+(?:\{[^}]*(?<!\+\+)\}@@)?.*?\+\+\}/gs, ""],
+  [/\{--(?:\{[^}]*\}@@)?(.*?)--\}/gs, "$1"],
+  [/\{~~(?:\{[^}]*\}@@)?(.*?)~>(.*?)~~\}/gs, "$1"],
+];
+
+/**
+ * A file as Lens publishes it: every pending suggestion rejected. The sync
+ * reads its files this way, because that is what learners see; a file it
+ * rewrites loses its pending suggestions.
+ */
+export const withoutSuggestions = (text: string): string => SUGGESTIONS.reduce((out, [re, kept]) => out.replace(re, kept), text);
+
 /** `raw` ending in an empty line, so that a new block can follow it. */
 export function spaced(raw: string): string {
   return raw.endsWith("\n\n") ? raw : `${raw.replace(/\n+$/, "")}\n\n`;

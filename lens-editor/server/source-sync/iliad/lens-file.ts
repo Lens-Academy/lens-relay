@@ -8,13 +8,14 @@
  *
  *   - reading cards (`::card[[lens|title]]`, alone or inside a
  *     `:::require_x_optional_lenses{x=1}` list), which a person adds below
- *     the text that names the readings;
+ *     the text that names the readings; a list whose readings a module
+ *     lists becomes a choice group there instead (course-files.ts);
  *   - which transcript a video belongs to.
  */
 
 import { yamlQuote } from "../../yaml";
 import { SYNC_MARKER_KEY } from "../../../shared/source-sync";
-import { inert, linkTo, plainTitle, sourceLink } from "./layout";
+import { inert, linkTargets, linkTo, plainTitle, sourceLink } from "./layout";
 import { setFrontmatter, splitFrontmatter } from "./module-file";
 import type { Atom, AtomPart } from "./types";
 
@@ -64,7 +65,8 @@ const SEGMENT = /^####\s+([^:\n]+?)(?::.*)?\s*$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const HEADING = /^[\\!]?#{2,4}\s+(\S.*?)\s*$/;
 const CARD = /^::card\[\[/;
-const CARD_LIST = /^:{3,}\s*require_x_optional_lenses\b/;
+/** A card list of the hand import, `:::require_x_optional_lenses{x=k}`: k of its cards. */
+const CARD_LIST = /^:{3,}\s*require_x_optional_lenses\b(?:\{[^}]*?\bx\s*=\s*(\d+)[^}]*\})?/;
 const CONTAINER_OPEN = /^:{3,}\s*[\w-]/;
 const CONTAINER_CLOSE = /^:{3,}\s*$/;
 
@@ -290,6 +292,12 @@ function placeAtEnd(parts: Part[], card: Card): void {
   const last = [...parts].reverse().find((part): part is { text: string } => "text" in part);
   if (last) last.text = `${trimBlankLines(last.text)}\n\n${card.block}`;
   else parts.push({ text: card.block });
+}
+
+/** A card list as a choice: k, and the files of its cards (full paths). Null for cards that are not in a list. */
+export function cardChoice(block: string, lensPath: string): { pick: number; readings: string[] } | null {
+  const list = block.match(CARD_LIST);
+  return list ? { pick: Number(list[1] ?? 1), readings: linkTargets(block, lensPath) } : null;
 }
 
 /** The titles of the cards in a card block, for a person to recognise it: "CEV", "Corrigibility". */

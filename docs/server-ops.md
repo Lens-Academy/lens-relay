@@ -488,8 +488,9 @@ It is off until `ILIAD_SYNC_COURSE` names the course file.
 
 **What a run does.** Every `SOURCE_SYNC_INTERVAL_MINUTES` it asks the site
 which source commit it was built from and reads the course file. If the
-course file's `upstream_commit` is that commit, the run ends: one request and
-one file read. Otherwise it reads the 28 worksheets and every module and lens
+course file's `upstream_commit` is that commit and its `sync_rules` is the
+version of the sync's rules (`SYNC_RULES` in `course-files.ts`), the run
+ends: one request and one file read. Otherwise it reads the 28 worksheets and every module and lens
 of the course, and writes, moves and trashes what differs. The course file's
 `upstream_commit` is written last, so a run that stops early is done again by
 the next one.
@@ -519,8 +520,12 @@ set: git records a moved module as a delete and an add.
 files stay as the last run left them.
 
 **Run it again without a new Iliad commit** (after a fix to the converter or
-the layout is deployed): delete the `upstream_commit:` line from the course
-file's frontmatter in the editor. The next run does a full pass.
+the layout is deployed): a code change that must reach the course at once
+increases `SYNC_RULES` in `course-files.ts`. Then the first run after the
+deploy does a full pass. By hand: delete the `upstream_commit:` line from the
+course file's frontmatter in the editor. Before either, make sure that
+`ILIAD_SYNC_APPROVE_RETIREMENT` is empty: an approval is for one source
+commit, and the new pass at that commit would use it too.
 
 **What a person may change.** The text of a synced lens is overwritten at
 the next new Iliad commit, whichever page that commit changes; the editor's
@@ -529,11 +534,42 @@ next run puts it back or folds it into the lens before. These survive a run:
 frontmatter fields the sync does not write; reading cards, which stay after
 the same text (a card moves only when the text before it changes);
 entries in an Iliad module that are not Iliad lenses (readings, a lens of our
-own) and their order; and everything in the course file except
-`upstream_commit`. A reading entry is removed when the source of its day
-stops linking to it. Iliad moving a link to another address of the same work
-(arXiv abs or pdf, LessWrong or the Alignment Forum) does not remove it;
-moving it to a copy on another site does.
+own) and their order; choice groups in a module; and everything in the
+course file except `upstream_commit` and `sync_rules`. A reading entry is
+removed when the source of its day stops linking to it. Iliad moving a link
+to another address of the same work (arXiv abs or pdf, LessWrong or the
+Alignment Forum) does not remove it; moving it to a copy on another site
+does.
+
+**Choice groups.** Where Iliad lets a learner pick some of several readings,
+the module lists them under `# Choose: k`. The learner completes k of them.
+The sync puts the readings after an Iliad lens into a group in three cases:
+
+- The lens's text gives them as alternatives: "Read [A], or [B], or [C]".
+- The lens's text says to pick ("Pick one", "one of these papers"), and a
+  list of the readings follows.
+- A card list of the hand import (`:::require_x_optional_lenses{x=k}`) in
+  the lens asks for k of them. The card list then leaves the lens.
+
+The sync reads the text for this only when the text is new or changed, or
+when `SYNC_RULES` changes. So a person who takes readings out of a group
+keeps them out until Iliad changes that text. A group in a module stays,
+whoever made it. When Iliad stops linking a reading of a group, the reading
+leaves the group. A group with no more readings than it asks for is no
+choice: the sync takes its heading out, keeps its readings as plain entries,
+and says so in the log.
+
+The sync writes each group at the level of the lens entries: `# Choose:`,
+with `## Lens:` entries below it and no `optional::` on them. It writes the
+other readings after an Iliad lens at that lens's level too. The platform
+reads an entry one level below the lens entries as part of the entry above
+it, and does not show it. (`choices.ts`; `arrangeChoices` in
+`course-files.ts`.)
+
+**Pending suggestions.** The sync reads every file as Lens publishes it, with
+each pending suggestion rejected. A file that the run does not change keeps
+its suggestions. A file that the run rewrites loses them, and the log names
+the file.
 
 **Changes that lose something wait.** A change that retires a lens, moves
 where a lens starts, or removes a reading or a card is applied only once the

@@ -8,8 +8,9 @@
  *      time: two files with one id drop content), then written if its text
  *      changed. A new lens is written; until a module lists it, it is not
  *      part of the course.
- *   2. Modules: moved, then written with the new lenses in and the retired
- *      ones out.
+ *   2. Modules: moved, then written with the new lenses in, the retired
+ *      ones out, and the readings the source offers as a choice in choice
+ *      groups.
  *   3. Retired lenses go to the trash, now that no module lists them.
  *   4. The course file, with the source commit of this run. It is last, so
  *      a run that stops early leaves the old commit, and the next run does
@@ -37,10 +38,11 @@ import { arxivAbsUrl } from "../../add-article/adapters/arxiv";
 import { dedupUrlVariants } from "../../add-article/url-normalize";
 import { extractVideoInput } from "../../add-video/video-url";
 import { yamlQuote } from "../../yaml";
-import type { CourseState, LensState, ModuleBlock, ModuleState } from "./course-state";
+import { choicesIn, countOf } from "./choices";
+import type { CourseState, LensState, ModuleBlock, ModuleState, Reading } from "./course-state";
 import { LAYOUT, lensFileName, linkTargets, linkTo, plainTitle, relink, safeName, withFullLinks, type Layout } from "./layout";
-import { cardNames, composeLens, type Card } from "./lens-file";
-import { lensEntry, moduleLine, setFrontmatter, spaced, submoduleHeading } from "./module-file";
+import { cardChoice, cardNames, composeLens, type Card } from "./lens-file";
+import { atLevel, headingLevel, lensEntry, moduleLine, setFrontmatter, spaced, submoduleHeading } from "./module-file";
 import { lensKey, type CourseFiles, type PlannedLens, type SyncReport, type Worksheet } from "./types";
 
 export interface LensInput {
@@ -67,6 +69,14 @@ export interface SyncInput {
 export const MAX_RETIRED = 3;
 /** The setting that approves a larger removal: its value is the source commit the approval is for. */
 export const APPROVE_RETIREMENT_ENV = "ILIAD_SYNC_APPROVE_RETIREMENT";
+
+/**
+ * The version of the rules by which the sync lays out the course, recorded
+ * in the course file (`sync_rules`) beside the source commit. Increase it
+ * with a change that must reach the course before Iliad next publishes: a
+ * run plans again when either differs.
+ */
+export const SYNC_RULES = "2";
 
 export interface PlanOptions {
   layout?: Layout;
@@ -312,30 +322,70 @@ function checkRemovals(removes: string[], emptied: Worksheet[], commit: string, 
   );
 }
 
+/** A card list of the hand import (`:::require_x_optional_lenses{x=k}`): k of its readings. */
+interface ListChoice {
+  pick: number;
+  /** The files of its cards, full paths. */
+  readings: string[];
+  /** The lens it was in. */
+  lens: LensState;
+  block: string;
+  /** The lens that holds it after the run, and the card there; none when its lens is retired with its heading. */
+  holder?: { lens: LensAfter; card: Card };
+}
+
 /**
  * Give each card of the course to the lens that holds it after the run: the
  * one with the card's heading, else the one that continues the lens the card
- * was in. Returns the readings that a card points to.
+ * was in. Returns the readings that a card points to, and the card lists of
+ * the hand import, which arrangeChoices may turn into choice groups
+ * (settleLists then takes them out of their lenses).
  */
-function placeCards(state: CourseState, after: LensAfter[], moved: ReadonlyMap<string, string>, removes: string[]): Set<string> {
+function placeCards(state: CourseState, after: LensAfter[], moved: ReadonlyMap<string, string>, removes: string[]): { carded: Set<string>; lists: ListChoice[] } {
   const holder = new Map<string, LensAfter>();
   for (const lens of after) for (const atom of lens.input.planned.atoms) holder.set(lensKey(lens.worksheet.slug, atom.anchor), lens);
   const continues = new Map(after.flatMap((lens) => (lens.old ? [[lens.old, lens] as const] : [])));
   const carded = new Set<string>();
+  const lists: ListChoice[] = [];
   for (const old of state.lenses) {
     for (const card of old.cards) {
       const lens = holder.get(lensKey(old.slug, card.anchor)) ?? continues.get(old);
-      if (!lens) {
-        for (const line of card.block.split("\n").filter((l) => l.startsWith("::card"))) {
-          removes.push(`Card dropped: ${cardNames(line)} in the lens "${old.title}" (${old.path}). Why: the lens is retired, and the heading the card stood under is gone from the source.`);
-        }
+      const list = cardChoice(card.block, old.path);
+      if (!lens && !list) {
+        removes.push(...cardsDropped(card.block, old));
         continue;
       }
-      lens.cards.push({ ...card, block: relink(card.block, old.path, lens.path, moved) });
       for (const reading of linkTargets(card.block, old.path)) carded.add(reading);
+      if (!lens) {
+        lists.push({ ...list!, lens: old, block: card.block });
+        continue;
+      }
+      const placed = { ...card, block: relink(card.block, old.path, lens.path, moved) };
+      lens.cards.push(placed);
+      if (list) lists.push({ ...list, lens: old, block: card.block, holder: { lens, card: placed } });
     }
   }
-  return carded;
+  return { carded, lists };
+}
+
+const cardsDropped = (block: string, lens: LensState): string[] =>
+  block
+    .split("\n")
+    .filter((line) => line.startsWith("::card"))
+    .map((line) => `Card dropped: ${cardNames(line)} in the lens "${lens.title}" (${lens.path}). Why: the lens is retired, and the heading the card stood under is gone from the source.`);
+
+/**
+ * A card list leaves its lens when a choice group in a module holds every
+ * reading it names: the group asks what the list asked. Any other list stays
+ * where placeCards put it, or, when its lens is retired, is dropped like any
+ * card.
+ */
+function settleLists(lists: ListChoice[], grouped: ReadonlySet<string>, removes: string[]): void {
+  for (const list of lists) {
+    if (list.readings.every((path) => grouped.has(path))) {
+      if (list.holder) list.holder.lens.cards.splice(list.holder.lens.cards.indexOf(list.holder.card), 1);
+    } else if (!list.holder) removes.push(...cardsDropped(list.block, list.lens));
+  }
 }
 
 /**
@@ -467,6 +517,127 @@ function placeNewEntries(after: LensAfter[], drafts: Draft[], courseEntries: Ent
   });
 }
 
+/** The warning for a module or course file that the run rewrote over pending suggestions. */
+const suggestionsGone = (file: string): string =>
+  `Pending suggestions in ${file} are gone. The sync changed the file, and a write replaces all of it: it wrote the file as Lens showed it, with the sync's changes. ` +
+  `To do: if a suggestion is still wanted, make it again; the file's history in the Lens Editor has it.`;
+
+/** A choice group of a module: its `Choose:` heading (none for a group this run makes) and its lens entries. */
+interface Group {
+  kind: "group";
+  header?: Entry;
+  pick: number;
+  members: Entry[];
+}
+
+/** A group offers a choice when it has two readings or more, and more than it asks for. */
+const isChoice = (group: Group): boolean => group.members.length >= 2 && group.members.length > group.pick;
+
+/** The fields a lens in a group may not have: the group says how many of its lenses the learner completes. */
+const REFUSED_IN_GROUP = /^(?:optional|hide)::.*(?:\n|$)/gm;
+
+/**
+ * Choice groups in an Iliad module (choices.ts says what they are).
+ *
+ * Which readings: those after an Iliad lens go into a group when the hand
+ * import's card list in that lens asked for k of them, or when the lens's
+ * text offers them as a choice. The text is read for this only when it is
+ * new or changed, or when the sync's rules are (`reread`): a person who
+ * takes readings out of a group keeps them out until Iliad changes that
+ * text. A group the module has, a person's or an earlier run's, stays, less
+ * the readings the run took out; a group with no choice left (isChoice)
+ * goes, and its readings stay as plain entries.
+ *
+ * At which level: the platform reads an entry one level below the lens
+ * entries as part of the entry above it, and does not show it. So the
+ * readings after an Iliad lens are written at that lens's level, and so is
+ * a group's `Choose:` heading, with the group's readings one level down.
+ *
+ * The readings in a group at the end go into `grouped`.
+ */
+function arrangeChoices(draft: Draft, lists: ListChoice[], reread: boolean, grouped: Set<string>, warnings: string[]): void {
+  const level = (entry: Entry): number => (entry.block ? headingLevel(entry.block.raw) : 1);
+  const items: (Entry | Group)[] = [];
+  for (let i = 0; i < draft.entries.length; i++) {
+    const header = draft.entries[i];
+    if (header.block?.type !== "choose") {
+      items.push(header);
+      continue;
+    }
+    const members: Entry[] = [];
+    while (draft.entries[i + 1]?.kind === "lens" && level(draft.entries[i + 1]) > level(header)) members.push(draft.entries[++i]);
+    const pick = countOf(header.block.title.split(/\s/)[0]);
+    items.push({ kind: "group", header, pick: Number.isInteger(pick) && pick > 0 ? pick : 1, members });
+  }
+
+  // New groups, from the readings in no group after each Iliad lens.
+  for (let i = 0; i < items.length; i++) {
+    const owner = items[i];
+    if (owner.kind !== "lens" || !owner.lens) continue;
+    const lens = owner.lens;
+    const free: Entry[] = [];
+    for (const item of items.slice(i + 1)) {
+      if (item.kind === "group") continue;
+      if (item.kind !== "lens" || item.lens) break;
+      if (item.block?.reading) free.push(item);
+    }
+    const changed = reread || !lens.old || lens.old.fingerprint !== lens.input.fingerprint;
+    const markdown = lens.input.planned.atoms.flatMap((atom) => atom.parts.flatMap((part) => (part.kind === "text" ? [part.markdown] : []))).join("\n\n");
+    // A card list becomes a group only whole: else it stays in the lens, and asks there what it asked.
+    const proposals = [
+      ...lists.filter((list) => list.holder?.lens === lens).map(({ pick, readings }) => ({ pick, takes: (reading: Reading) => readings.includes(reading.path), all: new Set(readings).size })),
+      ...(changed ? choicesIn(markdown) : []).map(({ pick, options }) => {
+        const spellings = new Set(options.flatMap(sameWork));
+        return { pick, takes: (reading: Reading) => reading.url !== null && sameWork(reading.url).some((spelling) => spellings.has(spelling)), all: 0 };
+      }),
+    ];
+    for (const { pick, takes, all } of proposals) {
+      const group: Group = { kind: "group", pick, members: free.filter((entry) => takes(entry.block!.reading!)) };
+      if (!isChoice(group) || (all && group.members.length !== all)) continue;
+      items.splice(items.indexOf(group.members[0]), 1, group);
+      for (const member of group.members.slice(1)) items.splice(items.indexOf(member), 1);
+      for (const member of group.members) free.splice(free.indexOf(member), 1);
+    }
+  }
+
+  const entries: Entry[] = [];
+  /** Entries this pass rewrote: each but the file's last ends with an empty line, as a reading that moved may have ended the file. */
+  const respaced = new Set<Entry>();
+  const rewritten = (entry: Entry, to: number, fix = (text: string) => text): Entry => {
+    const out: Entry = { ...entry, text: (path) => fix(atLevel(entry.text(path), to)) };
+    respaced.add(out);
+    return out;
+  };
+  /** The level of the Iliad lens the entries now follow; undefined before one, and after a submodule heading or another block. */
+  let lensLevel: number | undefined;
+  for (const item of items) {
+    if (item.kind !== "group") {
+      if (item.kind === "lens" && item.lens) lensLevel = level(item);
+      else if (item.kind !== "lens") lensLevel = undefined;
+      entries.push(lensLevel !== undefined && !item.lens && level(item) > lensLevel ? rewritten(item, lensLevel) : item);
+      continue;
+    }
+    const at = lensLevel ?? (item.header ? level(item.header) : 1);
+    if (!isChoice(item)) {
+      const heading = item.header!.block!.raw.split("\n")[0];
+      warnings.push(
+        `The choice group "${heading}" in the module "${draft.title}" (${draft.path}) has ${item.members.length} reading(s) and asks for ${item.pick}, so it offers no choice. The sync took the heading out${item.header!.block!.raw.split("\n").slice(1).join("").trim() ? ", with the text under it," : ""} and kept its readings as plain entries.`,
+      );
+      entries.push(...item.members.map((member) => (level(member) === at ? member : rewritten(member, at))));
+      continue;
+    }
+    const heading = `${"#".repeat(at)} Choose: ${item.pick}${/\bof\s+\d+\s*$/i.test(item.header?.block!.title ?? "") ? ` of ${item.members.length}` : ""}`;
+    const header: Entry = item.header ? { ...item.header, text: (path) => item.header!.text(path).replace(/^.*/, heading) } : { kind: "other", text: () => `${heading}\n\n` };
+    respaced.add(header);
+    entries.push(header, ...item.members.map((member) => rewritten(member, at + 1, (text) => text.replace(REFUSED_IN_GROUP, ""))));
+    for (const member of item.members) if (member.block?.reading) grouped.add(member.block.reading.path);
+  }
+  entries.forEach((entry, i) => {
+    if (i + 1 < entries.length && (respaced.has(entry) || respaced.has(entries[i + 1]))) entry.gap = "blank";
+  });
+  draft.entries = entries;
+}
+
 /**
  * What a run must do to the files. Pure: nothing is read or written here.
  * `state` is the course as `readCourseState` found it with the same layout.
@@ -501,40 +672,7 @@ export function planCourseFiles(state: CourseState, input: SyncInput, options: P
     }));
     return { from: module, path, title: module.title, head: module.head + preamble, entries };
   });
-
-  // ---- Lens files.
-  const carded = placeCards(state, after, moved, removes);
-  for (const lens of after) {
-    const { worksheet, input: planned, old } = lens;
-    const compose = (commit: string) =>
-      composeLens({
-        path: lens.path,
-        was: old?.content ?? null,
-        id: lens.id,
-        title: lens.title,
-        tldr: planned.tldr ?? old?.tldr ?? null,
-        summaryForTutor: planned.summaryForTutor ?? old?.summaryForTutor ?? null,
-        authors: worksheet.contributors,
-        sourceUrl: worksheet.pageUrl,
-        key: planned.planned.key,
-        fingerprint: planned.fingerprint,
-        commit,
-        atoms: planned.planned.atoms,
-        cards: lens.cards,
-        transcripts: state.transcripts,
-      });
-    // Under the commit it has, is the file what it would be? Then it has not changed.
-    const asBefore = old?.upstreamCommit ? compose(old.upstreamCommit) : undefined;
-    const file = old && asBefore?.content === old.content ? asBefore : compose(input.commit);
-    const rewrite = file.content !== old?.content;
-    if (old && old.path !== lens.path) steps.push({ do: "move", from: old.path, to: lens.path, expects: old.content });
-    if (!rewrite) continue;
-    steps.push({ do: "write", path: lens.path, content: file.content, ...(old && old.path === lens.path ? { expects: old.content } : {}) });
-    warnings.push(...file.warnings);
-    if (old?.others.length) {
-      warnings.push(`The lens "${old.title}" (${lens.path}) had a segment the source does not have (${old.others.join(", ")}). The sync rewrote the lens without it: the lens is a copy of the source. Nothing to do; the file's history in the Lens Editor still has the segment.`);
-    }
-  }
+  const { carded, lists } = placeCards(state, after, moved, removes);
 
   // ---- Modules: retired lenses out. So is a lens whose section went to a
   // worksheet of another day: it is placed again below, with the new lenses.
@@ -553,14 +691,8 @@ export function planCourseFiles(state: CourseState, input: SyncInput, options: P
     });
   }
   removeUnlinkedReadings(drafts, state, after, dayOf, carded, removes);
-  // A worksheet the schedule still lists, of which no lens is left: its page is empty, or all of it is hidden.
-  const emptied = input.worksheets.flatMap(({ worksheet }) => {
-    const olds = state.lenses.filter((old) => old.slug === worksheet.slug);
-    return olds.length && olds.every((old) => !continued.has(old)) ? [worksheet] : [];
-  });
-  checkRemovals(removes, emptied, input.commit, options.approvedRetirement);
 
-  // ---- Modules: new lenses in.
+  // ---- Modules: new lenses in, then choice groups.
   const courseEntries = state.blocks.map((block): Entry => ({
     kind: block.module ? "module" : "other",
     text: (to) => relink(block.raw, state.path, to, moved),
@@ -577,27 +709,79 @@ export function planCourseFiles(state: CourseState, input: SyncInput, options: P
       );
     }
   }
-
-  // ---- Module files, then the trash, then the course file.
+  /** Every reading in a choice group after the run. */
+  const grouped = new Set<string>();
   for (const draft of drafts) {
     draft.entries = draft.entries.filter((entry, i, all) => !(entry.lostEntry && (i + 1 === all.length || all[i + 1].kind === "submodule")));
+    if (draft.entries.some((entry) => entry.lens)) arrangeChoices(draft, lists, state.rules !== SYNC_RULES, grouped, warnings);
+  }
+  settleLists(lists, grouped, removes);
+
+  // A worksheet the schedule still lists, of which no lens is left: its page is empty, or all of it is hidden.
+  const emptied = input.worksheets.flatMap(({ worksheet }) => {
+    const olds = state.lenses.filter((old) => old.slug === worksheet.slug);
+    return olds.length && olds.every((old) => !continued.has(old)) ? [worksheet] : [];
+  });
+  checkRemovals(removes, emptied, input.commit, options.approvedRetirement);
+
+  /**
+   * Move the file read as `was` to `path`, and write `content` there unless
+   * Lens shows that already. A write is checked against the file as read,
+   * pending suggestions and all, and warns with `gone` when it loses some.
+   */
+  const put = (path: string, content: string, was: { path: string; content: string; published: string } | undefined, gone: string): boolean => {
+    if (was && was.path !== path) steps.push({ do: "move", from: was.path, to: path, expects: was.content });
+    if (content === was?.published) return false;
+    steps.push({ do: "write", path, content, ...(was?.path === path ? { expects: was.content } : {}) });
+    if (was && was.published !== was.content) warnings.push(gone);
+    return true;
+  };
+
+  // ---- Lens files, then module files, then the trash, then the course file.
+  for (const lens of after) {
+    const { worksheet, input: planned, old } = lens;
+    const compose = (commit: string) =>
+      composeLens({
+        path: lens.path,
+        was: old?.published ?? null,
+        id: lens.id,
+        title: lens.title,
+        tldr: planned.tldr ?? old?.tldr ?? null,
+        summaryForTutor: planned.summaryForTutor ?? old?.summaryForTutor ?? null,
+        authors: worksheet.contributors,
+        sourceUrl: worksheet.pageUrl,
+        key: planned.planned.key,
+        fingerprint: planned.fingerprint,
+        commit,
+        atoms: planned.planned.atoms,
+        cards: lens.cards,
+        transcripts: state.transcripts,
+      });
+    // Under the commit it has, is the file what it would be? Then it has not changed.
+    const asBefore = old?.upstreamCommit ? compose(old.upstreamCommit) : undefined;
+    const file = old && asBefore?.content === old.published ? asBefore : compose(input.commit);
+    const gone = `The lens "${lens.title}" (${lens.path}) had pending suggestions. They are gone: the sync rewrote the lens from the source, because the lens is a copy of Iliad's page. Nothing to do; the file's history in the Lens Editor has them.`;
+    if (!put(lens.path, file.content, old, gone)) continue;
+    warnings.push(...file.warnings);
+    if (old?.others.length) {
+      warnings.push(`The lens "${old.title}" (${lens.path}) had a segment the source does not have (${old.others.join(", ")}). The sync rewrote the lens without it: the lens is a copy of the source. Nothing to do; the file's history in the Lens Editor still has the segment.`);
+    }
+  }
+
+  for (const draft of drafts) {
     if (draft.from && draft.from.blocks.some((block) => block.lens) && !draft.entries.some((entry) => entry.lens)) {
       warnings.push(
         `Every lens of the module "${draft.title}" (${draft.path}) is gone from the source. The course still lists the module, so learners see a module without Iliad's material. ` +
           `To do: delete the module's "# Module:" line from the course file "${state.path}", then delete the module file. The sync does neither by itself.`,
       );
     }
-    const content = render(draft.head, draft.entries, draft.path);
-    const rewrite = content !== draft.from?.content;
-    if (draft.from && draft.from.path !== draft.path) steps.push({ do: "move", from: draft.from.path, to: draft.path, expects: draft.from.content });
-    if (rewrite) steps.push({ do: "write", path: draft.path, content, ...(draft.from && draft.from.path === draft.path ? { expects: draft.from.content } : {}) });
+    put(draft.path, render(draft.head, draft.entries, draft.path), draft.from, suggestionsGone(`the module "${draft.title}" (${draft.path})`));
   }
 
   for (const old of retired) steps.push({ do: "trash", path: old.path, expects: old.content });
 
-  const head = setFrontmatter(state.head, { upstream_commit: `upstream_commit: '${input.commit}'` });
-  const course = render(head, courseEntries, state.path);
-  if (course !== state.content) steps.push({ do: "write", path: state.path, content: course, expects: state.content });
+  const head = setFrontmatter(state.head, { upstream_commit: `upstream_commit: '${input.commit}'`, sync_rules: `sync_rules: '${SYNC_RULES}'` });
+  put(state.path, render(head, courseEntries, state.path), state, suggestionsGone(`the course file (${state.path})`));
 
   return { commit: input.commit, changed: steps.length > 0, steps, removes, warnings };
 }
