@@ -219,9 +219,11 @@ describe('editRelayDoc', () => {
     expect(doc.getText('contents').toString()).toBe('enabled: true\nrest\n');
   });
 
-  it('sends nothing when the edit changes nothing', async () => {
+  it('sends nothing when the edit changes nothing, or says there is nothing to change', async () => {
     const { posted } = relayWith('same\n');
     expect(await editRelayDoc('x', () => {})).toBe(false);
+    // An edit that registers its author but then finds no change must not leave the entry.
+    expect(await editRelayDoc('x', () => false)).toBe(false);
     expect(posted).toHaveLength(0);
   });
 });

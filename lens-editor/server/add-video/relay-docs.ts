@@ -151,19 +151,20 @@ export async function readRelayDocText(
 /**
  * Change a document in place: `edit` changes the loaded Y.Doc, and only what it
  * changed is sent back (POST <doc>/update), so text and authorship elsewhere in
- * the document are untouched, as when the editor writes. Returns whether it
- * sent anything. A collaborator's write between the load and the send merges
- * as any concurrent Yjs edit does.
+ * the document are untouched, as when the editor writes. `edit` returns false
+ * when it decided there is nothing to change, and nothing is sent. Returns
+ * whether it sent anything. A collaborator's write between the load and the send
+ * merges as any concurrent Yjs edit does.
  */
 export async function editRelayDoc(
   docId: string,
-  edit: (doc: Y.Doc) => void,
+  edit: (doc: Y.Doc) => boolean | void,
   signal?: AbortSignal,
 ): Promise<boolean> {
   const { doc, baseUrl, token } = await loadRelayDoc(docId, signal);
   try {
     const before = Y.encodeStateVector(doc);
-    edit(doc);
+    if (edit(doc) === false) return false;
     const after = Y.encodeStateVector(doc);
     if (after.length === before.length && after.every((b, i) => b === before[i])) return false;
     const update = Y.encodeStateAsUpdate(doc, before);

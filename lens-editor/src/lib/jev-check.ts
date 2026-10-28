@@ -273,11 +273,17 @@ function wordsProblems(fm: Record<string, unknown>): string[] {
   try { shape = parsePresentation(fm.presentation); } catch { return []; }
   const c = fm.criteria as Record<string, unknown> | undefined;
   const texts: [string, unknown][] = [['the question', fm.question], ...(c && typeof c === 'object' ? [['the "true" criterion', c.true], ['the "false" criterion', c.false]] as [string, unknown][] : [])];
-  return texts.flatMap(([where, t]) => (typeof t !== 'string' ? [] : unitNames(t).flatMap((name) => {
+  const placeholders = [...texts, ['the fix', fm.fix] as [string, unknown]]
+    .filter(([, t]) => typeof t === 'string' && PLACEHOLDER.test(t.trim()))
+    .map(([where]) => `${where} is still the new check's placeholder "…": agents are shown it as the advice`);
+  return [...placeholders, ...texts.flatMap(([where, t]) => (typeof t !== 'string' ? [] : unitNames(t).flatMap((name) => {
     const why = refProblem(name, shape);
     return why ? [`\`${name}\` in ${where}: ${why}`] : [];
-  })));
+  })))];
 }
+// The words newCheckText starts a check with, before anyone writes them (Assay, #219: T2, T3
+// and T7 went live with fix "…", and agents saw "Don't talk like opus5. …").
+const PLACEHOLDER = /^(?:Does )?(?:`\w+` )?…\??$/;
 /** The subset of platformProblems(text) that is about the words, not about loading the check. */
 export function platformWordProblems(text: string): string[] {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
