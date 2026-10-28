@@ -122,7 +122,7 @@ Lauren said "I like it as an initial version" and gave these four points, quoted
 - "in the history list, show how many things changed in a given row, and a preview of what the first one was"
 - "lots of "unknown" in the history, seems slightly distracting"
 
-Status: not started. The first version is merged (5f720000) and was deployed to the production editor on 2026-10-28.
+Status: done. All four points were built in pull request 220 (merge commit 897aa972), which Lauren tried and approved. It was deployed to the production editor on 2026-10-28.
 
 ### How Strata reads each point (2026-10-28, before building)
 
@@ -146,4 +146,16 @@ Lauren may overrule any of these readings. Each one names what gets built.
 
 Assay's review asked for one more change. The server will fetch new versions in the
 background, so no reader waits for GitHub.
+
+## Parked idea: one history view instead of two
+
+Lauren noticed on 2026-10-28 that the editor now has two history views. The "Recent" page
+shows edits made by AI tools. The history panel shows every saved version. They answer the
+same question, which is what changed and who changed it, in different ways.
+
+Each view has data the other lacks. The Recent page reads the editor's own edit log, which
+records each edit with its exact time and author, but keeps only 7 days. The history panel
+reads the git copy, which keeps every version since January, but saves only about every 30
+seconds and often has no author. A merged view could show recent edits from the edit log and
+older ones from git. Nobody has started this. Lauren said history is not her main focus now.
 
