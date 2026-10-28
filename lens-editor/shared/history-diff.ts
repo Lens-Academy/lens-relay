@@ -1,4 +1,4 @@
-import { diffWordsWithSpace } from 'diff';
+import { diffLines, diffWordsWithSpace } from 'diff';
 
 /**
  * Word-level comparison of two versions of a file, shared by the history panel (what it marks)
@@ -18,11 +18,41 @@ const GAP_WORDS = 4;
 const PREVIEW_CHARS = 60;
 const words = (s: string) => s.split(/\s+/).filter(Boolean).length;
 
+// Diff cost grows with the number of edits, so both passes give up past a cap (jsdiff then
+// returns undefined) and mark that span by whole lines/blocks instead. Words are compared only
+// inside changed line blocks. Assay measured 1.4 s for one file's summaries on the request path
+// with whole-file word diffs (#220).
+const MAX_LINE_EDITS = 1000;
+const MAX_WORD_EDITS = 2000;
+const kindOf = (p: { added?: boolean; removed?: boolean }): DiffPart['kind'] => (p.added ? 'added' : p.removed ? 'removed' : 'same');
+const whole = (removed: string, added: string): DiffPart[] => [
+  ...(removed ? [{ kind: 'removed' as const, text: removed }] : []),
+  ...(added ? [{ kind: 'added' as const, text: added }] : []),
+];
+
+function lineThenWordDiff(base: string, text: string): DiffPart[] {
+  const lines = diffLines(base, text, { maxEditLength: MAX_LINE_EDITS });
+  if (!lines) return whole(base, text);
+  const out: DiffPart[] = [];
+  let removed = '', added = '';
+  const flush = () => {
+    const words = removed && added ? diffWordsWithSpace(removed, added, { maxEditLength: MAX_WORD_EDITS }) : undefined;
+    if (words) for (const p of words) out.push({ kind: kindOf(p), text: p.value });
+    else out.push(...whole(removed, added));
+    removed = added = '';
+  };
+  for (const p of lines) {
+    if (p.removed) removed += p.value;
+    else if (p.added) added += p.value;
+    else { flush(); out.push({ kind: 'same', text: p.value }); }
+  }
+  flush();
+  return out;
+}
+
 /** Word-level changes from `base` (null: the file's first version) to `text`. */
 export function diffVersions(base: string | null, text: string) {
-  const parts: DiffPart[] = base === null
-    ? [{ kind: 'added', text }]
-    : diffWordsWithSpace(base, text).map(p => ({ kind: p.added ? 'added' : p.removed ? 'removed' : 'same', text: p.value }));
+  const parts: DiffPart[] = base === null ? [{ kind: 'added', text }] : lineThenWordDiff(base, text);
   const count = (k: DiffPart['kind']) => parts.filter(p => p.kind === k).reduce((n, p) => n + words(p.text), 0);
   return { parts, added: count('added'), removed: count('removed') };
 }

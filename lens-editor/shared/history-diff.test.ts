@@ -16,6 +16,36 @@ describe('diffVersions', () => {
   });
 });
 
+describe('diffVersions on big files', () => {
+  it('diffs words only inside changed lines, so unchanged lines cost nothing', () => {
+    const lines = Array.from({ length: 4000 }, (_, i) => `line ${i} has some words in it`);
+    const base = lines.join('\n');
+    const text = lines.map((l, i) => (i === 2000 ? 'line 2000 has other words in it' : l)).join('\n');
+    const t0 = performance.now();
+    const d = diffVersions(base, text);
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(d.parts.filter(p => p.kind !== 'same').map(p => [p.kind, p.text])).toEqual([['removed', 'some'], ['added', 'other']]);
+    expect(d.parts.filter(p => p.kind !== 'removed').map(p => p.text).join('')).toBe(text);
+    expect(d.parts.filter(p => p.kind !== 'added').map(p => p.text).join('')).toBe(base);
+  });
+  it('marks a block whose words all changed as a whole, without a word-by-word search', () => {
+    const base = 'keep\n' + Array.from({ length: 300 }, (_, i) => `a${i} b${i} c${i} d${i}`).join('\n') + '\nkeep';
+    const text = 'keep\n' + Array.from({ length: 300 }, (_, i) => `w${i} x${i} y${i} z${i}`).join('\n') + '\nkeep';
+    const t0 = performance.now();
+    const d = diffVersions(base, text);
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(d.parts.map(p => p.kind)).toEqual(['same', 'removed', 'added', 'same']);
+  });
+  it('marks a huge rewritten block by whole lines instead of word by word', () => {
+    const base = Array.from({ length: 3000 }, (_, i) => `old ${i}`).join('\n');
+    const text = Array.from({ length: 3000 }, (_, i) => `new ${i}`).join('\n');
+    const t0 = performance.now();
+    const d = diffVersions(base, text);
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(d.parts.map(p => p.kind)).toEqual(['removed', 'added']);
+  });
+});
+
 describe('summarize', () => {
   it('counts places changed, merging edits fewer than four unchanged words apart', () => {
     expect(summarize('the cat sat', 'the black cat stood').changes).toBe(1);   // 1 word apart

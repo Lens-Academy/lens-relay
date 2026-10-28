@@ -35,10 +35,14 @@ async function withSummaries(source: HistorySource, path: string, sessions: Sess
   const todo = sessions.filter(s => !summaryCache.has(key(s)));
   if (todo.length) {
     const shas = [...new Set(todo.flatMap(s => (s.base ? [s.head, s.base] : [s.head])))];
+    // These shas come from this file's own log, so they are in the history (showMany skips that check).
     const texts = await source.showMany(shas.map(sha => ({ sha, path })));
     const text = new Map(shas.map((sha, i) => [sha, texts[i]]));
     if (summaryCache.size > SUMMARY_CACHE_MAX) summaryCache.clear();
     for (const s of todo) {
+      // Each summary is a few ms (worst measured 222 ms); yield between them so one file's first
+      // view never holds every other request for its whole sum.
+      await new Promise(r => setImmediate(r));
       const head = text.get(s.head) ?? null;
       summaryCache.set(key(s), head === null ? null : summarize(s.base ? text.get(s.base) ?? null : null, head));
     }

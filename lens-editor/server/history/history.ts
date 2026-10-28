@@ -110,6 +110,7 @@ export function createHistory({ repoDir, ref, remoteUrl, branch = 'staging', fet
     if (!fetching) return;
     haveCopy ||= await hasRef();
     if (!haveCopy) await fetching;
+    else fetching.catch(() => undefined);   // background: failures are logged inside, never raised
   }
 
   return {
