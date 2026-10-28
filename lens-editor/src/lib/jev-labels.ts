@@ -36,11 +36,12 @@ export function labelBody(check: string, u: Unit, verdict: Label['verdict'], by:
   };
 }
 
-/** The newest label of `check` on exactly this unit: same file, same level, same words. */
+/** The newest label of `check` on these words at this level, in any file: a judgement is about
+ * words wherever they are, as the platform matches them (lens-platform #1434). */
 export function labelFor(labels: Label[], check: string, u: Unit): Label | undefined {
   const w = words(u.words ?? u.text), level = u.unit ?? 'paragraph';
   let found: Label | undefined;
-  for (const l of labels) if (l.check_id === check && l.path === u.path && l.level === level && words(l.words) === w) found = l;
+  for (const l of labels) if (l.check_id === check && l.level === level && words(l.words) === w) found = l;
   return found;  // labels come oldest first
 }
 
