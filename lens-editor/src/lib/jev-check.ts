@@ -234,6 +234,12 @@ criteria:
 fix: "…"
 ---
 
+## How to pass (for editing agents)
+
+What the check flags, and concrete ways to fix a flagged line. Agents are pointed here from every flag (lens-platform runner.TIGHT), so write it for them.
+
+## Notes
+
 Why this check exists, and examples of what it should and should not catch.
 `;
 }

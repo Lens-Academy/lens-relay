@@ -170,6 +170,8 @@ describe('newCheckText', () => {
     expect(c.question).toContain('`paragraph`');
   });
   it('refuses ids and names that would make a bad file', () => {
+    // Agents are told to read this section of a check's file (lens-platform runner.TIGHT).
+    expect(newCheckText('T6', 'x')).toContain('\n## How to pass (for editing agents)\n');
     expect(() => newCheckText('6 x', 'n')).toThrow();
     expect(() => newCheckText('T6', 'a/b')).toThrow();
   });
