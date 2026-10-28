@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { writeText } from './checkFile';
+import { writeText } from './ytext';
 
 function written(before: string, after: string): string {
   const doc = new Y.Doc();

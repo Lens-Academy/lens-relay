@@ -7,9 +7,10 @@
 //   results (Results.tsx) compare the draft with the live check, or a run with the one before it.
 import { useMemo, useState } from 'react';
 import type * as Y from 'yjs';
-import { discardDraft, parseCheckFile, parsePercentiles, platformProblems, platformWordProblems, readView, saveDraft, setCheckFields, setDraftField, setDraftPresentation, type Band, type JevCheck } from '../../lib/jev-check';
+import { discardDraft, parseCheckFile, parsePercentiles, platformProblems, platformWordProblems, readView, saveDraft, setCheckFields, setDraftField, setDraftPresentation, type Band } from '../../lib/jev-check';
 import { COLORMAPS, type ColormapName } from '../../lib/colormaps';
-import { useLiveText, writeText } from './checkFile';
+import { useLiveText } from './checkFile';
+import { writeText } from '../../lib/ytext';
 import { chosen, poolOf, useCorpus } from './useCorpus';
 import { useView } from './useView';
 import { Field, Small } from './Field';
@@ -24,9 +25,10 @@ import { CountInput } from './CountInput';
 import { RunChips } from './RunChips';
 import { baseFor, type RunEntry } from './runs';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
-import type { CorpusMeta, Para, Run } from './types';
-import { DEFAULT_PRESENTATION, describe, isDefault, LEVELS, presentationBlock, type Level, type Presentation } from '../../lib/jev-presentation';
+import type { CorpusMeta, Para } from './types';
+import { DEFAULT_PRESENTATION, LEVELS, type Level, type Presentation } from '../../lib/jev-presentation';
 import { PresentationPicker } from './PresentationPicker';
+import { askCheck, type Batch } from '../../lib/jev-run';
 import { relayHeaders } from '../../lib/relay-api';
 
 // Percentile stops, the lower half; the upper half mirrors them (percentileRows).
@@ -47,33 +49,6 @@ const post = async (url: string, body: unknown) => {
   if (!res.ok) throw new Error(data.error);
   return data;
 };
-
-// jev answers the same call differently (up to 0.15 apart, 2026-10-26), so a run asks each
-// request this many times and shows the mean with the spread (Lauren, 2026-10-27).
-const SAMPLES = 3;
-
-/** One jev call: a shown text and every question asked about it. */
-export interface Batch { state: Record<string, unknown>; questions: { instructions: string; criteria?: { true: string; false: string } }[] }
-/** A unit asked about, the sampled row it came from, and its question: batches[batch].questions[index]. */
-interface Asked { id: string; row: string; path: string; line: number; text: string; batch: number; index: number; words?: string; answer_key?: string }
-
-async function ask(check: JevCheck, sample: Para[], pres: Presentation, commit?: string): Promise<Run & { first?: Batch }> {
-  const question = { instructions: check.question, ...(check.criteria ? { criteria: check.criteria } : {}) };
-  // Each paragraph alone needs no reading of the files, so it is built here (as the platform
-  // builds it: present.batches with no presentation); any other way, the platform builds it.
-  const { batches, asked, left_out: leftOut = [] }: { batches: Batch[]; asked: Asked[]; left_out?: string[] } = isDefault(pres)
-    ? { batches: sample.map((r) => ({ state: { paragraph: r.text }, questions: [question] })), asked: sample.map((r, i) => ({ ...r, row: r.id, batch: i, index: 0 })) }
-    : await post('/api/jev/requests', { question, presentation: presentationBlock(pres), commit, units: sample.map(({ id, path, line, text }) => ({ id, path, line, text })) });
-  const data = await post('/api/jev/ask', { model: check.model, samples: SAMPLES, requests: batches, ...(pres.long && pres.context !== pres.question ? { longContext: true } : {}) });
-  // ps answers the batches' questions in order.
-  const start: number[] = [];
-  batches.reduce((at, b, i) => { start[i] = at; return at + b.questions.length; }, 0);
-  const rows = new Map(sample.map((r) => [r.id, r]));
-  // Units jev refused as too long (null) are left out of the run, and counted.
-  const scored = asked.map((a) => ({ ...rows.get(a.row)!, id: a.id, line: a.line, text: a.text, words: a.words, answerKey: a.answer_key, p: data.ps[start[a.batch] + a.index] as number | null, samples: data.samples?.[start[a.batch] + a.index] as number[] | undefined }))
-    .filter((u): u is typeof u & { p: number } => u.p !== null);
-  return { check, samples: SAMPLES, unit: pres.question, pres: describe(pres), platform: isDefault(pres), cached: data.cached, tooLong: data.tooLong ?? 0, leftOut: leftOut.length, scored, first: batches[0] };
-}
 
 export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const text = useLiveText(ytext);
@@ -116,7 +91,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
         const sample = (poolOf(fresh.corpus, fresh.meta, viewCourses && courses, viewKinds && kinds) ?? []).slice(0, n);
         const commit = fresh.meta?.commit;
         // Each check as it would be asked: the draft and the live check may differ in presentation.
-        const [r, l] = await Promise.all([ask(c, sample, pres, commit), draft ? ask(live, sample, live.presentation, commit) : null]);
+        const [r, l] = await Promise.all([askCheck(post, c, sample, pres, commit), draft ? askCheck(post, live, sample, live.presentation, commit) : null]);
         return { r, l, key: sample.map((u) => u.id).join('\n') };
       };
       let got;

@@ -251,3 +251,15 @@ describe('a check file\'s presentation and view', () => {
     expect(setView(v, 'sample', 10)).toBe(v);
   });
 });
+
+describe('placeholders', () => {
+  it("names the new check's placeholder words as problems, and nothing else that has an ellipsis", () => {
+    const t = newCheckText('T9', 'x');
+    expect(platformWordProblems(t).filter((p) => p.includes('placeholder'))).toHaveLength(4);
+    const written = setCheckFields(t, [{ path: ['fix'], value: 'Say it plainly…' }, { path: ['question'], value: 'Does `paragraph` trail off…?' }]);
+    expect(platformWordProblems(written).filter((p) => p.includes('placeholder'))).toHaveLength(2);
+  });
+  it('so a check with them cannot be enabled: the panel disables Enable on any platformProblems', () => {
+    expect(platformProblems(newCheckText('T9', 'x')).some((p) => p.includes('placeholder'))).toBe(true);
+  });
+});
