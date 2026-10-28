@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { MINI, MINI_FLAT, MINI_FOLDERS, memoryFiles, sameAsNow, worksheet, WORKSHEETS } from "./__fixtures__/files/course";
-import { APPROVE_RETIREMENT_ENV, applyFilePlan, MAX_RETIRED, planCourseFiles, sameWork, type FilePlan, type LensInput, type SyncInput } from "./course-files";
+import { article, MINI, MINI_FLAT, MINI_FOLDERS, memoryFiles, reading, sameAsNow, worksheet, WORKSHEETS } from "./__fixtures__/files/course";
+import { APPROVE_RETIREMENT_ENV, applyFilePlan, MAX_RETIRED, planCourseFiles, sameWork, SYNC_RULES, type FilePlan, type LensInput, type SyncInput } from "./course-files";
 import { readCourseState } from "./course-state";
 import { linkTargets } from "./layout";
 import { splitFrontmatter } from "./module-file";
@@ -13,14 +13,15 @@ const modulePath = (name: string) => `Lens Edu/modules/${name}.md`;
 let ids = 0;
 const options = { layout: MINI_FLAT, newId: () => `new-${++ids}` };
 
-/** The mini course after its first run: every lens pinned, the course file at commit c1. */
+/** The mini course after its first run (`first`): every lens pinned, the course file at commit c1. */
 async function synced(initial: Record<string, string> = MINI) {
   const files = memoryFiles(initial);
   const first = await readCourseState(files, MINI_FLAT);
-  await applyFilePlan(files, planCourseFiles(first, sameAsNow(first, WORKSHEETS(), "c1"), options));
+  const plan = planCourseFiles(first, sameAsNow(first, WORKSHEETS(), "c1"), options);
+  await applyFilePlan(files, plan);
   files.calls.length = 0;
   const state = await readCourseState(files, MINI_FLAT);
-  return { files, state, input: sameAsNow(state, WORKSHEETS(), "c2") };
+  return { files, state, input: sameAsNow(state, WORKSHEETS(), "c2"), first: plan };
 }
 
 const written = (plan: FilePlan) => new Map(plan.steps.flatMap((step) => (step.do === "write" ? [[step.path, step.content] as const] : [])));
@@ -70,9 +71,9 @@ describe("readCourseState", () => {
     expect(targets.cards).toEqual([
       {
         anchor: "targets",
-        after: ["Read one of these: [CEV](https://example.org/cev), [Corrigibility](https://example.org/corrigibility)."],
+        after: ["Read these: [CEV](https://example.org/cev), [Corrigibility](https://example.org/corrigibility)."],
         nth: 0,
-        block: ":::require_x_optional_lenses{x=1}\n::card[[../Lenses/cev|CEV]]\n\n> Most important: section 3.\n\n::card[[../Lenses/corrigibility|Corrigibility]]\n:::",
+        block: "::card[[../Lenses/cev|CEV]]\n\n::card[[../Lenses/corrigibility|Corrigibility]]",
       },
     ]);
     expect(introduction).toMatchObject({ videos: ["SzVmiN8BvCc"], headingAnchors: ["introduction"] });
@@ -189,7 +190,7 @@ describe("planCourseFiles", () => {
       upstream_fingerprint: expect.stringMatching(/^chars:/),
       synced_from: { source: "iliad", url: "https://iliad-intensive.org/alignment/intro/#targets" },
     });
-    expect(files_.get(COURSE)).toBe(MINI[COURSE].replace('title: "Mini"\n', "title: \"Mini\"\nupstream_commit: 'c1'\n"));
+    expect(files_.get(COURSE)).toBe(MINI[COURSE].replace('title: "Mini"\n', `title: "Mini"\nupstream_commit: 'c1'\nsync_rules: '${SYNC_RULES}'\n`));
   });
 
   it("writes nothing when nothing changed", async () => {
@@ -370,7 +371,7 @@ describe("planCourseFiles", () => {
       lensesOf(input, "intro").pop();
       const plan = planCourseFiles(state, input, options);
       expect(plan.warnings).toEqual([]);
-      expect(written(plan).get(lensPath("Iliad A.1 - Intro"))).toContain("[Corrigibility](https://example.org/corrigibility).\n\n:::require_x_optional_lenses{x=1}\n::card[[../Lenses/cev|CEV]]");
+      expect(written(plan).get(lensPath("Iliad A.1 - Intro"))).toContain("[Corrigibility](https://example.org/corrigibility).\n\n::card[[../Lenses/cev|CEV]]");
     });
 
     // A source that loses worksheets for one deploy: the reviewer emptied four, and 46 lenses lost their ids for good.
@@ -558,6 +559,212 @@ describe("planCourseFiles", () => {
     });
   });
 
+  describe("choice groups", () => {
+    const A1 = modulePath("Iliad A.1 - Intro");
+    const A2 = modulePath("Iliad A.2 - Practice");
+    const TARGETS = lensPath("Iliad A.1.2 - Targets");
+    const OVERVIEW = lensPath("Iliad A.2.1 - Overview");
+    const A2_HEAD = `---\nid: 'm-a2'\nslug: iliad-a2\ntitle: "A.2 Practice"\n---\n\n# Lens: A.2.1 Overview\nsource:: [[../Lenses/Iliad A.2.1 - Overview]]\n\n`;
+    const A2_GROUP = `${A2_HEAD}# Choose: 1\n\n## Lens: Responsible scaling\nsource:: [[../Lenses/rsp]]\n\n## Lens: Preparedness\nsource:: [[../Lenses/pf]]\n`;
+    const offering = (sentence: string) => MINI[OVERVIEW].replace("Labs publish policies such as the [RSP](https://example.org/rsp).", sentence);
+    const readings = (...ids: string[]) => Object.fromEntries(ids.flatMap((id) => [[lensPath(id), reading(id)], [`Lens Edu/articles/${id}.md`, article(id)]]));
+    /** The A.2 overview offers the RSP or the preparedness framework, and the module lists both as readings. */
+    const OFFERED: Record<string, string> = {
+      ...MINI,
+      ...readings("pf", "extra"),
+      [OVERVIEW]: offering("Read the [RSP](https://example.org/rsp), or the [preparedness framework](https://example.org/pf)."),
+      [A2]: `${A2_HEAD}# Lens: Responsible scaling\nsource:: [[../Lenses/rsp]]\noptional:: true\n\n# Lens: Preparedness\nsource:: [[../Lenses/pf]]\noptional:: true\n`,
+    };
+    const A2_IS = (module: string) => ({ ...OFFERED, [A2]: module });
+    /** The hand import's card list: 1 of the two readings, asked inside the lens. */
+    const LIST = ":::require_x_optional_lenses{x=1}\n::card[[../Lenses/cev|CEV]]\n\n> Most important: section 3.\n\n::card[[../Lenses/corrigibility|Corrigibility]]\n:::";
+    const listing = (list: string) => ({ ...MINI, [TARGETS]: MINI[TARGETS].replace("::card[[../Lenses/cev|CEV]]\n\n::card[[../Lenses/corrigibility|Corrigibility]]", list) });
+    const LISTED = listing(LIST);
+    const secondRun = async (files: Awaited<ReturnType<typeof synced>>["files"]) => {
+      const state = await readCourseState(files, MINI_FLAT);
+      return planCourseFiles(state, sameAsNow(state, WORKSHEETS(), "c1"), options).steps;
+    };
+
+    it("groups the readings a sentence of the source offers as alternatives, at the level of the lens entries", async () => {
+      const { files, first } = await synced(OFFERED);
+      expect(files.files.get(A2)).toBe(A2_GROUP);
+      expect(first.removes).toEqual([]);
+      expect(await secondRun(files)).toEqual([]);
+    });
+
+    it("turns a card list of the hand import into a group, and takes the list out of the lens", async () => {
+      const { files, first } = await synced(LISTED);
+      expect(files.files.get(A1)).toContain("# Lens: A.1.2 Targets\nsource:: [[../Lenses/Iliad A.1.2 - Targets]]\n\n# Choose: 1\n\n## Lens: CEV\nsource:: [[../Lenses/cev]]\n\n## Lens: Corrigibility\nsource:: [[../Lenses/corrigibility]]\n\n");
+      const lens = splitFrontmatter(files.files.get(TARGETS)!).body;
+      expect(lens).not.toContain("::card");
+      expect(lens).toContain("[Corrigibility](https://example.org/corrigibility).\n\nThen discuss in groups.");
+      // The group asks what the list asked, so nothing is removed. (A note in a list of the hand import is a copy of the source's text.)
+      expect(first.removes).toEqual([]);
+      expect(await secondRun(files)).toEqual([]);
+    });
+
+    it("takes a card out of its lens when a group holds its reading, and keeps the other cards", async () => {
+      const carded = { ...OFFERED, [OVERVIEW]: OFFERED[OVERVIEW].replace("framework](https://example.org/pf).", "framework](https://example.org/pf).\n\n::card[[../Lenses/rsp|RSP]]\n\n::card[[../Lenses/cev|CEV]]\n\n::card[[../Lenses/pf|Preparedness]]") };
+      const { files, first } = await synced(carded);
+      expect(files.files.get(A2)).toBe(A2_GROUP);
+      expect(splitFrontmatter(files.files.get(OVERVIEW)!).body).toContain("framework](https://example.org/pf).\n\n::card[[../Lenses/cev|CEV]]\n");
+      expect(files.files.get(OVERVIEW)).not.toMatch(/card\[\[\.\.\/Lenses\/(rsp|pf)/);
+      expect(first.removes).toEqual([]);
+      expect(await secondRun(files)).toEqual([]);
+    });
+
+    it("leaves a card list in its lens when no group can hold all of it", async () => {
+      const inNoModule = listing(LIST.replace(/:::$/, "::card[[../Lenses/tiling|Tiling]]\n:::"));
+      const afterAnotherDay = { ...LISTED, [A1]: MINI[A1].replace(/\n# Lens: CEV[\s\S]*$/, "\n"), [A2]: `${MINI[A2]}\n\n# Lens: CEV\nsource:: [[../Lenses/cev]]\n\n# Lens: Corrigibility\nsource:: [[../Lenses/corrigibility]]\n` };
+      for (const initial of [inNoModule, afterAnotherDay]) {
+        const { files, first } = await synced(initial);
+        expect(files.files.get(TARGETS)).toContain(":::require_x_optional_lenses{x=1}");
+        expect(files.files.get(A1)).not.toContain("Choose");
+        expect(files.files.get(A2)).not.toContain("Choose");
+        expect(first.removes).toEqual([]);
+      }
+    });
+
+    it("counts a card list of a retired lens, which no group holds, as removed, like any card", async () => {
+      const files = memoryFiles(LISTED);
+      const state = await readCourseState(files, MINI_FLAT);
+      const input = sameAsNow(state, WORKSHEETS(), "c1");
+      lensesOf(input, "intro").splice(1, 1);
+      const plan = planCourseFiles(state, input, options);
+      expect(plan.removes).toEqual([expect.stringMatching(/^Lens retired: "A.1.2 Targets"/), expect.stringMatching(/^Card dropped: "CEV"/), expect.stringMatching(/^Card dropped: "Corrigibility"/)]);
+    });
+
+    it("writes a group one level too deep at the level of the lens entries, without optional::", async () => {
+      const { files } = await synced(A2_IS(`${A2_HEAD}## Choose: 1\n\n### Lens: Responsible scaling\nsource:: [[../Lenses/rsp]]\noptional:: true\n\n### Lens: Preparedness\nsource:: [[../Lenses/pf]]\n`));
+      expect(files.files.get(A2)).toBe(A2_GROUP);
+      expect(await secondRun(files)).toEqual([]);
+    });
+
+    it("writes a reading one level too deep at the lens's level, so that it is shown and the group after it stays its own", async () => {
+      const extra = "## Lens: Extra\nsource:: [[../Lenses/extra]]\n";
+      const { files } = await synced(A2_IS(OFFERED[A2].replace("# Lens: Responsible scaling", `${extra}\n# Lens: Responsible scaling`)));
+      expect(files.files.get(A2)).toBe(A2_GROUP.replace("# Choose: 1", `#${extra.slice(2)}\n# Choose: 1`));
+      // The same after a group one level too deep: raised with it, the reading would join the group.
+      const after = await synced(A2_IS(`${A2_HEAD}## Choose: 1\n\n### Lens: Responsible scaling\nsource:: [[../Lenses/rsp]]\n\n### Lens: Preparedness\nsource:: [[../Lenses/pf]]\n\n${extra}optional:: true\n`));
+      expect(after.files.files.get(A2)).toBe(`${A2_GROUP}\n#${extra.slice(2)}optional:: true\n`);
+      expect(await secondRun(after.files)).toEqual([]);
+    });
+
+    it("keeps a person's group as it is, its words and the text under its heading, though the text offers no choice", async () => {
+      const noChoice = offering("Read the [RSP](https://example.org/rsp) and the [preparedness framework](https://example.org/pf).");
+      const own = { ...A2_IS(A2_GROUP.replace("# Choose: 1\n", "# Choose: 1 of 2\n\nPick the one your group likes.\n")), [OVERVIEW]: noChoice };
+      expect((await synced(own)).files.files.get(A2)).toBe(own[A2]);
+      const deep = A2_IS(`${A2_HEAD}## Choose: two\n\nNote.\n\n### Lens: Responsible scaling\nsource:: [[../Lenses/rsp]]\n\n### Lens: Preparedness\nsource:: [[../Lenses/pf]]\n\n### Lens: Extra\nsource:: [[../Lenses/extra]]\n`);
+      expect((await synced(deep)).files.files.get(A2)).toBe(`${A2_HEAD}# Choose: 2\n\nNote.\n\n## Lens: Responsible scaling\nsource:: [[../Lenses/rsp]]\n\n## Lens: Preparedness\nsource:: [[../Lenses/pf]]\n\n## Lens: Extra\nsource:: [[../Lenses/extra]]\n`);
+    });
+
+    it("takes out a group heading with no readings under it, and says so", async () => {
+      const flat = { ...A2_IS(A2_GROUP.replace(/## Lens/g, "# Lens")), [OVERVIEW]: offering("Read the [RSP](https://example.org/rsp) and the [framework](https://example.org/pf).") };
+      const { files, first } = await synced(flat);
+      expect(files.files.get(A2)).toBe(flat[A2].replace("# Choose: 1\n\n", ""));
+      expect(first.warnings).toEqual([expect.stringContaining('The choice group "# Choose: 1" in the module "A.2 Practice" (Lens Edu/modules/Iliad A.2 - Practice.md) has 0 reading(s) and asks for 1')]);
+    });
+
+    it("does not group a reading offered beside works the course does not have, or as many readings as it asks for", async () => {
+      for (const sentence of ["Read the [RSP](https://example.org/rsp), or the [model spec](https://example.org/spec).", "Pick two: [RSP](https://example.org/rsp), [preparedness framework](https://example.org/pf)."]) {
+        const { files } = await synced({ ...OFFERED, [OVERVIEW]: offering(sentence) });
+        expect(files.files.get(A2)).toBe(OFFERED[A2]);
+      }
+    });
+
+    it("leaves readings a person took out of a group out, until Iliad changes the text that offers them, or the sync's rules change", async () => {
+      const { files } = await synced(OFFERED);
+      files.files.set(A2, OFFERED[A2]);
+      const state = await readCourseState(files, MINI_FLAT);
+      expect(written(planCourseFiles(state, sameAsNow(state, WORKSHEETS(), "c2"), options)).has(A2)).toBe(false);
+      const changed = sameAsNow(state, WORKSHEETS(), "c2");
+      lensesOf(changed, "practice")[0].fingerprint = "chars:changed";
+      expect(written(planCourseFiles(state, changed, options)).get(A2)).toBe(A2_GROUP);
+      expect(written(planCourseFiles({ ...state, rules: "1" }, sameAsNow(state, WORKSHEETS(), "c2"), options)).get(A2)).toBe(A2_GROUP);
+    });
+
+    describe("when Iliad stops linking a reading of a group", () => {
+      const dropping = async (initial: Record<string, string>, sentence: string, gone: string) => {
+        const { files } = await synced(initial);
+        const state = await readCourseState(files, MINI_FLAT);
+        const input = sameAsNow(state, WORKSHEETS(), "c2");
+        const overview = lensesOf(input, "practice")[0].planned.atoms[0];
+        overview.parts = [{ kind: "text", markdown: `\\## Overview\n\n${sentence}` }];
+        overview.links = overview.links.filter((link) => !link.url.includes(gone));
+        return planCourseFiles(state, input, options);
+      };
+
+      it("takes the reading out, and a group left with one reading becomes a plain entry", async () => {
+        const plan = await dropping(OFFERED, "Read the [RSP](https://example.org/rsp).", "pf");
+        expect(written(plan).get(A2)).toBe(`${A2_HEAD}# Lens: Responsible scaling\nsource:: [[../Lenses/rsp]]\n\n`);
+        expect(plan.removes).toEqual([expect.stringContaining('Reading taken out of the module "A.2 Practice": "Preparedness"')]);
+        expect(plan.warnings).toEqual([expect.stringContaining('The choice group "# Choose: 1" in the module "A.2 Practice"')]);
+      });
+
+      const THREE = (pick: number) => ({
+        ...OFFERED,
+        ...readings("sb53"),
+        [OVERVIEW]: offering("Read the [RSP](https://example.org/rsp), the [framework](https://example.org/pf), or [SB 53](https://example.org/sb53)."),
+        [A2]: `${A2_GROUP.replace("# Choose: 1", `# Choose: ${pick}`)}\n## Lens: SB 53\nsource:: [[../Lenses/sb53]]\n`,
+      });
+      it.each([
+        [1, "keeps the group while it has more readings than it asks for", ["A.2.1 Overview"]],
+        [2, "makes plain entries of a group that asks for all it has left", ["A.2.1 Overview", "Responsible scaling", "Preparedness"]],
+      ])("Choose: %i of three, one taken out: %s", async (pick, _, entries) => {
+        const plan = await dropping(THREE(pick), "Read the [RSP](https://example.org/rsp), or the [framework](https://example.org/pf).", "sb53");
+        expect(listed(written(plan).get(A2)!)).toEqual(entries);
+      });
+    });
+
+    it("puts a new lens after the group of the lens before it", async () => {
+      const { state } = await synced(OFFERED);
+      const input = sameAsNow(state, WORKSHEETS(), "c2");
+      lensesOf(input, "practice").push(fresh("practice", section("policies", "Policies", "Labs publish policies.")));
+      expect(written(planCourseFiles(state, input, options)).get(A2)).toBe(`${A2_GROUP}\n# Lens: A.2.2 Policies\nsource:: [[../Lenses/Iliad A.2.2 - Policies]]\n\n`);
+    });
+
+    it("writes a group one level below a submodule when the module's lenses are there", async () => {
+      const B = modulePath("Iliad B - Learning");
+      const B21 = lensPath("Iliad B.2.1 - Overview");
+      const nested = {
+        ...OFFERED,
+        ...readings("slt", "ntk"),
+        [B21]: MINI[B21].replace("Why does deep learning work?", "Read one of these: [SLT](https://example.org/slt), or [NTK](https://example.org/ntk)."),
+        [B]: MINI[B].replace(/^# Lens: (B.*)$/gm, "## Lens: $1").replace("source:: [[../Lenses/Iliad B.2.1 - Overview]]\n", "source:: [[../Lenses/Iliad B.2.1 - Overview]]\n\n## Lens: SLT\nsource:: [[../Lenses/slt]]\n\n## Lens: NTK\nsource:: [[../Lenses/ntk]]\n"),
+      };
+      const { files } = await synced(nested);
+      expect(files.files.get(B)).toContain("## Lens: B.2.1 Overview\nsource:: [[../Lenses/Iliad B.2.1 - Overview]]\n\n## Choose: 1\n\n### Lens: SLT\nsource:: [[../Lenses/slt]]\n\n### Lens: NTK\nsource:: [[../Lenses/ntk]]\n\n# Submodule: B.3");
+    });
+
+    describe("in files with pending suggestions", () => {
+      // A group half made in suggestions: its heading added, the headings of its readings not yet changed.
+      const pending = (module: string) => module.replace("# Lens: Responsible scaling", '{++{"author":"Someone"}@@## Choose: 1\n\n++}# Lens: Responsible scaling');
+
+      it("reads a module as Lens shows it, and leaves it, suggestions and all, when the run changes nothing there", async () => {
+        const noted = A2_IS(A2_GROUP.replace("## Lens: Preparedness", '{++{"author":"Someone"}@@## Lens: SB 53\nsource:: [[../Lenses/sb53]]\n\n++}## Lens: Preparedness'));
+        expect((await synced(noted)).files.files.get(A2)).toBe(noted[A2]);
+      });
+
+      it("says the suggestions are gone when it writes the module, and checks the module against what it read", async () => {
+        const files = memoryFiles(A2_IS(pending(OFFERED[A2])));
+        const state = await readCourseState(files, MINI_FLAT);
+        const plan = planCourseFiles(state, sameAsNow(state, WORKSHEETS(), "c1"), options);
+        expect(written(plan).get(A2)).toBe(A2_GROUP);
+        expect(plan.warnings).toEqual([expect.stringContaining('Pending suggestions in the module "A.2 Practice" (Lens Edu/modules/Iliad A.2 - Practice.md) are gone')]);
+        expect(plan.steps.find((step) => step.do === "write" && step.path === A2)?.expects).toBe(pending(OFFERED[A2]));
+      });
+
+      it("says so for a lens and for the course file", async () => {
+        const marked = { ...listing(`{--{"author":"Someone"}@@${LIST}--}`), [COURSE]: MINI[COURSE].replace("# Meeting: Unit A", '{++{"author":"Someone"}@@Bring a laptop.\n++}# Meeting: Unit A') };
+        const { first } = await synced(marked);
+        expect(first.warnings).toEqual([
+          expect.stringContaining('The lens "A.1.2 Targets" (Lens Edu/Lenses/Iliad A.1.2 - Targets.md) had pending suggestions.'),
+          expect.stringContaining(`Pending suggestions in the course file (${COURSE}) are gone`),
+        ]);
+      });
+    });
+  });
+
   describe("a worksheet new to the course", () => {
     const A = WORKSHEETS()[0].cluster;
     const B = WORKSHEETS()[2].cluster;
@@ -653,7 +860,7 @@ describe("planCourseFiles", () => {
       add(input, 0, worksheet("prerequisites", { id: "0", label: "Foundations", urlSlug: "foundations" }, "0", "Prerequisites"), "Linear algebra");
       const plan = planCourseFiles(state, input, options);
       expect(summary(plan)).toContain(`write ${modulePath("Iliad 0 - Foundations")}`);
-      expect(written(plan).get(COURSE)).toContain('title: "Mini"\nupstream_commit: \'c2\'\n---\n# Module: [[../modules/Iliad 0 - Foundations|Foundations]]\n\n# Module: [[../modules/Iliad A.1 - Intro|A.1 Intro]]\n');
+      expect(written(plan).get(COURSE)).toContain(`title: "Mini"\nupstream_commit: 'c2'\nsync_rules: '${SYNC_RULES}'\n---\n# Module: [[../modules/Iliad 0 - Foundations|Foundations]]\n\n# Module: [[../modules/Iliad A.1 - Intro|A.1 Intro]]\n`);
     });
   });
 
@@ -770,7 +977,7 @@ describe("planCourseFiles", () => {
       ]);
 
       const files_ = written(plan);
-      expect(files_.get(to("A.1 Intro", "Iliad A.1.2 - Targets"))).toContain("::card[[../../cev|CEV]]\n\n> Most important: section 3.\n\n::card[[../../corrigibility|Corrigibility]]");
+      expect(files_.get(to("A.1 Intro", "Iliad A.1.2 - Targets"))).toContain("::card[[../../cev|CEV]]\n\n::card[[../../corrigibility|Corrigibility]]");
       expect(files_.get(to("B.3 SLT", "Iliad B.3.1 - Introduction"))).toContain("source:: [[../../../video_transcripts/singular]]");
       expect(files_.get("Lens Edu/modules/Iliad/Iliad A.1 - Intro.md")).toContain(
         "# Lens: A.1.2 Targets\nsource:: [[../../Lenses/Iliad/A.1 Intro/Iliad A.1.2 - Targets]]\n\n# Lens: CEV\nsource:: [[../../Lenses/cev]]\noptional:: true\n",
@@ -791,7 +998,7 @@ describe("planCourseFiles", () => {
       const bare = { ...MINI, [lensPath("Iliad A.1.2 - Targets")]: MINI[lensPath("Iliad A.1.2 - Targets")].replace("::card[[../Lenses/cev|CEV]]", "::card[[cev|CEV]]") };
       const { state, input } = await synced(bare);
       const plan = planCourseFiles(state, input, { ...options, layout: MINI_FOLDERS });
-      expect(written(plan).get("Lens Edu/Lenses/Iliad/A.1 Intro/Iliad A.1.2 - Targets.md")).toContain("::card[[../../cev|CEV]]\n\n> Most important: section 3.\n\n::card[[../../corrigibility|Corrigibility]]");
+      expect(written(plan).get("Lens Edu/Lenses/Iliad/A.1 Intro/Iliad A.1.2 - Targets.md")).toContain("::card[[../../cev|CEV]]\n\n::card[[../../corrigibility|Corrigibility]]");
     });
 
     it("puts a new lens and a new module in their folders", async () => {
@@ -881,7 +1088,7 @@ describe("planCourseFiles", () => {
     expect(planCourseFiles(state, sameAsNow(state, WORKSHEETS(), "c1"), options)).toMatchObject({ changed: false, steps: [] });
     // The same source commit, and a file a person edited: the run writes it back, and says it changed something.
     const edited = structuredClone(state);
-    edited.lenses[0].content = edited.lenses[0].content.replace("Welcome to the day.", "Welcome, edited by hand.");
+    edited.lenses[0].published = edited.lenses[0].content = edited.lenses[0].content.replace("Welcome to the day.", "Welcome, edited by hand.");
     const again = planCourseFiles(edited, sameAsNow(state, WORKSHEETS(), "c1"), options);
     expect(again).toMatchObject({ changed: true, steps: [{ do: "write", path: lensPath("Iliad A.1 - Intro") }] });
   });

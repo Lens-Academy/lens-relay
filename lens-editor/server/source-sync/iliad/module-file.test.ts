@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockFile, parseBlocks, setFrontmatter, spaced, splitFrontmatter } from "./module-file";
+import { blockFile, parseBlocks, setFrontmatter, spaced, splitFrontmatter, withoutSuggestions } from "./module-file";
 
 const MODULE = `---
 id: 'm'
@@ -114,5 +114,22 @@ describe("parseBlocks", () => {
     expect(spaced("# Lens: x\nsource:: [[y]]")).toBe("# Lens: x\nsource:: [[y]]\n\n");
     expect(spaced("# Lens: x\n")).toBe("# Lens: x\n\n");
     expect(spaced("# Lens: x\n\n")).toBe("# Lens: x\n\n");
+  });
+});
+
+describe("withoutSuggestions", () => {
+  const meta = '{"author":"Someone","timestamp":1}@@';
+  it("rejects each pending change: an addition goes, a deletion stays, a substitution keeps its old text", () => {
+    expect(withoutSuggestions(`# Lens: A{++${meta}, more++}\n{--${meta}optional:: true\n--}source:: [[{~~${meta}a~>b~~}]]`)).toBe("# Lens: A\noptional:: true\nsource:: [[a]]");
+    expect(withoutSuggestions("{++plain++} and {--gone--}")).toBe(" and gone");
+  });
+
+  it("leaves comments and highlights, which change nothing", () => {
+    const text = `# Lens: A{>>${meta}why?<<}\n{==${meta}source==}:: [[a]]`;
+    expect(withoutSuggestions(text)).toBe(text);
+  });
+
+  it("ends an addition at its first ++}, whatever its prefix holds", () => {
+    expect(withoutSuggestions("{++{x}@@a++} kept ++}")).toBe(" kept ++}");
   });
 });
