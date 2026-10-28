@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 /**
@@ -91,21 +91,30 @@ export function createHistory({ repoDir, ref, remoteUrl, branch = 'staging', fet
 
   /** Fetch unless one ran within the interval. A failure is logged and the last copy served,
    *  unless there is no copy at all, which throws. */
+  let haveCopy = false;
+  /** Start a fetch unless one ran within the interval. Once a copy exists the fetch runs in the
+   *  background and readers are served the copy at once (Assay, #197); a failure is logged and
+   *  the copy kept. With no copy yet, readers wait, and a failed fetch is raised to them. */
   async function refresh(): Promise<void> {
     if (!remoteUrl) return;
     if (!fetching && Date.now() - fetchedAt >= fetchEveryMs) {
       fetchedAt = Date.now();
       fetching = git(['fetch', '--quiet', '--no-tags', remoteUrl, `+refs/heads/${branch}:${ref}`])
-        .then(() => undefined, async e => {
+        .then(() => { haveCopy = true; }, async e => {
           if (!(await hasRef())) throw e;
+          haveCopy = true;
           console.error('[history] fetch failed, serving the last copy:', e.message);
         })
         .finally(() => { fetching = null; });
     }
-    if (fetching) await fetching;
+    if (!fetching) return;
+    haveCopy ||= await hasRef();
+    if (!haveCopy) await fetching;
   }
 
   return {
+    /** For tests: resolves when the running fetch (if any) has landed. */
+    fetched: (): Promise<void> => (fetching ?? Promise.resolve()).catch(() => undefined),
     async log(path: string): Promise<Version[]> {
       await refresh();
       const { stdout } = await git(['log', `--format=${LOG_FORMAT}`, ref, '--', path]);
@@ -128,6 +137,16 @@ export function createHistory({ repoDir, ref, remoteUrl, branch = 'staging', fet
         .finally(() => { st.running = null; });
       return st.running;
     },
+    /** Many versions at once, in order, through one `git cat-file --batch`; null where the file
+     *  did not exist. The shas must come from this history's own log (no ancestor check here). */
+    async showMany(items: { sha: string; path: string }[]): Promise<(string | null)[]> {
+      if (!items.length) return [];
+      for (const { sha, path } of items) {
+        if (!/^[0-9a-f]{40}$/.test(sha) || path.includes('\n')) throw new Error(`bad version: ${sha} ${path}`);
+      }
+      const out = await catFileBatch(repoDir, items.map(i => `${i.sha}:${i.path}\n`).join(''));
+      return parseBatch(out, items.length);
+    },
     /** The file at `sha`, or null if the file did not exist then or `sha` is not in this history. */
     async show(sha: string, path: string): Promise<string | null> {
       if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`not a full sha: ${sha}`);
@@ -139,3 +158,40 @@ export function createHistory({ repoDir, ref, remoteUrl, branch = 'staging', fet
     },
   };
 }
+
+function catFileBatch(repoDir: string, input: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', ['cat-file', '--batch'], { cwd: repoDir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    const chunks: Buffer[] = [];
+    let err = '';
+    const timer = setTimeout(() => child.kill('SIGKILL'), 20_000);
+    child.stdout.on('data', (c: Buffer) => chunks.push(c));
+    child.stderr.on('data', (c: Buffer) => { err += c.toString(); });
+    child.on('error', reject);
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (code === 0) resolve(Buffer.concat(chunks));
+      else reject(new Error(`git cat-file --batch exited ${code}: ${err.trim()}`));
+    });
+    child.stdin.end(input);
+  });
+}
+
+/** `git cat-file --batch` output: per request, "<oid> <type> <size>\n<bytes>\n" or "<name> missing\n". */
+export function parseBatch(out: Buffer, n: number): (string | null)[] {
+  const res: (string | null)[] = [];
+  let at = 0;
+  for (let i = 0; i < n; i++) {
+    const eol = out.indexOf(0x0a, at);
+    if (eol < 0) throw new Error('git cat-file --batch: output ended early');
+    const header = out.subarray(at, eol).toString('utf8');
+    at = eol + 1;
+    const m = /^[0-9a-f]+ (\w+) (\d+)$/.exec(header);
+    if (!m) { res.push(null); continue; }   // "<name> missing" (or ambiguous)
+    const size = Number(m[2]);
+    res.push(m[1] === 'blob' ? out.subarray(at, at + size).toString('utf8') : null);
+    at += size + 1;
+  }
+  return res;
+}
+

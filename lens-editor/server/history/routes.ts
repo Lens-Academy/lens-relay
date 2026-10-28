@@ -1,11 +1,12 @@
 import { Hono, type Context } from 'hono';
 import { requireEduShareToken } from '../edit-share-auth.ts';
-import { createHistory, groupSessions, repoPath, type Version } from './history.ts';
+import { createHistory, groupSessions, repoPath, type Session, type Version } from './history.ts';
+import { summarize, type ChangeSummary } from '../../shared/history-diff.ts';
 
 /**
  * A Lens Edu file's history (src/components/HistoryPanel):
  *
- *   GET /api/history/log?path=Lens Edu/x.md          → {sessions: Session[], asOf: ms}, newest first
+ *   GET /api/history/log?path=Lens Edu/x.md          → {sessions: (Session & {summary})[], asOf: ms}, newest first
  *   GET /api/history/file?path=Lens Edu/x.md&sha=…   → {text}, or 404 if the file did not exist then
  *
  * Read from the promote feature's git copy of lens-edu-staging (HISTORY_REPO_DIR, default
@@ -21,6 +22,28 @@ export interface HistorySource {
   log(path: string): Promise<Version[]>;
   show(sha: string, path: string): Promise<string | null>;
   asOf(): Promise<number>;
+  showMany(items: { sha: string; path: string }[]): Promise<(string | null)[]>;
+}
+
+// What each session changed (its head against its base), by path and commit pair. Versions never
+// change, so entries never go stale; the map is only emptied if it grows past this size.
+const SUMMARY_CACHE_MAX = 20_000;
+const summaryCache = new Map<string, ChangeSummary | null>();
+
+async function withSummaries(source: HistorySource, path: string, sessions: Session[]) {
+  const key = (s: Session) => `${path}\0${s.base}\0${s.head}`;
+  const todo = sessions.filter(s => !summaryCache.has(key(s)));
+  if (todo.length) {
+    const shas = [...new Set(todo.flatMap(s => (s.base ? [s.head, s.base] : [s.head])))];
+    const texts = await source.showMany(shas.map(sha => ({ sha, path })));
+    const text = new Map(shas.map((sha, i) => [sha, texts[i]]));
+    if (summaryCache.size > SUMMARY_CACHE_MAX) summaryCache.clear();
+    for (const s of todo) {
+      const head = text.get(s.head) ?? null;
+      summaryCache.set(key(s), head === null ? null : summarize(s.base ? text.get(s.base) ?? null : null, head));
+    }
+  }
+  return sessions.map(s => ({ ...s, summary: summaryCache.get(key(s)) ?? null }));
 }
 
 export function historySourceFromEnv(env: NodeJS.ProcessEnv = process.env): HistorySource | null {
@@ -44,7 +67,8 @@ export function createHistoryRoutes(source: HistorySource | null = historySource
     const path = repoPath(c.req.query('path') ?? '');
     if (!path) return outside(c);
     const versions = await source!.log(path);
-    return c.json({ sessions: groupSessions(versions), asOf: await source!.asOf() });
+    const sessions = await withSummaries(source!, path, groupSessions(versions));
+    return c.json({ sessions, asOf: await source!.asOf() });
   });
 
   app.get('/file', async c => {

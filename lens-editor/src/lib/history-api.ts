@@ -1,5 +1,6 @@
-import { diffWordsWithSpace } from 'diff';
 import { relayHeaders } from './relay-api';
+import type { ChangeSummary } from '../../shared/history-diff';
+export { authorLabel, diffVersions, type DiffPart } from '../../shared/history-diff';
 
 /** Client of the editor server's /api/history (server/history/routes.ts). Lens Edu files only. */
 
@@ -9,8 +10,9 @@ export interface HistorySession {
   authors: string[]; unknown: boolean;
   versions: HistoryVersion[];
   head: string; base: string | null;
+  /** What the session changed against the one before it; null if the file was gone at its end. */
+  summary: ChangeSummary | null;
 }
-export type DiffPart = { kind: 'same' | 'added' | 'removed'; text: string };
 
 /** '/Lens Edu/x.md' → 'Lens Edu/x.md'; null for files history does not cover. */
 export function historyPath(filePath: string | undefined): string | null {
@@ -40,13 +42,17 @@ export async function fetchVersion(path: string, sha: string): Promise<string | 
   }
 }
 
-const words = (s: string) => s.split(/\s+/).filter(Boolean).length;
+/** The two versions a selection compares: a whole session (j null) against the session before
+ *  it, or one save inside it against the save before (the oldest save against the session base). */
+export function versionPair(s: HistorySession, j: number | null) {
+  if (j === null) return { head: s.head, base: s.base, ts: s.end, authors: s.authors };
+  const v = s.versions[j];
+  return { head: v.sha, base: s.versions[j + 1]?.sha ?? s.base, ts: v.ts, authors: v.author ? [v.author] : [] };
+}
 
-/** Word-level changes from `base` (null: the file's first version) to `text`. */
-export function diffVersions(base: string | null, text: string) {
-  const parts: DiffPart[] = base === null
-    ? [{ kind: 'added', text }]
-    : diffWordsWithSpace(base, text).map(p => ({ kind: p.added ? 'added' : p.removed ? 'removed' : 'same', text: p.value }));
-  const count = (k: DiffPart['kind']) => parts.filter(p => p.kind === k).reduce((n, p) => n + words(p.text), 0);
-  return { parts, added: count('added'), removed: count('removed') };
+/** A row's preview of its first change: "old → new", "+ added", "− removed" or "markup only". */
+export function previewText(first: { removed: string; added: string }): string {
+  if (!first.removed && !first.added) return 'markup only';   // only suggestion marks changed
+  if (first.removed && first.added) return `${first.removed} → ${first.added}`;
+  return first.added ? `+ ${first.added}` : `− ${first.removed}`;
 }
