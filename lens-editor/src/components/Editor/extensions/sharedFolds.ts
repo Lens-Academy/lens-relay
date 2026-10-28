@@ -48,7 +48,7 @@ interface FoldLines {
   blank: Uint8Array;
 }
 
-const HEADING_RE = /^(#{1,6})(?:[ \t]|$)/;
+const HEADING_RE = /^ {0,3}(#{1,6})(?:[ \t]|$)/;
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
 
 function indentWidth(text: string): number {
@@ -66,20 +66,24 @@ export function scanFoldLines(doc: EditorState['doc']): FoldLines {
   const indent = new Int32Array(doc.lines);
   const blank = new Uint8Array(doc.lines);
   let fence: string | null = null;
+  // Frontmatter only when closed, as frontmatter.ts has it
   let frontmatter = false;
+  if (doc.lines > 1 && doc.line(1).text.trim() === '---') {
+    for (const iter = doc.iterLines(2); !iter.next().done; ) {
+      if (iter.value.trim() === '---') {
+        frontmatter = true;
+        break;
+      }
+    }
+  }
   let n = 0;
   for (const iter = doc.iterLines(); !iter.next().done; ) {
     const text = iter.value;
     const i = n++;
     indent[i] = indentWidth(text);
     blank[i] = text.trim() ? 0 : 1;
-    if (i === 0 && text.trim() === '---') {
-      frontmatter = true;
-      kind[i] = -1;
-      continue;
-    }
     if (frontmatter) {
-      if (text.trim() === '---') frontmatter = false;
+      if (i > 0 && text.trim() === '---') frontmatter = false;
       kind[i] = -1;
       continue;
     }
@@ -225,8 +229,11 @@ class SharedFoldStore {
     if (!fresh.length) return;
     this.ydoc.transact(() => {
       for (const line of fresh) {
-        const anchor = Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(this.ytext, line.from, 0));
-        this.map.set(newId(), { anchor, at: Date.now() });
+        const rel = Y.createRelativePositionFromTypeIndex(this.ytext, line.from, 0);
+        // Keyed by the character it hangs from: folding a line again, or two
+        // people folding it at once, reuses one key instead of adding more
+        const id = rel.item ? `${rel.item.client}:${rel.item.clock}` : newId();
+        this.map.set(id, { anchor: Y.relativePositionToJSON(rel), at: Date.now() });
       }
     }, this);
   }
@@ -369,15 +376,19 @@ class SharedFoldsView {
         else if (e.is(foldEffect)) closed.push(tr.state.doc.lineAt(e.value.from).from);
       }
       if (tr.docChanged) {
-        const after = foldedRanges(tr.state);
+        // Folds the edit itself removed: gone after mapping, or (a delete)
+        // touched by it. Not those the moved cursor opened: those stay local
+        const mapped = foldedRanges(tr.startState).map(tr.changes);
+        const touched: [number, number][] = [];
+        if (tr.isUserEvent('delete')) tr.changes.iterChangedRanges((a, b) => touched.push([a, b]));
         foldedRanges(tr.startState).between(0, tr.startState.doc.length, (from, to) => {
           const mFrom = tr.changes.mapPos(from, 1);
           const mTo = tr.changes.mapPos(to, -1);
           let kept = false;
-          after.between(mFrom, mFrom, (a, b) => {
+          mapped.between(mFrom, mFrom, (a, b) => {
             if (a === mFrom && b === mTo) kept = true;
           });
-          if (kept) return;
+          if (kept && !touched.some(([a, b]) => a < to && b > from)) return;
           dropped = true;
           // Unless its line was deleted too (pruned below)
           const start = tr.changes.mapPos(tr.startState.doc.lineAt(from).from, 1, MapMode.TrackDel);

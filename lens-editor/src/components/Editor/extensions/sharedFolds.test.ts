@@ -58,6 +58,16 @@ describe('foldRangeOf', () => {
     expect(range(doc, 6)).toEqual([6, 7]);
   });
 
+  it('an unclosed --- on the first line is no frontmatter', () => {
+    expect(range('---\n# H\nbody', 2)).toEqual([2, 3]);
+  });
+
+  it('a heading may be indented up to three spaces', () => {
+    const doc = '# A\n   ### B\ntext\n# C';
+    expect(range(doc, 1)).toEqual([1, 3]);
+    expect(range(doc, 2)).toEqual([2, 3]);
+  });
+
   it('a heading with nothing under it does not fold', () => {
     expect(range('# A\n# B\nx', 1)).toBeNull();
   });
@@ -227,11 +237,11 @@ describe('sharedFolds', () => {
     let updates = 0;
     a.on('update', () => updates++);
     va.dispatch({ selection: { anchor: 0 } });
-    press(va, '[', { ctrlKey: true, altKey: true });
+    press(va, '[', { ctrlKey: true, altKey: true, keyCode: 219 } as KeyboardEventInit);
     await tick();
     expect(updates).toBe(1);
     expect(foldedLines(vb)).toEqual([1, 9]);
-    press(vb, ']', { ctrlKey: true, altKey: true });
+    press(vb, ']', { ctrlKey: true, altKey: true, keyCode: 221 } as KeyboardEventInit);
     await tick();
     expect(foldedLines(va)).toEqual([]);
     expect(a.getMap(FOLDS_MAP).size).toBe(0);
@@ -267,12 +277,31 @@ describe('sharedFolds', () => {
     expect(foldedLines(vb)).toEqual([]);
   });
 
+  it('an edit that puts the cursor inside a fold opens it only for that person', async () => {
+    const { a, b } = pair();
+    const va = editor(a);
+    const vb = editor(b);
+    clickArrow(va, 9);
+    await tick();
+    const hidden = va.state.doc.line(14);
+    va.dispatch({
+      changes: { from: hidden.from, to: hidden.from + 5, insert: 'AFTER' },
+      selection: { anchor: hidden.from + 2 },
+      userEvent: 'input.replace',
+    });
+    await tick();
+    expect(foldedLines(va)).toEqual([]);
+    expect(foldedLines(vb)).toEqual([9]);
+    expect(a.getMap(FOLDS_MAP).size).toBe(1);
+  });
+
   it('the keyboard folds the block the cursor is in, for everyone', async () => {
     const { a, b } = pair();
     const va = editor(a);
     const vb = editor(b);
     va.dispatch({ selection: { anchor: va.state.doc.line(2).from } });
-    press(va, '[', { ctrlKey: true, shiftKey: true });
+    // What a browser sends for Ctrl-Shift-[: the shifted key, and its keyCode
+    press(va, '{', { ctrlKey: true, shiftKey: true, keyCode: 219 } as KeyboardEventInit);
     await tick();
     expect(foldedLines(vb)).toEqual([1]);
   });
@@ -300,7 +329,8 @@ describe('sharedFolds', () => {
     clickArrow(vb, 9);
     reconnect();
     await tick();
-    expect(a.getMap(FOLDS_MAP).size).toBe(2);
+    // One key per folded line
+    expect(a.getMap(FOLDS_MAP).size).toBe(1);
     expect(foldedLines(va)).toEqual([9]);
     clickArrow(vb, 9);
     await tick();

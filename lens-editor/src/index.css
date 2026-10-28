@@ -1176,6 +1176,10 @@
 @media (hover: none) {
   .cm-fold-toggle { opacity: 0.5; }
 }
+/* Phones: no margin beside the text, so the arrows go in its padding */
+@media not all and (min-width: 500px) {
+  .cm-fold-toggle { right: 0; width: 16px; }
+}
 /* What a fold hides, after its line */
 .cm-content .cm-foldPlaceholder {
   margin-left: 6px;
