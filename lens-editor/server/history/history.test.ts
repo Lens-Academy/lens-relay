@@ -17,6 +17,9 @@ describe('parseLog', () => {
       { sha: 'c3', author: null, ts: 800_000 },
     ]);
   });
+  it('treats the older name of the sync bot, Relay Sync (20-26 Jan 2026), as unknown too', () => {
+    expect(parseLog(`a1${U}Relay Sync${U}1000${R}`)).toEqual([{ sha: 'a1', author: null, ts: 1_000_000 }]);
+  });
   it('returns nothing for empty output', () => {
     expect(parseLog('')).toEqual([]);
   });

@@ -16,8 +16,8 @@ export interface Session {
   head: string; base: string | null;
 }
 
-// Commits by the sync bot (or the January import) carry no real author.
-const UNKNOWN = new Set(['Relay Git Sync', 'root']);
+// Commits by the sync bot (named Relay Sync for 20-26 Jan 2026), or the January import, carry no real author.
+const UNKNOWN = new Set(['Relay Git Sync', 'Relay Sync', 'root']);
 const R = '\x1e', U = '\x1f';
 export const LOG_FORMAT = `%H${U}%an${U}%at${R}`;
 const GAP_MS = 30 * 60_000;
