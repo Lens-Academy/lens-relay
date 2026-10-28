@@ -18,8 +18,9 @@ import { diffDecorations } from '../../lib/history-doc';
  */
 
 const historyTheme = EditorView.theme({
-  '.lens-history-added': { backgroundColor: 'rgb(220 252 231)', color: 'rgb(20 83 45)' },
-  '.lens-history-removed': { backgroundColor: 'rgb(254 226 226)', color: 'rgb(153 27 27)', textDecoration: 'line-through' },
+  // The editor's suggestion colours (index.css .cm-addition / .cm-deletion), which follow the theme.
+  '.lens-history-added': { backgroundColor: 'rgba(34, 197, 94, 0.2)', color: 'var(--lens-addition-text)' },
+  '.lens-history-removed': { backgroundColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--lens-deletion-text)', textDecoration: 'line-through' },
   '&.cm-editor': { height: '100%' },
 });
 

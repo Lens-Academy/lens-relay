@@ -20,12 +20,12 @@ const time = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 
 const who = (authors: string[]) => authors.map(authorLabel).join(', ');
 
 function Preview({ s }: { s: HistorySession }) {
-  if (!s.summary) return <div className="text-xs text-gray-500">File deleted or moved</div>;
-  if (!s.summary.first) return <div className="text-xs text-gray-400">Spacing only</div>;
+  if (!s.summary) return <div className="text-xs text-[var(--lens-text-secondary)]">File deleted or moved</div>;
+  if (!s.summary.first) return <div className="text-xs text-[var(--lens-text-tertiary)]">Spacing only</div>;
   const n = s.summary.changes;
   return (
-    <div className="text-xs text-gray-500 truncate" title={previewText(s.summary.first)}>
-      <span className="text-gray-600">{n} {n === 1 ? 'change' : 'changes'}</span> · {previewText(s.summary.first)}
+    <div className="text-xs text-[var(--lens-text-secondary)] truncate" title={previewText(s.summary.first)}>
+      <span className="text-[var(--lens-text-secondary)]">{n} {n === 1 ? 'change' : 'changes'}</span> · {previewText(s.summary.first)}
     </div>
   );
 }
@@ -103,19 +103,19 @@ export function HistoryPanel({ path, onClose }: { path: string; onClose: () => v
   });
 
   return (
-    <div className="absolute inset-0 z-30 flex bg-white" role="dialog" aria-label="File history">
-      <nav className="w-80 shrink-0 overflow-y-auto border-r border-gray-200 bg-gray-50" aria-label="Versions">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-          <h2 className="text-sm font-semibold text-gray-800">History</h2>
-          <button onClick={onClose} className="text-sm text-gray-500 hover:text-gray-800" title="Close (Esc)">Close</button>
+    <div className="absolute inset-0 z-30 flex bg-[var(--lens-page-bg)]" role="dialog" aria-label="File history">
+      <nav className="w-80 shrink-0 overflow-y-auto border-r border-[var(--lens-border)] bg-[var(--lens-fm-bg)]" aria-label="Versions">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--lens-border)]">
+          <h2 className="text-sm font-semibold text-[var(--lens-text)]">History</h2>
+          <button onClick={onClose} className="text-sm text-[var(--lens-text-secondary)] hover:text-[var(--lens-text)]" title="Close (Esc)">Close</button>
         </div>
         {asOf !== undefined && (
-          <p className="px-4 pt-2 text-xs text-gray-400" title="Versions come from the git copy of Lens Edu, saved about every 30 seconds">
+          <p className="px-4 pt-2 text-xs text-[var(--lens-text-tertiary)]" title="Versions come from the git copy of Lens Edu, saved about every 30 seconds">
             Saved versions up to {day(asOf)}, {time(asOf)}
           </p>
         )}
-        {!sessions && !error && <p className="p-4 text-sm text-gray-500">Loading…</p>}
-        {sessions?.length === 0 && <p className="p-4 text-sm text-gray-500">No saved versions of this file yet.</p>}
+        {!sessions && !error && <p className="p-4 text-sm text-[var(--lens-text-secondary)]">Loading…</p>}
+        {sessions?.length === 0 && <p className="p-4 text-sm text-[var(--lens-text-secondary)]">No saved versions of this file yet.</p>}
         {sessions?.map((s, i) => {
           const many = s.versions.length > 1;
           const expanded = many && open.has(s.head);
@@ -123,15 +123,15 @@ export function HistoryPanel({ path, onClose }: { path: string; onClose: () => v
           return (
             <div key={s.head}>
               {(i === 0 || day(s.end) !== day(sessions[i - 1].end)) && (
-                <div className="px-4 pt-3 pb-1 text-xs font-medium uppercase tracking-wide text-gray-400">{day(s.end)}</div>
+                <div className="px-4 pt-3 pb-1 text-xs font-medium uppercase tracking-wide text-[var(--lens-text-tertiary)]">{day(s.end)}</div>
               )}
-              <div className={`flex items-start ${active ? 'bg-blue-50' : 'hover:bg-gray-100'}`}>
+              <div className={`flex items-start ${active ? 'bg-[var(--lens-bg-blue)]' : 'hover:bg-[var(--lens-fm-hover)]'}`}>
                 <button
                   onClick={() => many && toggle(s.head)}
                   aria-label={expanded ? 'Hide separate saves' : 'Show separate saves'}
                   aria-expanded={many ? expanded : undefined}
                   disabled={!many}
-                  className="w-6 shrink-0 pt-2.5 pl-2 text-gray-400 hover:text-gray-700 disabled:invisible"
+                  className="w-6 shrink-0 pt-2.5 pl-2 text-[var(--lens-text-tertiary)] hover:text-[var(--lens-text)] disabled:invisible"
                 >
                   <svg viewBox="0 0 20 20" fill="currentColor" className={`w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}`} aria-hidden="true">
                     <path d="M7 4l7 6-7 6z" />
@@ -140,11 +140,11 @@ export function HistoryPanel({ path, onClose }: { path: string; onClose: () => v
                 <button
                   onClick={() => choose(i, null)}
                   aria-current={active}
-                  className={`min-w-0 flex-1 py-2 pr-4 text-left text-sm ${active ? 'text-blue-900' : 'text-gray-700'}`}
+                  className={`min-w-0 flex-1 py-2 pr-4 text-left text-sm ${active ? 'text-[var(--lens-text)]' : 'text-[var(--lens-text)]'}`}
                 >
                   <div>{time(s.start) === time(s.end) ? time(s.end) : `${time(s.start)} – ${time(s.end)}`}</div>
                   <Preview s={s} />
-                  {who(s.authors) && <div className="text-xs text-gray-500 truncate" title={who(s.authors)}>{who(s.authors)}</div>}
+                  {who(s.authors) && <div className="text-xs text-[var(--lens-text-secondary)] truncate" title={who(s.authors)}>{who(s.authors)}</div>}
                 </button>
               </div>
               {expanded && s.versions.map((v, j) => {
@@ -154,10 +154,10 @@ export function HistoryPanel({ path, onClose }: { path: string; onClose: () => v
                     key={v.sha}
                     onClick={() => choose(i, j)}
                     aria-current={on}
-                    className={`block w-full py-1 pl-10 pr-4 text-left text-xs ${on ? 'bg-blue-50 text-blue-900' : 'text-gray-600 hover:bg-gray-100'}`}
+                    className={`block w-full py-1 pl-10 pr-4 text-left text-xs ${on ? 'bg-[var(--lens-bg-blue)] text-[var(--lens-text)]' : 'text-[var(--lens-text-secondary)] hover:bg-[var(--lens-fm-hover)]'}`}
                   >
                     {new Date(v.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    {v.author && <span className="text-gray-500"> · {authorLabel(v.author)}</span>}
+                    {v.author && <span className="text-[var(--lens-text-secondary)]"> · {authorLabel(v.author)}</span>}
                   </button>
                 );
               })}
@@ -166,26 +166,26 @@ export function HistoryPanel({ path, onClose }: { path: string; onClose: () => v
         })}
       </nav>
       <section className="flex-1 min-w-0 flex flex-col">
-        {error && <p className="m-4 rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+        {error && <p className="m-4 rounded bg-[var(--lens-bg-red)] p-3 text-sm text-[var(--lens-deletion-text)]">{error}</p>}
         {pair && (
-          <header className="flex flex-wrap items-center gap-x-4 gap-y-1 px-6 py-3 border-b border-gray-200 text-sm">
-            <span className="font-medium text-gray-800">{day(pair.ts)}, {time(pair.ts)}</span>
-            {who(pair.authors) && <span className="text-gray-500">{who(pair.authors)}</span>}
-            {diff && <span className="text-gray-500"><span className="text-green-700">+{diff.added}</span> <span className="text-red-700">−{diff.removed}</span> words</span>}
-            <label className="ml-auto flex items-center gap-1 text-gray-600">
+          <header className="flex flex-wrap items-center gap-x-4 gap-y-1 px-6 py-3 border-b border-[var(--lens-border)] text-sm">
+            <span className="font-medium text-[var(--lens-text)]">{day(pair.ts)}, {time(pair.ts)}</span>
+            {who(pair.authors) && <span className="text-[var(--lens-text-secondary)]">{who(pair.authors)}</span>}
+            {diff && <span className="text-[var(--lens-text-secondary)]"><span className="text-[var(--lens-addition-text)]">+{diff.added}</span> <span className="text-[var(--lens-deletion-text)]">−{diff.removed}</span> words</span>}
+            <label className="ml-auto flex items-center gap-1 text-[var(--lens-text-secondary)]">
               <input type="checkbox" checked={showChanges} onChange={e => setShowChanges(e.target.checked)} /> Show changes
             </label>
             {showChanges && offsets.length > 1 && (
-              <button className="text-blue-700 hover:underline" onClick={step}>Next change</button>
+              <button className="text-[var(--lens-blue)] hover:underline" onClick={step}>Next change</button>
             )}
             {typeof text === 'string' && (
-              <button className="text-blue-700 hover:underline" onClick={() => navigator.clipboard.writeText(text)}>Copy text</button>
+              <button className="text-[var(--lens-blue)] hover:underline" onClick={() => navigator.clipboard.writeText(text)}>Copy text</button>
             )}
           </header>
         )}
         <div className="flex-1 min-h-0">
-          {pair && current === null && !error && <p className="px-6 py-4 text-sm text-gray-500">Loading version…</p>}
-          {text === null && <p className="px-6 py-4 text-sm text-gray-500">The file was deleted or moved here.</p>}
+          {pair && current === null && !error && <p className="px-6 py-4 text-sm text-[var(--lens-text-secondary)]">Loading version…</p>}
+          {text === null && <p className="px-6 py-4 text-sm text-[var(--lens-text-secondary)]">The file was deleted or moved here.</p>}
           {diff && typeof text === 'string' && <HistoryDoc text={text} parts={showChanges ? diff.parts : null} viewRef={view} />}
         </div>
       </section>
