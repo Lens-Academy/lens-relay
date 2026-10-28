@@ -122,4 +122,4 @@ Lauren said "I like it as an initial version" and gave these four points, quoted
 - "in the history list, show how many things changed in a given row, and a preview of what the first one was"
 - "lots of "unknown" in the history, seems slightly distracting"
 
-Status: not started. The first version ships as a ready pull request before these.
+Status: not started. The first version is merged (5f720000) and was deployed to the production editor on 2026-10-28.
