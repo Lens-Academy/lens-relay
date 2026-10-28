@@ -206,7 +206,8 @@ export function WorkflowMenu({ children }: { children?: ReactNode }) {
         >
           {children && (
             <>
-              <div className="space-y-px">{children}</div>
+              {/* A page action (role="menuitem") closes the menu; switches (menuitemcheckbox) keep it open. */}
+              <div className="space-y-px" onClick={e => { if ((e.target as Element).closest('[role="menuitem"]')) setOpen(false); }}>{children}</div>
               <div className="lens-menu-divider" />
             </>
           )}
