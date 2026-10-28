@@ -491,8 +491,6 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           pasteURLAsLink: false,
         }),
         livePreview(wikilinkContextRef.current),
-        // Headings and indented blocks fold, for everyone on the page
-        sharedFolds(ydoc, ytext, { canWrite: !readOnly }),
         codeBlockCopyButton(),
         videoCutButtons(),
         readAloud(),
@@ -523,6 +521,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         remoteCarets({ ytext, awareness: provider.awareness }),
         // Must come after yCollab: reads the Y.Text during plugin update()
         authorshipExtension(ytext),
+        // Headings and indented blocks fold, for everyone on the page. After
+        // yCollab too: matches fold anchors against the Y.Text in update()
+        sharedFolds(ydoc, ytext, { canWrite: !readOnly }),
         // Large pastes get a temporary clientID + "who wrote this?" popover
         ...(readOnly
           ? []

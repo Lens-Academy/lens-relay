@@ -181,6 +181,62 @@ describe('sharedFolds', () => {
     expect(a.getMap(FOLDS_MAP).size).toBe(0);
   });
 
+  it('deleting a folded block in the editor removes its fold for everyone', async () => {
+    const { a, b } = pair();
+    const va = editor(a);
+    const vb = editor(b);
+    clickArrow(va, 9);
+    await tick();
+    expect(a.getMap(FOLDS_MAP).size).toBe(1);
+    va.dispatch({
+      changes: { from: va.state.doc.line(4).from, to: va.state.doc.length },
+      userEvent: 'delete.selection',
+    });
+    await tick();
+    expect(a.getMap(FOLDS_MAP).size).toBe(0);
+    expect(foldedLines(vb)).toEqual([]);
+  });
+
+  it('a fold that arrives before its line is applied once the line does', async () => {
+    const { a, b, link, reconnect } = pair();
+    const va = editor(a);
+    const vb = editor(b);
+    link.online = false;
+    a.getText('contents').insert(0, '# New\nbody\n');
+    clickArrow(va, 1);
+    // Only the map update reaches b, not the text it is anchored to
+    const sv = Y.encodeStateVector(b);
+    const textless = new Y.Doc();
+    Y.applyUpdate(textless, Y.encodeStateAsUpdate(b));
+    Y.applyUpdate(textless, Y.encodeStateAsUpdate(a, sv));
+    const map = textless.getMap(FOLDS_MAP);
+    const entries = [...map.entries()];
+    expect(entries.length).toBe(1);
+    b.getMap(FOLDS_MAP).set(entries[0][0], entries[0][1] as never);
+    await tick();
+    expect(foldedLines(vb)).toEqual([]);
+    reconnect();
+    await tick();
+    expect(foldedLines(vb)).toEqual([1]);
+  });
+
+  it('fold everything folds the outermost blocks, in one update', async () => {
+    const { a, b } = pair();
+    const va = editor(a);
+    const vb = editor(b);
+    let updates = 0;
+    a.on('update', () => updates++);
+    va.dispatch({ selection: { anchor: 0 } });
+    press(va, '[', { ctrlKey: true, altKey: true });
+    await tick();
+    expect(updates).toBe(1);
+    expect(foldedLines(vb)).toEqual([1, 9]);
+    press(vb, ']', { ctrlKey: true, altKey: true });
+    await tick();
+    expect(foldedLines(va)).toEqual([]);
+    expect(a.getMap(FOLDS_MAP).size).toBe(0);
+  });
+
   it('the keyboard folds the block the cursor is in, for everyone', async () => {
     const { a, b } = pair();
     const va = editor(a);

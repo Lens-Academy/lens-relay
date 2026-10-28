@@ -20,7 +20,7 @@
  * search) open for this client only; a local delete that clears a fold
  * (CodeMirror drops folds a deletion touches) removes it for everyone.
  */
-import { Annotation, Prec, RangeSetBuilder, StateField } from '@codemirror/state';
+import { Annotation, MapMode, Prec, RangeSetBuilder, StateField } from '@codemirror/state';
 import type { EditorState, Extension, Line } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
@@ -67,12 +67,13 @@ export function scanFoldLines(doc: EditorState['doc']): FoldLines {
   const blank = new Uint8Array(doc.lines);
   let fence: string | null = null;
   let frontmatter = false;
-  for (let n = 1; n <= doc.lines; n++) {
-    const text = doc.line(n).text;
-    const i = n - 1;
+  let n = 0;
+  for (const iter = doc.iterLines(); !iter.next().done; ) {
+    const text = iter.value;
+    const i = n++;
     indent[i] = indentWidth(text);
     blank[i] = text.trim() ? 0 : 1;
-    if (n === 1 && text.trim() === '---') {
+    if (i === 0 && text.trim() === '---') {
       frontmatter = true;
       kind[i] = -1;
       continue;
@@ -149,19 +150,24 @@ function foldOnLine(state: EditorState, line: Line): { from: number; to: number 
  *  back into the map */
 const fromSharedFolds = Annotation.define<true>();
 
-function foldLine(view: EditorView, line: Line): boolean {
-  if (foldOnLine(view.state, line)) return true;
-  const range = foldRangeOf(view.state, line.number);
-  if (!range) return false;
-  view.dispatch({ effects: foldEffect.of(range), annotations: fromSharedFolds.of(true) });
-  return true;
-}
-
-function unfoldLine(view: EditorView, line: Line): boolean {
-  const range = foldOnLine(view.state, line);
-  if (!range) return false;
-  view.dispatch({ effects: unfoldEffect.of(range), annotations: fromSharedFolds.of(true) });
-  return true;
+/** Fold or unfold lines in this editor, in one transaction. Returns
+ *  whether any of them folds (or was folded). */
+function applyLocally(view: EditorView, lines: Line[], fold: boolean): boolean {
+  const effects = [];
+  let any = false;
+  for (const line of lines) {
+    const current = foldOnLine(view.state, line);
+    if (fold) {
+      const range = !current && foldRangeOf(view.state, line.number);
+      if (range) effects.push(foldEffect.of(range));
+      any ||= !!(current || range);
+    } else if (current) {
+      effects.push(unfoldEffect.of(current));
+      any = true;
+    }
+  }
+  if (effects.length) view.dispatch({ effects, annotations: fromSharedFolds.of(true) });
+  return any;
 }
 
 // ── The shared map ─────────────────────────────────────────────────
@@ -180,14 +186,14 @@ class SharedFoldStore {
   /** Start of the line a fold is anchored to, or null when it can't be found
    *  or no longer sits at a line start. 'gone' when the character it was
    *  anchored to was deleted: Yjs would resolve it to whatever follows, and
-   *  fold some other line. */
-  lineStart(fold: SharedFold | undefined, state: EditorState): number | null | 'gone' {
+   *  fold some other line. 'later' when that character hasn't arrived yet
+   *  (the map and the text sync independently). */
+  lineStart(fold: SharedFold | undefined, state: EditorState): number | null | 'gone' | 'later' {
     if (!fold || typeof fold !== 'object' || !fold.anchor) return null;
     try {
       const rel = Y.createRelativePositionFromJSON(fold.anchor);
       if (rel.item) {
-        // Not synced yet
-        if (Y.getState(this.ydoc.store, rel.item.client) <= rel.item.clock) return null;
+        if (Y.getState(this.ydoc.store, rel.item.client) <= rel.item.clock) return 'later';
         if (Y.getItem(this.ydoc.store, rel.item).deleted) return 'gone';
       }
       const abs = Y.createAbsolutePositionFromRelativePosition(rel, this.ydoc);
@@ -198,23 +204,46 @@ class SharedFoldStore {
     }
   }
 
-  idsOn(line: Line, state: EditorState): string[] {
-    const ids: string[] = [];
+  /** Line start → ids of the folds on that line. One pass over the map:
+   *  resolving an anchor walks the Y.Text. */
+  byLine(state: EditorState): Map<number, string[]> {
+    const lines = new Map<number, string[]>();
     this.map.forEach((fold, id) => {
-      if (this.lineStart(fold, state) === line.from) ids.push(id);
+      const from = this.lineStart(fold, state);
+      if (typeof from === 'number') lines.set(from, [...(lines.get(from) ?? []), id]);
     });
-    return ids;
+    return lines;
   }
 
-  add(line: Line, state: EditorState) {
-    if (!this.canWrite || this.idsOn(line, state).length) return;
-    const anchor = Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(this.ytext, line.from, 0));
-    this.ydoc.transact(() => this.map.set(newId(), { anchor, at: Date.now() }), this);
+  /** Must be called with the state the Y.Text shows */
+  add(lines: Line[], state: EditorState) {
+    if (!this.canWrite || !lines.length) return;
+    const folded = this.byLine(state);
+    const fresh = lines.filter((line) => !folded.has(line.from));
+    if (!fresh.length) return;
+    this.ydoc.transact(() => {
+      for (const line of fresh) {
+        const anchor = Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(this.ytext, line.from, 0));
+        this.map.set(newId(), { anchor, at: Date.now() });
+      }
+    }, this);
   }
 
-  remove(line: Line, state: EditorState) {
+  /** Drop folds whose line was deleted */
+  prune(state: EditorState) {
     if (!this.canWrite) return;
-    const ids = this.idsOn(line, state);
+    const gone: string[] = [];
+    this.map.forEach((fold, id) => {
+      if (this.lineStart(fold, state) === 'gone') gone.push(id);
+    });
+    if (gone.length) this.ydoc.transact(() => gone.forEach((id) => this.map.delete(id)), this);
+  }
+
+  /** Must be called with the state the Y.Text shows */
+  remove(lines: Line[], state: EditorState) {
+    if (!this.canWrite || !lines.length) return;
+    const folded = this.byLine(state);
+    const ids = lines.flatMap((line) => folded.get(line.from) ?? []);
     if (ids.length) this.ydoc.transact(() => ids.forEach((id) => this.map.delete(id)), this);
   }
 }
@@ -225,16 +254,13 @@ function newId(): string {
     : Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-/** Fold or unfold a line for everyone (for this client only when read-only) */
-function setFolded(view: EditorView, line: Line, fold: boolean): boolean {
+/** Fold or unfold lines for everyone (for this client only when read-only) */
+function setFolded(view: EditorView, lines: Line[], fold: boolean): boolean {
   const store = stores.get(view);
-  if (fold) {
-    if (!foldRangeOf(view.state, line.number)) return false;
-    store?.add(line, view.state);
-    return foldLine(view, line);
-  }
-  store?.remove(line, view.state);
-  return unfoldLine(view, line);
+  if (fold) lines = lines.filter((line) => foldRangeOf(view.state, line.number));
+  if (fold) store?.add(lines, view.state);
+  else store?.remove(lines, view.state);
+  return applyLocally(view, lines, fold);
 }
 
 /** The foldable line at or above `pos` whose block contains it */
@@ -299,14 +325,21 @@ class SharedFoldsView {
     const pending = this.pending;
     this.pending = [];
     const gone: string[] = [];
-    for (const { id, fold, value } of pending) {
-      const from = this.store.lineStart(value, this.view.state);
-      if (from === 'gone' && fold) gone.push(id);
-      if (from === null || from === 'gone') continue;
-      const line = this.view.state.doc.lineAt(from);
-      if (fold) foldLine(this.view, line);
+    const toFold: Line[] = [];
+    const toUnfold: Line[] = [];
+    for (const item of pending) {
+      const from = this.store.lineStart(item.value, state);
+      // Its line hasn't arrived: try again when the text changes
+      if (from === 'later') this.pending.push(item);
+      if (from === 'gone' && item.fold) gone.push(item.id);
+      if (typeof from !== 'number') continue;
+      (item.fold ? toFold : toUnfold).push(state.doc.lineAt(from));
+    }
+    applyLocally(this.view, toFold, true);
+    if (toUnfold.length) {
       // Someone else may still have it folded under another id
-      else if (!this.store.idsOn(line, this.view.state).length) unfoldLine(this.view, line);
+      const folded = this.store.byLine(state);
+      applyLocally(this.view, toUnfold.filter((line) => !folded.has(line.from)), false);
     }
     // Folds whose line was deleted
     if (gone.length && this.store.canWrite) {
@@ -317,16 +350,20 @@ class SharedFoldsView {
   update(update: ViewUpdate) {
     if (update.docChanged) this.schedule();
     if (!this.store.canWrite) return;
+    // Folds CodeMirror opened or closed itself (its placeholder click, other
+    // fold commands, a local delete touching a fold), as line starts mapped
+    // to the update's final state, which is what the Y.Text shows: this runs
+    // after yCollab has written the update's edits
+    let opened: number[] = [];
+    let closed: number[] = [];
+    let deleted = false;
     for (const tr of update.transactions) {
+      opened = opened.map((pos) => tr.changes.mapPos(pos, 1));
+      closed = closed.map((pos) => tr.changes.mapPos(pos, 1));
       if (tr.annotation(fromSharedFolds)) continue;
-      // Folds CodeMirror opened itself: its placeholder click, other fold
-      // commands, a local delete touching the fold
       for (const e of tr.effects) {
-        if (e.is(unfoldEffect)) this.store.remove(tr.state.doc.lineAt(e.value.from), tr.state);
-        else if (e.is(foldEffect)) {
-          const line = tr.state.doc.lineAt(e.value.from);
-          if (foldRangeOf(tr.state, line.number)) this.store.add(line, tr.state);
-        }
+        if (e.is(unfoldEffect)) opened.push(tr.state.doc.lineAt(e.value.from).from);
+        else if (e.is(foldEffect)) closed.push(tr.state.doc.lineAt(e.value.from).from);
       }
       if (tr.docChanged && tr.isUserEvent('delete')) {
         const after = foldedRanges(tr.state);
@@ -338,14 +375,21 @@ class SharedFoldsView {
             if (a === mFrom && b === mTo) kept = true;
           });
           if (kept) return;
-          // The line the fold hung from, if it still exists
-          const startLine = tr.startState.doc.lineAt(from);
-          const lineStart = tr.changes.mapPos(startLine.from, 1);
-          const line = tr.state.doc.lineAt(lineStart);
-          if (line.from === lineStart) this.store.remove(line, tr.state);
+          // Its line deleted too: pruned below
+          const start = tr.changes.mapPos(tr.startState.doc.lineAt(from).from, 1, MapMode.TrackDel);
+          if (start === null) deleted = true;
+          else opened.push(start);
         });
       }
     }
+    const { state } = update;
+    // Only line starts that are still line starts: the line the fold hung
+    // from may be gone
+    const lines = (starts: number[]) =>
+      starts.map((pos) => state.doc.lineAt(pos)).filter((line, i) => line.from === starts[i]);
+    this.store.remove(lines(opened), state);
+    if (deleted) this.store.prune(state);
+    this.store.add(lines(closed).filter((line) => foldRangeOf(state, line.number)), state);
   }
 
   destroy() {
@@ -434,7 +478,7 @@ const arrowsPlugin = ViewPlugin.fromClass(
         event.preventDefault();
         const pos = view.posAtDOM(target);
         const line = view.state.doc.lineAt(pos);
-        setFolded(view, line, !foldOnLine(view.state, line));
+        setFolded(view, [line], !foldOnLine(view.state, line));
         return true;
       },
     },
@@ -445,17 +489,12 @@ const arrowsPlugin = ViewPlugin.fromClass(
 
 function foldCursorLines(fold: boolean) {
   return (view: EditorView) => {
-    let done = false;
+    const lines: Line[] = [];
     for (const range of view.state.selection.ranges) {
-      if (fold) {
-        const line = foldableLineAt(view.state, range.head);
-        if (line && !foldOnLine(view.state, line)) done = setFolded(view, line, true) || done;
-      } else {
-        const line = view.state.doc.lineAt(range.head);
-        done = setFolded(view, line, false) || done;
-      }
+      const line = fold ? foldableLineAt(view.state, range.head) : view.state.doc.lineAt(range.head);
+      if (line && !!foldOnLine(view.state, line) !== fold) lines.push(line);
     }
-    return done;
+    return lines.length > 0 && setFolded(view, lines, fold);
   };
 }
 
@@ -466,21 +505,20 @@ function foldEverything(fold: boolean) {
       foldedRanges(view.state).between(0, view.state.doc.length, (from) => {
         lines.push(view.state.doc.lineAt(from));
       });
-      lines.forEach((line) => setFolded(view, line, false));
-      return lines.length > 0;
+      return lines.length > 0 && setFolded(view, lines, false);
     }
     // Outermost blocks only: folding one hides the blocks inside it
     const { doc } = view.state;
+    const lines: Line[] = [];
     let n = 1;
-    let done = false;
     while (n <= doc.lines) {
       const range = foldRangeOf(view.state, n);
       if (range) {
-        done = setFolded(view, doc.line(n), true) || done;
+        lines.push(doc.line(n));
         n = doc.lineAt(range.to).number + 1;
       } else n++;
     }
-    return done;
+    return lines.length > 0 && setFolded(view, lines, true);
   };
 }
 

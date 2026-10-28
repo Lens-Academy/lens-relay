@@ -1163,7 +1163,7 @@
   right: 4px;
 }
 .cm-line:hover .cm-fold-toggle,
-.cm-fold-toggle-folded {
+.cm-fold-toggle.cm-fold-toggle-folded {
   opacity: 1;
 }
 .cm-fold-toggle:hover {
