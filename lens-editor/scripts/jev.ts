@@ -160,7 +160,12 @@ async function main() {
     if (!advice?.trim()) throw new Error('usage: fix <id> <advice>');
     return void (await write(path, (t) => setCheckFields(t, [{ path: ['fix'], value: advice }])));
   }
-  if (cmd === 'enable') return void (await write(path, (t) => setCheckFields(t, [{ path: ['enabled'], value: true }])));
+  if (cmd === 'enable') {
+    // As the panel's Enable: a check goes live only with no problems at all, placeholders included.
+    const problems = platformProblems(text);
+    if (problems.length) throw new Error(`not enabled: ${problems.join('; ')}`);
+    return void (await write(path, (t) => setCheckFields(t, [{ path: ['enabled'], value: true }])));
+  }
   throw new Error(`unknown command ${cmd}`);
 }
 

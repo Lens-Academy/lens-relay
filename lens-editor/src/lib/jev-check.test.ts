@@ -259,4 +259,7 @@ describe('placeholders', () => {
     const written = setCheckFields(t, [{ path: ['fix'], value: 'Say it plainly…' }, { path: ['question'], value: 'Does `paragraph` trail off…?' }]);
     expect(platformWordProblems(written).filter((p) => p.includes('placeholder'))).toHaveLength(2);
   });
+  it('so a check with them cannot be enabled: the panel disables Enable on any platformProblems', () => {
+    expect(platformProblems(newCheckText('T9', 'x')).some((p) => p.includes('placeholder'))).toBe(true);
+  });
 });
