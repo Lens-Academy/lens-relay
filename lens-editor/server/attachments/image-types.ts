@@ -89,7 +89,9 @@ export function sniffImage(
 export function looksLikeSvg(bytes: Uint8Array): boolean {
   const head = new TextDecoder("latin1")
     .decode(bytes.subarray(0, 1024))
+    .replace(/^\xef\xbb\xbf/, "")
     .trimStart()
     .toLowerCase();
-  return head.startsWith("<svg") || (/^<[?!]/.test(head) && head.includes("<svg"));
+  if (head.startsWith("<svg")) return true;
+  return /^<[?!]/.test(head) && head.includes("<svg") && !head.includes("<html");
 }

@@ -8,7 +8,8 @@
 import createDOMPurify from 'dompurify';
 
 const LOCAL_HREF = /^\s*(#|data:image\/(png|jpeg|gif|webp)[;,])/i;
-const EXTERNAL_CSS = /@import|url\(\s*['"]?\s*(?!#|data:)/i;
+// CSS escapes (`\75 rl(`) could hide a url(), so any backslash counts too.
+const EXTERNAL_CSS = /@import|\\|url\(\s*['"]?\s*(?!#|data:)/i;
 
 type SvgWindow = Window & { XMLSerializer: typeof XMLSerializer };
 
@@ -28,8 +29,10 @@ function purifier(win: SvgWindow) {
         const value = node.getAttribute(name);
         if (value !== null && !LOCAL_HREF.test(value)) node.removeAttribute(name);
       }
-      const style = node.getAttribute('style');
-      if (style !== null && EXTERNAL_CSS.test(style)) node.removeAttribute('style');
+      // style, fill, filter, mask, clip-path, marker-*: no url() outside the file.
+      for (const { name, value } of Array.from(node.attributes)) {
+        if (EXTERNAL_CSS.test(value)) node.removeAttribute(name);
+      }
     });
     instances.set(win, purify);
   }

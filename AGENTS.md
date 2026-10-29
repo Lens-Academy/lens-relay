@@ -241,7 +241,7 @@ backlinks are the ones persisted before the restart, refreshed doc by doc. Rules
   a worker that is waiting for the lock as alive, but everything else queues behind the holder.
 
 **Attachments over MCP** (`crates/relay/src/mcp/tools/import_attachment.rs`,
-`lens-editor/server/attachments/`): `import_attachment` hosts png/jpeg/gif/webp under
+`lens-editor/server/attachments/`): `import_attachment` hosts png/jpeg/gif/webp/svg (svg sanitized) under
 `<folder>/attachments/` from a URL or base64 (magic-byte sniffing, sha256 dedup, 5 MiB
 soft / 20 MiB hard, `overwrite` keeps the file id), `read` returns image attachments as
 MCP image blocks, and `POST /doc/attachment` answers 409 on same-path-different-bytes.

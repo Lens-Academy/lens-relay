@@ -195,6 +195,7 @@ describe("POST /api/attachments/import", () => {
 <script>alert(2)</script><style>@import url(https://evil/x.css);</style>
 <defs><linearGradient id="g"><stop offset="0"/></linearGradient><path id="p" d="M0 0"/></defs>
 <rect fill="url(#g)" onclick="x()" style="fill:url(https://evil/f)"/>
+<rect filter="url(https://evil/t.svg#f)" style="filter:\\75 rl(https://evil/e)"/>
 <foreignObject><div xmlns="http://www.w3.org/1999/xhtml">hi</div></foreignObject>
 <a href="javascript:alert(3)"><text>A&#160;B</text></a>
 <use xlink:href="#p"/><use href="https://evil/s.svg#x"/><image href="https://evil/p.png"/>
