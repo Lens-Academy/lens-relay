@@ -318,7 +318,9 @@ rclone copy /tmp/restore/<doc> r2bk:lens-relay-storage/<doc>                  # 
 ```
 
 Leave out `<doc>` for the whole bucket (~600 MB). Hourly snapshots made
-before 28 Oct 2026 are full copies without a record; copy from them directly.
+before this script was deployed are full copies without a record, so the
+restore script refuses them; copy from them directly. They are pruned within
+two days.
 
 ## Key Files
 
