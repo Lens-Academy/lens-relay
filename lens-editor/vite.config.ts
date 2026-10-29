@@ -375,7 +375,11 @@ export default defineConfig(() => {
             if (!resp.ok) { res.writeHead(502); res.end(`Upstream error: ${resp.status}`); return; }
             const contentType = resp.headers.get('content-type') ?? 'application/octet-stream';
             const body = Buffer.from(await resp.arrayBuffer());
-            res.writeHead(200, { 'Content-Type': contentType });
+            res.writeHead(200, {
+              'Content-Type': contentType,
+              'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+              'X-Content-Type-Options': 'nosniff',
+            });
             res.end(body);
           } catch (err) {
             res.writeHead(502);

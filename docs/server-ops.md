@@ -137,7 +137,7 @@ relay server token:
 - `POST /api/attachments/import` (lens-editor, edit share token): body
   `{folder, url | content_base64, file_path? | stem?, mimetype?, overwrite?}`.
   Fetches with the importer's SSRF guard (or decodes base64), sniffs magic
-  bytes (png/jpeg/gif/webp only, SVG rejected), enforces 20 MiB hard / 5 MiB
+  bytes (png/jpeg/gif/webp, or svg after sanitizing), enforces 20 MiB hard / 5 MiB
   soft, dedups via `by-hash`, uploads via `/doc/attachment`.
 
 **Naming.** Importer figures: `<slug>-fig<N>-<sha1_8>.<ext>` /
