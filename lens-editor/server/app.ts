@@ -120,7 +120,13 @@ export function createApp(config: AppConfig): Hono {
       if (!resp.ok) return c.text(`Upstream error: ${resp.status}`, 502);
       const contentType = resp.headers.get('content-type') ?? 'application/octet-stream';
       const body = await resp.arrayBuffer();
-      return c.body(body, 200, { 'Content-Type': contentType });
+      // Served from the editor's origin: never let a fetched file (an SVG, an
+      // HTML page) run script here. <img> and fetch() are unaffected.
+      return c.body(body, 200, {
+        'Content-Type': contentType,
+        'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+        'X-Content-Type-Options': 'nosniff',
+      });
     } catch (err) {
       return c.text(`Fetch failed: ${err}`, 502);
     }

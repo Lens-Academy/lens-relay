@@ -2,10 +2,11 @@
  * Image type handling shared by every attachment writer (the MCP
  * import_attachment route, PDF figure hosting, arXiv rehosting).
  *
- * The allowlist is deliberately small: png, jpeg, gif, webp. SVG is rejected
- * because the file is served raw from a public repo (scripts, external
- * references); agents rasterise instead. Types are decided from magic bytes,
- * never from a declared content type or a URL extension.
+ * The raster allowlist is deliberately small: png, jpeg, gif, webp. SVG is
+ * accepted only by the import_attachment route, which sanitizes it first
+ * (shared/sanitize-svg.ts); every other writer keeps rejecting it. Types are
+ * decided from the bytes, never from a declared content type or a URL
+ * extension.
  */
 
 export type ImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
@@ -18,12 +19,14 @@ export const EXT_BY_MIME: Record<ImageMime, ImageExt> = {
   "image/webp": "webp",
 };
 
-export const MIME_BY_EXT: Record<string, ImageMime> = {
+/** Extensions a file_path may carry (svg: import_attachment only). */
+export const MIME_BY_EXT: Record<string, ImageMime | "image/svg+xml"> = {
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
   gif: "image/gif",
   webp: "image/webp",
+  svg: "image/svg+xml",
 };
 
 export const ALLOWED_IMAGE_MIMES = Object.keys(EXT_BY_MIME) as ImageMime[];
@@ -82,12 +85,11 @@ export function sniffImage(
   return null;
 }
 
-/** True when the first non-whitespace bytes look like SVG/XML markup — used
- *  only to give a clearer rejection message than "unknown type". */
+/** True when the first non-whitespace bytes look like SVG/XML markup. */
 export function looksLikeSvg(bytes: Uint8Array): boolean {
   const head = new TextDecoder("latin1")
-    .decode(bytes.subarray(0, 512))
+    .decode(bytes.subarray(0, 1024))
     .trimStart()
     .toLowerCase();
-  return head.startsWith("<svg") || (head.startsWith("<?xml") && head.includes("<svg"));
+  return head.startsWith("<svg") || (/^<[?!]/.test(head) && head.includes("<svg"));
 }

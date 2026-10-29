@@ -132,7 +132,7 @@ describe("POST /api/attachments/import", () => {
       { folder: "Lens Edu", url: "ftp://x/a.png" },
       { folder: "Lens Edu", url: "https://x/a.png", file_path: "/fig.png" },
       { folder: "Lens Edu", url: "https://x/a.png", file_path: "/attachments/sub/fig.png" },
-      { folder: "Lens Edu", url: "https://x/a.png", file_path: "/attachments/fig.svg" },
+      { folder: "Lens Edu", url: "https://x/a.png", file_path: "/attachments/fig.bmp" },
       { folder: "Lens Edu", url: "https://x/a.png", file_path: "/attachments/fig.png", stem: "fig" },
       { folder: "Lens Edu", url: "https://x/a.png", stem: "Not Kebab" },
       { folder: "Lens Edu", content_base64: "aGk=" }, // base64 needs a name
@@ -189,11 +189,38 @@ describe("POST /api/attachments/import", () => {
   });
 
   // ---- type allowlist ----
-  it("rejects svg and non-image bytes with 415, whatever the declared type", async () => {
+  it("stores svg sanitized: no script, handlers, foreignObject or external refs", async () => {
+    const dirty = `<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10" onload="alert(1)">
+<script>alert(2)</script><style>@import url(https://evil/x.css);</style>
+<defs><linearGradient id="g"><stop offset="0"/></linearGradient><path id="p" d="M0 0"/></defs>
+<rect fill="url(#g)" onclick="x()" style="fill:url(https://evil/f)"/>
+<foreignObject><div xmlns="http://www.w3.org/1999/xhtml">hi</div></foreignObject>
+<a href="javascript:alert(3)"><text>A&#160;B</text></a>
+<use xlink:href="#p"/><use href="https://evil/s.svg#x"/><image href="https://evil/p.png"/>
+</svg>`;
+    const resp = await post({ folder: "Lens Edu", content_base64: Buffer.from(dirty).toString("base64"), file_path: "/attachments/fig.svg" });
+    expect(resp.status).toBe(200);
+    const data = await resp.json();
+    expect(data.mimetype).toBe("image/svg+xml");
+    const [, path, bytes, mime] = deps.upload.mock.calls[0];
+    expect(path).toBe("/attachments/fig.svg");
+    expect(mime).toBe("image/svg+xml");
+    const stored = Buffer.from(bytes).toString("utf8");
+    expect(data.sha256).toBe(createHash("sha256").update(stored).digest("hex"));
+    for (const bad of ["script", "onload", "onclick", "foreignObject", "javascript:", "evil", "@import"]) {
+      expect(stored, bad).not.toContain(bad);
+    }
+    for (const kept of ['viewBox="0 0 10 10"', "<linearGradient", 'fill="url(#g)"', 'xlink:href="#p"', "A\u00a0B"]) {
+      expect(stored, kept).toContain(kept);
+    }
+  });
+
+  it("rejects non-image bytes with 415, whatever the declared type", async () => {
     deps.fetchBytes.mockResolvedValueOnce({ bytes: SVG.buffer.slice(SVG.byteOffset, SVG.byteOffset + SVG.byteLength), contentType: "image/svg+xml" });
-    let resp = await post({ folder: "Lens Edu", url: "https://x/a.svg" });
-    expect(resp.status).toBe(415);
-    expect((await resp.json()).error).toMatch(/SVG is not accepted/);
+    let resp = await post({ folder: "Lens Edu", url: "https://x/a.svg", file_path: "/attachments/a.png" });
+    expect(resp.status).toBe(400);
+    expect((await resp.json()).error).toMatch(/use \.svg/);
 
     resp = await post({ folder: "Lens Edu", content_base64: Buffer.from("<html>nope</html>").toString("base64"), stem: "x", mimetype: "image/png" });
     expect(resp.status).toBe(415);

@@ -2,6 +2,7 @@ import * as Y from 'yjs';
 import { RELAY_ID } from '../App';
 import type { FileMetadata } from '../hooks/useFolderMetadata';
 import { generateUUID, createDocumentOnServer, relayHeaders } from './relay-api';
+import { sanitizeSvg } from '../../shared/sanitize-svg';
 
 const LENS_EDITOR_ORIGIN = 'lens-editor';
 
@@ -85,6 +86,11 @@ export async function uploadAttachment({
   file,
   timestamp = Date.now(),
 }: UploadAttachmentOptions): Promise<UploadAttachmentResult> {
+  if (file.type === 'image/svg+xml') {
+    const clean = sanitizeSvg(await file.text(), window);
+    if (!clean) throw new Error('The SVG has no <svg> element left after sanitizing');
+    file = new File([clean], file.name, { type: file.type });
+  }
   const docName = sanitizeDocName(currentFilePath);
   const filename = pickFilename(file, docName, timestamp);
   const attachmentPath = `${ATTACHMENTS_FOLDER_PATH}/${filename}`;

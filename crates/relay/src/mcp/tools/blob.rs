@@ -161,8 +161,8 @@ pub fn is_blob_file(path: &str) -> bool {
 
 /// Image extensions the MCP surface recognises: `read` returns the raster
 /// ones as an image content block (SVG as text), `create`/`edit` refuse all
-/// of them (bytes only enter through `import_attachment`; SVG is not
-/// uploadable in v1).
+/// of them (bytes only enter through `import_attachment`, which sanitizes
+/// SVG).
 const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 
 /// Lower-cased extension of `path` (text after the last `.` of the last
