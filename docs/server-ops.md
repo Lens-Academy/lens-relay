@@ -251,30 +251,40 @@ hint WEUR, Standard storage class, private):
 | Tier | Prefix | Holds | Made | Kept |
 |------|--------|-------|------|------|
 | Daily | `daily/YYYY-MM-DD/` | every object | first run of the day | 22 days |
-| Hourly | `hourly/YYYY-MM-DD-HH/` | objects changed since the last snapshot | every hour with a change | that day and the next |
-| Weekly | `weekly/YYYY-WW/` | every object | once a week, from the oldest daily | ~26 weeks |
-| | `current/` | the newest backed-up version of every object | every run | |
+| Hourly | `hourly/YYYY-MM-DD-HH/` | objects changed or new since the last snapshot | every hour with one | that day and the next |
+| Weekly | `weekly/YYYY-WW/` | every object, as in the oldest daily (about three weeks older than its name) | once a week | ~26 weeks |
+| Record | `lists/YYYY-MM-DD-HH/objects.tsv` | every object and the MD5 the backups hold for it | every hour | that day and the next |
+| | `current/` | the newest backed-up version of every object | | |
+| | `done/daily/…/ok`, `done/weekly/…/ok` | marks a daily or weekly complete | after its copy | with it |
 
 An object has changed when its MD5 differs from its copy in `current/`. The
 script lists both sides with `--fast-list` (one call per 1,000 objects) and
 compares the lists; rclone's `--compare-dest` would send one request per
 object. `current/` only takes versions that a snapshot holds, so after a
 failed run it is behind, never ahead, and the next run copies the difference
-again. Each daily copy resets `current/`, which also drops deleted objects.
-Source and destination use the same rclone remote (`r2bk`), so each copy is a
-server-side `CopyObject` inside Cloudflare and no data passes through prod.
-Expiry goes by the date in the snapshot name, not object age. A failed copy
-is removed so the next run starts clean.
+again. Each daily resets `current/`, which also drops deleted objects. The
+record lets a restore leave out objects deleted before its hour, and check
+every object it puts back.
+
+A daily or weekly counts as complete only once its `done/` marker exists; a
+run that fails part-way leaves it unmarked, and the next run finishes it. A
+failed listing stops the run, so a snapshot is never redone over a good one.
+An hour is done once its record is written. Every failure prints a `FAILED`
+line and exits 1. Source and destination use the same rclone remote
+(`r2bk`), so each copy is a server-side `CopyObject` inside Cloudflare and no
+data passes through prod. Expiry goes by the date in the snapshot name, not
+object age.
 
 Cost is requests: R2 bills each list call and each copy (Class A, $4.50 per
 million after the first million a month). On 28 Oct 2026 the bucket held
 10,721 objects and 1 to 17 changed in an hour, so an hourly run made about
-40 Class A requests and the daily copy about 10,700: under 0.5M a month.
+45 Class A requests and the daily copy about 10,700: under 0.5M a month.
 Copying every object every hour, as the script did before, made about 21M
 (~$90). Storage is ~30 GB.
 
-`scripts/r2-backup.test.sh` runs both scripts over two simulated days against
-local folders (CI: `.github/workflows/r2-backup.yml`).
+`scripts/r2-backup.test.sh` runs both scripts over three simulated days
+against local folders, including a failure at each step
+(CI: `.github/workflows/r2-backup.yml`).
 
 - **Credentials:** R2 API token `relay-backup-job` (Object Read & Write on
   `lens-relay-storage` and `lens-relay-backups` only), configured as the
@@ -289,24 +299,26 @@ local folders (CI: `.github/workflows/r2-backup.yml`).
   uploaded into the bucket under their original names, so they expire on
   their original schedule.
 
-**Restoring.** An hour is put back together from its day's daily copy and
-that day's hourly snapshots up to it, in order. `scripts/r2-backup-restore.sh`
-does this into an empty folder and refuses the live bucket. Copying back
-writes into the live bucket, and the relay keeps loaded documents in memory
-and saves them over the store, so make sure the document is not loaded (or
-stop the relay) before copying:
+**Restoring.** `scripts/r2-backup-restore.sh POINT TARGET [OBJECT]` puts the
+bucket, or one document or attachment, together in an empty folder, then
+checks it against the backups' record: exactly the objects that existed at
+that point, each with its MD5. A difference is an error. POINT is a daily
+(`daily/2026-10-28`), a weekly (`weekly/2026-43`, which says which daily it
+holds) or an hour: the hour is rebuilt from its day's daily and that day's
+hourlies up to it. For an hour with no record (its run failed), the script
+uses the last record before it and says so; with none, it refuses. Only
+complete snapshots are used. Copying back writes into the live bucket, and
+the relay keeps loaded documents in memory and saves them over the store, so
+make sure the document is not loaded (or stop the relay) before copying:
 
 ```bash
-rclone lsf --dirs-only r2bk:lens-relay-backups/hourly                         # hours with a change
+rclone lsf --dirs-only r2bk:lens-relay-backups/lists                          # hours with a record
 scripts/r2-backup-restore.sh 2026-10-28-14 /tmp/restore <doc>                 # <doc> as it was at 14:00
 rclone copy /tmp/restore/<doc> r2bk:lens-relay-storage/<doc>                  # after inspecting it
 ```
 
-Leave out `<doc>` for the whole bucket (~600 MB). A whole bucket put back
-together this way also holds the documents deleted from storage earlier that
-day. For a day whose hourly snapshots are gone, the result is the start of that
-day, and the script says so. A weekly snapshot is complete: copy from it
-directly.
+Leave out `<doc>` for the whole bucket (~600 MB). Hourly snapshots made
+before 28 Oct 2026 are full copies without a record; copy from them directly.
 
 ## Key Files
 
