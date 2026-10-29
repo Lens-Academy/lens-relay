@@ -86,10 +86,10 @@ export async function uploadAttachment({
   file,
   timestamp = Date.now(),
 }: UploadAttachmentOptions): Promise<UploadAttachmentResult> {
-  if (file.type === 'image/svg+xml') {
+  if (file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)) {
     const clean = sanitizeSvg(await file.text(), window);
     if (!clean) throw new Error('The SVG has no <svg> element left after sanitizing');
-    file = new File([clean], file.name, { type: file.type });
+    file = new File([clean], file.name, { type: 'image/svg+xml' });
   }
   const docName = sanitizeDocName(currentFilePath);
   const filename = pickFilename(file, docName, timestamp);
