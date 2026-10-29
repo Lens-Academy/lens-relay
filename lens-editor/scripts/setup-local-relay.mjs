@@ -342,6 +342,49 @@ This is a nested document in the Projects folder, a sibling to Notes.
 See [[../Notes/Ideas]] for brainstorming and [[../Welcome]] for an overview.
 `,
       },
+      // Deep, long paths: the quick switcher must still show their file names.
+      {
+        path: '/Operating System',
+        id: 'c0000090-0000-4000-8000-000000000090',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Operating System/Weekly Meeting',
+        id: 'c0000091-0000-4000-8000-000000000091',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Operating System/Weekly Meeting/Weekly Meetings Q4 2026',
+        id: 'c0000092-0000-4000-8000-000000000092',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Operating System/Weekly Meeting/Weekly Meeting Template.md',
+        id: 'c0000093-0000-4000-8000-000000000093',
+        type: 'markdown',
+        version: 0,
+        content: `# Weekly Meeting Template\n\nA deeply nested file whose path is longer than the quick switcher (Ctrl+O) is wide.\n`,
+      },
+      {
+        path: '/Operating System/Weekly Meeting/Weekly Meetings Q4 2026/Weekly Meeting 2026-10-21.md',
+        id: 'c0000094-0000-4000-8000-000000000094',
+        type: 'markdown',
+        version: 0,
+        content: `# Weekly Meeting 2026-10-21\n\nA deeply nested file whose path is longer than the quick switcher (Ctrl+O) is wide.\n`,
+      },
+      {
+        path: '/Operating System/Weekly Meeting/Weekly Meetings Q4 2026/Weekly Meeting 2026-10-28.md',
+        id: 'c0000095-0000-4000-8000-000000000095',
+        type: 'markdown',
+        version: 0,
+        content: `# Weekly Meeting 2026-10-28\n\nA deeply nested file whose path is longer than the quick switcher (Ctrl+O) is wide.\n`,
+      },
     ],
   },
   {
