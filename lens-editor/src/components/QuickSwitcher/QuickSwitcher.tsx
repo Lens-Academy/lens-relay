@@ -275,8 +275,17 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
                     }
                   }}
                 >
-                  <span className="text-sm font-medium text-gray-900 truncate min-w-0 flex-1">
-                    <HighlightedName name={item.entry.displayPath} ranges={item.ranges} />
+                  {/* A path too long for the row is cut at its start, not its end,
+                      so the file name stays visible: the rtl box puts the ellipsis
+                      on the left, the ltr isolate keeps the path itself in order,
+                      and text-left keeps paths that fit where they were. */}
+                  <span
+                    className="text-sm font-medium text-gray-900 truncate min-w-0 flex-1 text-left [direction:rtl]"
+                    title={item.entry.displayPath}
+                  >
+                    <bdi dir="ltr">
+                      <HighlightedName name={item.entry.displayPath} ranges={item.ranges} />
+                    </bdi>
                   </span>
                 </div>
               );
