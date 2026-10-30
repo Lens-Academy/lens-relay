@@ -251,39 +251,42 @@ hint WEUR, Standard storage class, private):
 | Tier | Prefix | Holds | Made | Kept |
 |------|--------|-------|------|------|
 | Daily | `daily/YYYY-MM-DD/` | every object | first run of the day | 22 days |
-| Hourly | `hourly/YYYY-MM-DD-HH/` | objects changed or new since the last snapshot | every hour with one | that day and the next |
+| Hourly | `hourly/YYYY-MM-DD-HH/` | the objects that changed since the last snapshot | every hour in which an object changed | that day and the next |
 | Weekly | `weekly/YYYY-WW/` | every object, as in the oldest daily (about three weeks older than its name) | once a week | ~26 weeks |
 | Record | `lists/YYYY-MM-DD-HH/objects.tsv` | every object and the MD5 the backups hold for it | every hour | that day and the next |
 | | `current/` | the newest backed-up version of every object | | |
 | | `done/daily/…/ok`, `done/weekly/…/ok` | marks a daily or weekly complete | after its copy | with it |
 
-An object has changed when its MD5 differs from its copy in `current/`. The
-script lists both sides with `--fast-list` (one call per 1,000 objects) and
-compares the lists; rclone's `--compare-dest` would send one request per
-object. `current/` only takes versions that a snapshot holds, so after a
-failed run it is behind, never ahead, and the next run copies the difference
-again. Each daily resets `current/`, which also drops deleted objects. The
-record lets a restore leave out objects deleted before its hour, and check
-every object it puts back.
-
-A daily or weekly counts as complete only once its `done/` marker exists; a
-run that fails part-way leaves it unmarked, and the next run finishes it. A
-failed listing stops the run, so a snapshot is never redone over a good one.
-An hour is done once its record is written. Every failure prints a `FAILED`
-line and exits 1. Source and destination use the same rclone remote
+The header of `scripts/r2-backup.sh` says how a run works. An hour is
+restored from its day's daily and that day's hourlies up to it, so hourlies
+and records are pruned a whole day at a time, once the next day is over: 24
+to 48 hours are kept. Source and destination use the same rclone remote
 (`r2bk`), so each copy is a server-side `CopyObject` inside Cloudflare and no
-data passes through prod. Expiry goes by the date in the snapshot name, not
-object age.
+data passes through prod.
 
-Cost is requests: R2 bills each list call and each copy (Class A, $4.50 per
-million after the first million a month). On 28 Oct 2026 the bucket held
+**When a run fails** it writes one `FAILED:` line to the log and exits 1,
+and the next run tries again. A daily or weekly that a run did not finish
+has no `done/` marker, so it is never used. One `FAILED:` line needs no
+action. The same `FAILED:` line in two runs in a row, or "the live bucket
+lists as empty", needs a person. While the daily fails, each run stops
+before its hourly and its pruning. Nothing alerts on these lines yet.
+
+**The first run after this script was deployed** marks the dailies and
+weeklies that the old script made as "made by the old backup script, not
+checked to be complete" (`done/backfill/ok` records that this is done), and
+copies every object once into that hour's hourly and into `current/`: about
+21k Class A requests, once.
+
+**Cost** is requests: R2 bills each list call and each copy (Class A, $4.50
+per million after the first million a month). On 28 Oct 2026 the bucket held
 10,721 objects and 1 to 17 changed in an hour, so an hourly run made about
 45 Class A requests and the daily copy about 10,700: under 0.5M a month.
-Copying every object every hour, as the script did before, made about 21M
-(~$90). Storage is ~30 GB.
+Copying every object every hour, as the old script did, cost about 21M a
+month (~$90): Cloudflare measured 715k Class A requests a day on 27 Oct 2026.
+Storage is ~30 GB.
 
-`scripts/r2-backup.test.sh` runs both scripts over three simulated days
-against local folders, including a failure at each step
+`scripts/r2-backup.test.sh` runs both scripts over simulated days against
+local folders, including a failure at each step
 (CI: `.github/workflows/r2-backup.yml`).
 
 - **Credentials:** R2 API token `relay-backup-job` (Object Read & Write on
@@ -299,17 +302,28 @@ against local folders, including a failure at each step
   uploaded into the bucket under their original names, so they expire on
   their original schedule.
 
-**Restoring.** `scripts/r2-backup-restore.sh POINT TARGET [OBJECT]` puts the
-bucket, or one document or attachment, together in an empty folder, then
-checks it against the backups' record: exactly the objects that existed at
-that point, each with its MD5. A difference is an error. POINT is a daily
-(`daily/2026-10-28`), a weekly (`weekly/2026-43`, which says which daily it
-holds) or an hour: the hour is rebuilt from its day's daily and that day's
-hourlies up to it. For an hour with no record (its run failed), the script
-uses the last record before it and says so; with none, it refuses. Only
-complete snapshots are used. Copying back writes into the live bucket, and
-the relay keeps loaded documents in memory and saves them over the store, so
-make sure the document is not loaded (or stop the relay) before copying:
+**Restoring.** `scripts/r2-backup-restore.sh [--confirm] POINT TARGET [OBJECT]`
+restores the bucket, or one document or attachment, into an empty folder,
+then checks it: exactly the objects that existed at that point, each with its
+MD5. A difference is an error. POINT is one of:
+
+- a daily, `daily/2026-10-28`;
+- a weekly, `weekly/2026-43` (the script says which daily it holds);
+- an hour, `2026-10-28-14`. If that hour has no record (its run failed), the
+  script uses the last hour before it that has one, and says so. With none,
+  it refuses.
+
+OBJECT is a document folder or an attachment path; see
+[R2 Storage Structure](#r2-storage-structure). The script first prints a plan:
+the point, how many objects, what it reads and where it writes. At a terminal
+it then asks you to type `restore`. Without a terminal (for example in an AI
+agent's shell) it stops with exit 3 unless `--confirm` is given. An AI agent
+must show the owner that plan and get a yes before it adds `--confirm`, and
+again before it copies anything into the live bucket.
+
+**Before you copy anything back, make sure the relay does not have that
+document loaded, or stop the relay.** The relay keeps loaded documents in
+memory and saves them over the store, so it would overwrite the copy.
 
 ```bash
 rclone lsf --dirs-only r2bk:lens-relay-backups/lists                          # hours with a record
@@ -317,10 +331,10 @@ scripts/r2-backup-restore.sh 2026-10-28-14 /tmp/restore <doc>                 # 
 rclone copy /tmp/restore/<doc> r2bk:lens-relay-storage/<doc>                  # after inspecting it
 ```
 
-Leave out `<doc>` for the whole bucket (~600 MB). Hourly snapshots made
-before this script was deployed are full copies without a record, so the
-restore script refuses them; copy from them directly. They are pruned within
-two days.
+Leave out `<doc>` for the whole bucket (~600 MB; check the free disk first).
+Hourly snapshots that the old script made are full copies without a record,
+so the restore script refuses them; copy from them directly. They are pruned
+two days after the deploy.
 
 ## Key Files
 
