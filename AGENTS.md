@@ -58,7 +58,7 @@ docs/                 # Operational documentation
 - **Relay server URL:** https://relay.lensacademy.org
 - **Production server:** Hetzner VPS (46.224.127.155), Docker containers
 - **Storage:** Cloudflare R2 bucket `lens-relay-storage`
-- **Backups:** hourly/daily/weekly snapshots in R2 bucket `lens-relay-backups`, copied inside Cloudflare by `scripts/r2-backup.sh`; see the Backups section of `docs/server-ops.md`
+- **Backups:** daily and weekly full copies, and hourly copies of what changed, in R2 bucket `lens-relay-backups`, made inside Cloudflare by `scripts/r2-backup.sh`; restore with `scripts/r2-backup-restore.sh`, which does nothing until confirmed: show the owner the plan it prints and get a yes before you add `--confirm`, and again before you copy anything into `lens-relay-storage`; see the Backups section of `docs/server-ops.md`
 - **Tunnel:** Cloudflare Tunnel (no inbound ports needed)
 - **Relay ID:** `cb696037-0f72-4e93-8717-4e433129d789`
 - **Relay watchdog:** Detects when `relay-server` is running but unresponsive and automatically restarts it; see `docs/relay-watchdog.md`.

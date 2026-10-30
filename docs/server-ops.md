@@ -248,19 +248,46 @@ hint WEUR, Standard storage class, private):
 0 * * * * nice -n 10 /root/lens-relay/scripts/r2-backup.sh >> /var/log/r2-backup.log 2>&1
 ```
 
-| Tier | Prefix | Made | Kept |
-|------|--------|------|------|
-| Hourly | `hourly/YYYY-MM-DD-HH/` | every hour | 24 |
-| Daily | `daily/YYYY-MM-DD/` | first hourly of the day | 22 days |
-| Weekly | `weekly/YYYY-WW/` | once a week, from the oldest daily | ~26 weeks |
+| Tier | Prefix | Holds | Made | Kept |
+|------|--------|-------|------|------|
+| Daily | `daily/YYYY-MM-DD/` | every object | first run of the day | 22 days |
+| Hourly | `hourly/YYYY-MM-DD-HH/` | the objects that changed since the last snapshot | every hour in which an object changed | that day and the next |
+| Weekly | `weekly/YYYY-WW/` | every object, as in the oldest daily (about three weeks older than its name) | once a week | ~26 weeks |
+| Record | `lists/YYYY-MM-DD-HH/objects.tsv` | every object and the MD5 the backups hold for it | every hour | that day and the next |
+| | `current/` | the newest backed-up version of every object | | |
+| | `done/daily/…/ok`, `done/weekly/…/ok` | marks a daily or weekly complete | after its copy | with it |
 
-Every snapshot is a full copy of the bucket. Source and destination use the
-same rclone remote (`r2bk`), so each copy is a server-side `CopyObject`
-inside Cloudflare and no data passes through prod; a run takes a few minutes
-at low priority. Expiry goes by the date in the snapshot name, not object
-age. A failed copy is removed so the next run starts clean. Cost is mostly
-requests: ~8k objects per snapshot is ~6M Class A operations a month (about
-$23); storage is ~30 GB.
+The header of `scripts/r2-backup.sh` says how a run works. An hour is
+restored from its day's daily and that day's hourlies up to it, so hourlies
+and records are pruned a whole day at a time, once the next day is over: 24
+to 48 hours are kept. Source and destination use the same rclone remote
+(`r2bk`), so each copy is a server-side `CopyObject` inside Cloudflare and no
+data passes through prod.
+
+**When a run fails** it writes one `FAILED:` line to the log and exits 1,
+and the next run tries again. A daily or weekly that a run did not finish
+has no `done/` marker, so it is never used. One `FAILED:` line needs no
+action. The same `FAILED:` line in two runs in a row, or "the live bucket
+lists as empty", needs a person. While the daily fails, each run stops
+before its hourly and its pruning. Nothing alerts on these lines yet.
+
+**The first run after this script was deployed** marks the dailies and
+weeklies that the old script made as "made by the old backup script, not
+checked to be complete" (`done/backfill/ok` records that this is done), and
+copies every object once into that hour's hourly and into `current/`: about
+21k Class A requests, once.
+
+**Cost** is requests: R2 bills each list call and each copy (Class A, $4.50
+per million after the first million a month). On 28 Oct 2026 the bucket held
+10,721 objects and 1 to 17 changed in an hour, so an hourly run made about
+45 Class A requests and the daily copy about 10,700: under 0.5M a month.
+Copying every object every hour, as the old script did, cost about 21M a
+month (~$90): Cloudflare measured 715k Class A requests a day on 27 Oct 2026.
+Storage is ~30 GB.
+
+`scripts/r2-backup.test.sh` runs both scripts over simulated days against
+local folders, including a failure at each step
+(CI: `.github/workflows/r2-backup.yml`).
 
 - **Credentials:** R2 API token `relay-backup-job` (Object Read & Write on
   `lens-relay-storage` and `lens-relay-backups` only), configured as the
@@ -275,15 +302,39 @@ $23); storage is ~30 GB.
   uploaded into the bucket under their original names, so they expire on
   their original schedule.
 
-**Restoring.** Copying back writes into the live bucket, and the relay keeps
-loaded documents in memory and saves them over the store, so make sure the
-document is not loaded (or stop the relay) before copying:
+**Restoring.** `scripts/r2-backup-restore.sh [--confirm] POINT TARGET [OBJECT]`
+restores the bucket, or one document or attachment, into an empty folder,
+then checks it: exactly the objects that existed at that point, each with its
+MD5. A difference is an error. POINT is one of:
+
+- a daily, `daily/2026-10-28`;
+- a weekly, `weekly/2026-43` (the script says which daily it holds);
+- an hour, `2026-10-28-14`. If that hour has no record (its run failed), the
+  script uses the last hour before it that has one, and says so. With none,
+  it refuses.
+
+OBJECT is a document folder or an attachment path; see
+[R2 Storage Structure](#r2-storage-structure). The script first prints a plan:
+the point, how many objects, what it reads and where it writes. At a terminal
+it then asks you to type `restore`. Without a terminal (for example in an AI
+agent's shell) it stops with exit 3 unless `--confirm` is given. An AI agent
+must show the owner that plan and get a yes before it adds `--confirm`, and
+again before it copies anything into the live bucket.
+
+**Before you copy anything back, make sure the relay does not have that
+document loaded, or stop the relay.** The relay keeps loaded documents in
+memory and saves them over the store, so it would overwrite the copy.
 
 ```bash
-rclone lsf --dirs-only r2bk:lens-relay-backups/hourly                 # list snapshots
-rclone copy r2bk:lens-relay-backups/hourly/<snapshot>/<doc> /tmp/restore/<doc>   # inspect first
-rclone copy r2bk:lens-relay-backups/hourly/<snapshot>/<doc> r2bk:lens-relay-storage/<doc>
+rclone lsf --dirs-only r2bk:lens-relay-backups/lists                          # hours with a record
+scripts/r2-backup-restore.sh 2026-10-28-14 /tmp/restore <doc>                 # <doc> as it was at 14:00
+rclone copy /tmp/restore/<doc> r2bk:lens-relay-storage/<doc>                  # after inspecting it
 ```
+
+Leave out `<doc>` for the whole bucket (~600 MB; check the free disk first).
+Hourly snapshots that the old script made are full copies without a record,
+so the restore script refuses them; copy from them directly. They are pruned
+two days after the deploy.
 
 ## Key Files
 

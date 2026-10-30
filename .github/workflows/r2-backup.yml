@@ -1,0 +1,17 @@
+name: R2 backup scripts
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/r2-backup.yml"
+      - "scripts/r2-backup*.sh"
+
+jobs:
+  test:
+    # Ubuntu 24.04's rclone is 1.60, the version on prod
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y rclone
+      - run: scripts/r2-backup.test.sh
