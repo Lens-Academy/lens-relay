@@ -68,7 +68,7 @@
     "tsx": "^4.21.0",
     "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2",
-    "undici": "6.21.3",
+    "undici": "6.29.1",
     "unpdf": "^1.6.2",
     "y-codemirror.next": "^0.3.5",
     "yaml": "^2.9.0",
@@ -102,5 +102,11 @@
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",
     "vitest": "^4.0.18"
+  },
+  "overrides": {
+    "undici": "6.29.1",
+    "jsdom": {
+      "undici": "^7.30.1"
+    }
   }
 }
