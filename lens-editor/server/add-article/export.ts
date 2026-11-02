@@ -48,6 +48,7 @@ export function generateArticleMarkdown(
   lines.push(meta.published ? `published: ${meta.published}` : "published:");
   lines.push(`created: ${createdDate}`);
   lines.push(`accessed: ${createdDate}`);
+  if (meta.allowAuthorInTitle) lines.push("allowAuthorInTitle: true");
   if (options.reviewStatus) {
     lines.push(`review-status: ${yamlQuote(options.reviewStatus)}`);
   }

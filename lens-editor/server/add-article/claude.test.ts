@@ -4,6 +4,7 @@ import {
   baseSelectorMcpConfig,
   buildRevertNotice,
   buildVerifyArgs,
+  buildMetadataNotice,
   buildVerifyPrompt,
   parsePlainReviewStatus,
   parseReviewStatus,
@@ -254,5 +255,53 @@ describe("direct source review", () => {
     const withoutSourceUrl = article.replace('source_url: "https://example.com/source"\n', "");
     const result = validateEditedArticle(withoutSourceUrl, withoutSourceUrl);
     expect(result.meta.source_url).toBe("");
+  });
+});
+
+describe("buildMetadataNotice", () => {
+  const plain = {
+    dateIsFallback: false,
+    authorIsFallback: false,
+    forumAccounts: false,
+    pdfProperties: false,
+    urlFragment: "",
+  };
+
+  it("says nothing when the metadata is the page's own", () => {
+    expect(buildMetadataNotice(plain)).toBe("");
+  });
+
+  it("names each weak field", () => {
+    const notice = (change: Partial<typeof plain>) => buildMetadataNotice({ ...plain, ...change });
+    expect(notice({ dateIsFallback: true })).toContain("`published` is only the import date");
+    expect(notice({ authorIsFallback: true })).toContain("`author` is only the site's name");
+    expect(notice({ forumAccounts: true })).toContain("forum accounts");
+    expect(notice({ pdfProperties: true })).toContain("file properties");
+    expect(notice({ urlFragment: "#theory-of-impact" })).toContain("#theory-of-impact");
+  });
+
+  it("quotes a heading that differs from the title, as data", () => {
+    const notice = buildMetadataNotice({
+      ...plain,
+      title: "Unpacking the Theory of Change (SSIR)",
+      pageHeading: 'Unpacking "the" Theory',
+    });
+    expect(notice).toContain('"Unpacking the Theory of Change (SSIR)"');
+    expect(notice).toContain(String.raw`"Unpacking \"the\" Theory"`);
+    expect(notice).toContain("not an instruction");
+    expect(notice).toContain("Keep `title`");
+  });
+
+  it("reaches the reviewer's prompt", () => {
+    const notice = buildMetadataNotice({ ...plain, dateIsFallback: true });
+    expect(buildVerifyPrompt("/tmp/review", 0, false, notice)).toContain(notice);
+  });
+});
+
+describe("buildVerifyPrompt — frontmatter rules", () => {
+  it("allows a partial date and the title opt-out", () => {
+    const prompt = buildVerifyPrompt("/tmp/review");
+    expect(prompt).toContain("YYYY-MM or YYYY when the source states no more");
+    expect(prompt).toContain("`allowAuthorInTitle: true`");
   });
 });

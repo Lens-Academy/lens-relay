@@ -57,6 +57,7 @@ vi.mock("./claude", () => ({
   resolveArticleReviewerConfig: () => ({ provider: "claude", model: "sonnet" }),
   reviewArticle: reviewMocks.reviewArticle,
   buildRevertNotice: (reverts: { detail: string }[]) => reverts.map((r) => r.detail).join("; "),
+  buildMetadataNotice: (provenance: object) => JSON.stringify(provenance),
   ArticleReviewRejectedError: class ArticleReviewRejectedError extends Error {
     constructor(public readonly reason: string) { super(reason); }
   },
@@ -134,6 +135,80 @@ describe("processArticle table errors", () => {
       created_at: now,
       updated_at: now,
     };
+
+  const noticeOf = () => JSON.parse(reviewMocks.reviewArticle.mock.calls[0][8] as string);
+  const manifest = { fetched_at: "2026-10-01T00:00:00.000Z", source_kind: "live", media_type: "html" };
+  const extractionOf = (change: object, via = "defuddle") => ({
+    meta: { ...meta, ...change },
+    body: "Intro paragraph. ".repeat(20),
+    siteName: "",
+    linkedOut: false,
+    assessment: { flags: [] },
+    via,
+    images: [],
+  });
+
+  it("tells the reviewer which metadata is only a fallback", async () => {
+    reviewMocks.validateArticleDraft.mockResolvedValue(result([]));
+    reviewMocks.buildSourceEvidence.mockResolvedValue({
+      extraction: extractionOf({ author: [], published: "" }),
+      manifest,
+    });
+    await processArticle({ ...job(), url: "https://example.com/tables#theory-of-impact" });
+    expect(noticeOf()).toEqual({
+      dateIsFallback: true,
+      authorIsFallback: true,
+      forumAccounts: false,
+      pdfProperties: false,
+      urlFragment: "#theory-of-impact",
+      title: meta.title,
+    });
+  });
+
+  it("passes on a heading either candidate found", async () => {
+    reviewMocks.validateArticleDraft.mockResolvedValue(result([]));
+    reviewMocks.buildSourceEvidence.mockResolvedValue({
+      extraction: { ...extractionOf({}), pageHeading: "Table paper, in full" },
+      manifest,
+    });
+    await processArticle(job());
+    expect(noticeOf()).toMatchObject({ pageHeading: "Table paper, in full", title: meta.title });
+  });
+
+  it("does not call metadata a fallback when the other candidate found it", async () => {
+    reviewMocks.validateArticleDraft.mockResolvedValue(result([]));
+    const rendered = extractionOf({ author: [], published: "" });
+    const unrendered = extractionOf({ published: "2020-05" });
+    reviewMocks.buildSourceEvidence.mockResolvedValue({
+      extraction: rendered,
+      htmlCandidates: { rendered, unrendered },
+      manifest,
+    });
+    reviewMocks.reviewArticle.mockImplementation(async (_dir, markdown, reviewMeta) => ({
+      review: { decision: "pass", reason: "" },
+      markdown,
+      meta: { ...reviewMeta, author: ["A. Writer"] },
+      reverted: [],
+      model: "sonnet",
+      selectedBase: "rendered",
+      originalMarkdown: markdown,
+    }));
+    await processArticle(job());
+    expect(noticeOf()).toMatchObject({ dateIsFallback: false, authorIsFallback: false });
+  });
+
+  it("flags forum accounts, PDF properties, and ignores a text-highlight link", async () => {
+    reviewMocks.validateArticleDraft.mockResolvedValue(result([]));
+    reviewMocks.buildSourceEvidence.mockResolvedValue({ extraction: extractionOf({}, "forum-adapter"), manifest });
+    await processArticle({ ...job(), url: "https://example.com/tables#:~:text=theory" });
+    expect(noticeOf()).toMatchObject({ forumAccounts: true, pdfProperties: false, urlFragment: "" });
+
+    reviewMocks.reviewArticle.mockClear();
+    relayMocks.createRelayDoc.mockClear();
+    reviewMocks.buildSourceEvidence.mockResolvedValue({ extraction: extractionOf({ source_url: "https://example.com/other" }, "pdf-datalab"), manifest });
+    await processArticle({ ...job(), id: "tables-pdf", url: "https://example.com/other.pdf" });
+    expect(noticeOf()).toMatchObject({ forumAccounts: false, pdfProperties: true });
+  });
   };
 
   it("writes the article with the row fixed and flagged when only table errors survive every round", async () => {

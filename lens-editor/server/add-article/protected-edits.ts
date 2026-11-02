@@ -203,6 +203,9 @@ export function revertProtectedEdits(
   const originalKeys = Object.keys(original.attributes);
   const editedKeys = Object.keys(edited.attributes);
   for (const key of editedKeys) {
+    // The validator's own way out when the author is part of the title. A
+    // reviewer may add it, and only as `true`; once set it is protected.
+    if (key === "allowAuthorInTitle" && edited.attributes[key] === true) continue;
     if (!originalKeys.includes(key)) {
       reverted.push({
         kind: "frontmatter",
@@ -304,10 +307,14 @@ export function revertProtectedEdits(
     source_url: scalar(original.attributes.source_url),
     published: scalar(edited.attributes.published),
     description: scalar(edited.attributes.description),
+    ...(original.attributes.allowAuthorInTitle === true || edited.attributes.allowAuthorInTitle === true
+      ? { allowAuthorInTitle: true }
+      : {}),
   };
   if (!meta.title) throw new Error("reviewer left title empty");
   if (!meta.author.length) throw new Error("reviewer left author empty");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(meta.published)) {
+  // A source may state only a month or a year: Lens takes those as they are.
+  if (!/^\d{4}(-(0[1-9]|1[0-2])(-\d{2})?)?$/.test(meta.published)) {
     throw new Error("reviewer left published as an invalid date");
   }
   if (!parseFrontmatter(markdown).body.replace(/%%[\s\S]*?%%/g, "").trim()) {
