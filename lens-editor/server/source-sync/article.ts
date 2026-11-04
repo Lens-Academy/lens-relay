@@ -30,5 +30,5 @@ export function composeArticle(kind: string, content: SourceContent, binding: Sy
 /** The `published` date already in a file's frontmatter, so re-syncs keep it. */
 export function publishedOf(markdown: string | null): string | null {
   const frontmatter = markdown?.match(/^---\n([\s\S]*?)\n---/)?.[1];
-  return frontmatter?.match(/^published:\s*["']?(\d{4}-\d{2}-\d{2})/m)?.[1] ?? null;
+  return frontmatter?.match(/^published:\s*["']?(\d{4}(?:-\d{2}-\d{2}|-\d{2})?)(?![\d-])/m)?.[1] ?? null;
 }

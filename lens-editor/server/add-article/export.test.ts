@@ -7,6 +7,14 @@ import {
 } from "./export";
 
 describe("generateArticleMarkdown", () => {
+  it("writes allowAuthorInTitle only when it is set", () => {
+    const meta = { title: "T", author: ["A"], source_url: "https://x.com", published: "2020", description: "" };
+    expect(generateArticleMarkdown(meta, "Body", "2026-01-01")).not.toContain("allowAuthorInTitle");
+    expect(generateArticleMarkdown({ ...meta, allowAuthorInTitle: true }, "Body", "2026-01-01")).toContain(
+      "allowAuthorInTitle: true\n",
+    );
+  });
+
   it("collapses control whitespace so a multi-line title can't break the YAML", () => {
     const md = generateArticleMarkdown(
       {

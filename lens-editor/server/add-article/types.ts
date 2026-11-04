@@ -12,8 +12,10 @@ export interface ArticleMeta {
   title: string;
   author: string[];
   source_url: string;
-  published: string; // YYYY-MM-DD, empty if unknown
+  published: string; // YYYY-MM-DD, or YYYY-MM / YYYY when the source states no more; empty if unknown
   description: string; // empty if unknown
+  /** The author's name is genuinely part of the title; set by the reviewer. */
+  allowAuthorInTitle?: boolean;
 }
 
 export interface ArticleJob {

@@ -12,10 +12,12 @@ cleanup pass keeps notes added while it ran).
 
 1. Fetch the source with the importer's SSRF-safe adapters. PDFs retain their original bytes; every HTML page is rendered through Jina before extraction, while the direct response remains as unrendered provenance. Structured sources are the exception: an arXiv paper is read from its e-print LaTeX (converted by `pandoc --sandbox`, `server/add-article/arxiv-latex.ts`; arXiv's own HTML and then the PDF are the fallbacks), and LessWrong / Alignment Forum posts and wiki pages from the forum's GraphQL API, which keeps their math. Their converted HTML is the single candidate and is not rendered through Jina.
 2. Extract Markdown deterministically and prepare hosted images.
+   A table kept on another page is fetched into the source first (`server/add-article/linked-tables.ts`), so every candidate and the reviewer's evidence hold it: Springer Nature's "Full size table" pages (directly, or through Jina when walled) and Datawrapper table embeds (their `dataset.csv`). A chart stays as it was, and a table that cannot be fetched is listed in `manifest.json` (`linked_tables`) and never fails the import.
 3. Apply syntax-aware, idempotent, source-preserving normalizations. Code,
    comments, CriticMarkup, and math are opaque to these repairs.
 4. Send the complete draft to Lens Platform's `/api/content/validate-article` endpoint.
 5. Run Claude Sonnet against local source evidence, the draft, and Platform findings. Claude has only `Read,Edit`; it edits the candidate directly and cannot fetch, run commands, create files, or delegate. It decides whether clearly terminal Acknowledgements, References, or standalone series navigation should be wrapped in `:::hide`; substantive sections, footnotes, and following prose stay open. A subordinate appendix instead goes in a closed-by-default `:::callout`, never in `:::hide`.
+   The prompt names the metadata most likely to be wrong, because only the reviewer can see a date or byline printed in the page but missing from its metadata: an import date or site name standing in for one that was not found, forum account names, PDF file properties, a page heading worded differently from the title, and a link into one section of the page. The importer never turns a heading into the title itself, and always takes the whole page. The reviewer may add `allowAuthorInTitle: true` when the author's name is genuinely part of the title.
 6. Programmatically protect pipeline-owned metadata and authoring comments, regenerate metadata, and validate again. Up to two additional repair rounds are allowed.
 7. Stamp review provenance, validate the exact final file, then write it to Relay.
 
@@ -121,8 +123,7 @@ import pipeline remains explicitly Claude-only.
 Long retroactive Claude reviews can raise the local per-article guard with
 `--max-budget-usd` or extend the local timeout with `--timeout-minutes`.
 Without an explicit budget, each Claude pass gets $20 per started 50k
-characters of article, between $20 and $60. The metadata-normalization call
-(haiku, one turn) is capped at $0.20.
+characters of article, between $20 and $60.
 
 If a Claude pass ends in a usage-policy refusal (e.g. "can't help with this",
 which AI-safety papers about dangerous-capability evals can trigger), the pass

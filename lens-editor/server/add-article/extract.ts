@@ -6,7 +6,7 @@ import { Defuddle } from "defuddle/node";
 import { extractHtmlMeta, dateFromUrl, fetchRawHtml, looksLikeBlockPage } from "./fetch";
 import { assessExtraction, type Assessment } from "./confidence";
 import { findAdapter, adapterContext, type AdapterExtract } from "./adapters";
-import { normalizeArticleDom, isIntraWord } from "./normalize-dom";
+import { normalizeArticleDom, isIntraWord, CELL_BREAK_ATTR, CELL_PIPE_ATTR } from "./normalize-dom";
 import { escapeTagOpeners } from "./escape";
 import { convertSidenotes } from "./sidenotes";
 import { arxivAbsUrl } from "./adapters/arxiv";
@@ -15,6 +15,7 @@ import { SOURCE_IMAGE_SCHEME } from "./arxiv-latex";
 import {
   stripSiteSuffix,
   splitAuthors,
+  headingBesideTitle,
   toIsoDate,
   isVideoEmbedUrl,
   videoEmbedMarker,
@@ -54,6 +55,11 @@ export interface ExtractResult {
   images?: PdfPageImage[];
   /** Adapter-authored prefix that must survive normalization and LLM review. */
   requiredBodyPrefixMarkdown?: string;
+  /** The page's main heading, when it words the title differently from the
+   *  metadata. A lead for the reviewer: only a reader can tell "Unpacking the
+   *  Theory of Change" (the real title) from "The Alignment Newsletter" (a
+   *  masthead over issue #42). */
+  pageHeading?: string;
 }
 
 // A post is treated as a "link-out" when the body is short AND is essentially
@@ -110,13 +116,28 @@ function isFootnotesContainer(el: HTMLElement | null): boolean {
  * vanishes under rehype-raw). `<code>` (e.g. a LaTeXML listing in a cell, see
  * normalize-dom) stays a code span; `\|` is still a cell-safe pipe inside one.
  * Bold/italic (LaTeXML spans arrive as <strong>/<em> from normalize-dom) stay
- * `**…**` / `_…_`, and a line break (`High <br>concentration`) becomes a space.
+ * `**…**` / `_…_`, a web link stays a link, and normalize-dom's break markers
+ * become `<br>`. A link to somewhere on the page keeps only its text: its target
+ * rarely survives the import, and a dead fragment fails validation.
  */
 function fallbackCellText(cell: Element): string {
   return cellMarkdown(cell, "").replace(/\s+/g, " ").trim();
 }
 
 const CELL_EMPHASIS: Record<string, string> = { STRONG: "**", B: "**", EM: "_", I: "_" };
+
+/** A footnote marker whose note is in the article. Without one, `[^1]` would
+ *  fail validation where the plain number does not. */
+function isDefinedFootnoteRef(node: Element): boolean {
+  if (node.nodeName !== "SUP" || !node.classList.contains("footnote-ref")) return false;
+  const number = node.querySelector("a")?.getAttribute("data-footnote-ref");
+  return !!number && !!node.ownerDocument?.getElementById(`fn-${number}`);
+}
+
+/** A link target that cannot end the link or split the table cell it sits in. */
+function cellLinkTarget(href: string): string {
+  return href.replace(/[\s|()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
+}
 
 /** `cell`'s children as inline Markdown; `marks` holds the emphasis already open. */
 function cellMarkdown(cell: Element, marks: string): string {
@@ -132,6 +153,22 @@ function cellMarkdown(cell: Element, marks: string): string {
       text += node.textContent || "";
     } else if (node.nodeName === "BR") {
       text += " ";
+    } else if (node.nodeType === 1 && (node as Element).hasAttribute(CELL_BREAK_ATTR)) {
+      flush();
+      out += "<br>";
+    } else if (isDefinedFootnoteRef(node as Element)) {
+      flush();
+      out += `[^${(node as Element).querySelector("a")!.getAttribute("data-footnote-ref")}]`;
+    } else if (node.nodeName === "A" && /^https?:/i.test((node as Element).getAttribute("href") || "")) {
+      const label = cellMarkdown(node as Element, marks).replace(/\s+/g, " ");
+      if (!label.trim()) {
+        text += label;
+        return;
+      }
+      text += /^\s/.test(label) ? " " : "";
+      flush();
+      out += `[${label.trim().replace(/[[\]]/g, "\\$&")}](${cellLinkTarget((node as Element).getAttribute("href")!)})`;
+      text += /\s$/.test(label) ? " " : "";
     } else if (mark && !marks.includes(mark) && !(mark === "_" && isIntraWord(node as Element))) {
       // Emphasis must hug its text (`** x **` does not parse), so the
       // surrounding whitespace moves outside the markers.
@@ -159,6 +196,12 @@ function cellMarkdown(cell: Element, marks: string): string {
   cell.childNodes.forEach(walk);
   flush();
   return out;
+}
+
+/** Wix pages hold a tiny blurred copy of each image until it scrolls into view,
+ *  and the original sits in the path before the resize instructions. */
+function sharpWixImage(src: string): string {
+  return src.replace(/^(https:\/\/static\.wixstatic\.com\/media\/[^/]+)\/v1\/[^/]+\/[^/]*\bblur_\d+[^/]*\/[^/]+$/, "$1");
 }
 
 /** Turndown with deterministic rules for the failure modes we found in baseline. */
@@ -228,6 +271,18 @@ function makeTurndown(baseUrl: string): TurndownService {
       const display = n.className.includes("mjpage__block");
       return display ? `\n\n$$${tex}$$\n\n` : `$${tex}$`;
     },
+  });
+
+  // A table cell's line break, from normalize-dom's flattening.
+  td.addRule("cellBreak", {
+    filter: (node: HTMLElement) => node.nodeName === "SPAN" && node.hasAttribute?.(CELL_BREAK_ATTR),
+    replacement: () => "<br>",
+  });
+
+  // A `|` in a cell's text would split the cell; turndown's escaping leaves it.
+  td.addRule("cellPipe", {
+    filter: (node: HTMLElement) => node.nodeName === "SPAN" && node.hasAttribute?.(CELL_PIPE_ATTR),
+    replacement: () => "\\|",
   });
 
   // FALLBACK for tables the GFM plugin can't convert (no heading row —
@@ -426,7 +481,7 @@ function makeTurndown(baseUrl: string): TurndownService {
         return /^\d+$/.test(index) ? `\n\n![[__pdfimg_${index}__]]\n\n` : "";
       }
       try {
-        src = new URL(src, baseUrl).href;
+        src = sharpWixImage(new URL(src, baseUrl).href);
       } catch {
         /* keep */
       }
@@ -484,7 +539,36 @@ function htmlToMarkdown(bodyHtml: string, baseUrl: string): string {
   const dom = new JSDOM(`<body>${bodyHtml}</body>`, { url: baseUrl });
   const body = dom.window.document.body;
   normalizeArticleDom(body as unknown as Element, baseUrl);
-  return makeTurndown(baseUrl).turndown(body.innerHTML).trim();
+  // A table neither table rule takes stays raw HTML, with its cell markers in it.
+  return makeTurndown(baseUrl)
+    .turndown(body.innerHTML)
+    .replace(CELL_MARKER_RE, (_whole, attr: string) => (attr === CELL_BREAK_ATTR ? "<br>" : "|"))
+    .trim();
+}
+
+const CELL_MARKER_RE = new RegExp(`<span (${CELL_BREAK_ATTR}|${CELL_PIPE_ATTR})(?:="")?>[^<]*</span>`, "g");
+
+/** Inline elements holding only a space, as in `,<em> </em>word`. Extractors
+ *  drop an empty-looking element and the word break with it, so keep the space
+ *  and lose the element. A named anchor stays: links may point at it. So does
+ *  a hidden element: its space was never on the page. */
+const BLANK_INLINE_RE = /<(xmp|textarea|pre|script|style)\b[\s\S]*?<\/\1\s*>|<(a|b|em|font|i|mark|span|strong|u)(\s[^<>]*)?>((?:\s|&nbsp;|&#160;)+)<\/\2\s*>/gi;
+
+export function keepBlankInlineSpaces(html: string): string {
+  return html.replace(BLANK_INLINE_RE, (whole, rawBlock: string, _tag: string, attrs = "", space: string) =>
+    rawBlock || /[\s"'](id|name|hidden)\b|display\s*:\s*none|visibility\s*:\s*hidden/i.test(attrs) ? whole : space,
+  );
+}
+
+/** The page's visible top-level headings. Site chrome can carry an <h1> too. */
+function pageHeadings(html: string, url: string): string[] {
+  if (!/<h1[\s>]/i.test(html)) return [];
+  const doc = new JSDOM(html, { url }).window.document;
+  doc.querySelectorAll("h1 br").forEach((br) => br.replaceWith(" "));
+  return [...doc.querySelectorAll("h1")]
+    .filter((h) => !h.closest("nav, footer, aside"))
+    .map((h) => (h.textContent || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 }
 
 /** Internal: the winning extraction's metadata + provenance. */
@@ -538,7 +622,7 @@ export async function extractArticle(
   const fetchText = opts.fetchText ?? fetchRawHtml;
   // Margin sidenotes live outside the article container that content selection
   // keeps; move them into it as footnotes first.
-  html = convertSidenotes(html);
+  html = keepBlankInlineSpaces(convertSidenotes(html));
   // Deterministic seed metadata (og/meta/JSON-LD) — also gives description+siteName.
   const htmlMeta = extractHtmlMeta(html);
   const ctx = adapterContext(url, html);
@@ -821,5 +905,12 @@ export async function extractArticle(
     assessment,
     requiredBodyPrefixMarkdown: chosen.requiredBodyPrefixMarkdown,
     images: sourceImages,
+    // Site adapters read the page's heading themselves.
+    pageHeading: chosen.adapterAuthored
+      ? undefined
+      : headingBesideTitle(
+          pageHeadings(html, url).map((h) => stripSiteSuffix(h, { url, siteName: htmlMeta.siteName })),
+          meta.title,
+        ),
   };
 }

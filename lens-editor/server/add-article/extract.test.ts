@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractArticle, sectionHeadingCount } from "./extract";
+import { extractArticle, keepBlankInlineSpaces, sectionHeadingCount } from "./extract";
 
 const FORUM_SHELL = (body: string, authorHref: string, authorText: string) => `
 <!doctype html><html><head>
@@ -1101,5 +1101,199 @@ describe("extractArticle — a footnote cited twice", () => {
     expect(body).toMatch(/First ?\[\^1\] and again ?\[\^1\]\./);
     expect(body).not.toContain("[^2]");
     expect(body).toMatch(/^\[\^1\]: The only note\.$/m);
+  });
+});
+
+describe("extractArticle — table cells", () => {
+  const prose = `<p>${"Real sentence of article body text here. ".repeat(40)}</p>`;
+  const page = (table: string) =>
+    `<html><head><title>T</title></head><body><article><h1>T</h1>${prose}${table}${prose}</article></body></html>`;
+  const extract = async (table: string) => (await extractArticle(page(table), "https://example.com/post", {})).body;
+
+  // Prevents: a table with a heading row torn across lines by a paragraph or a
+  // line break in a cell, which ended the table there.
+  it("keeps a row with paragraphs and line breaks on one line", async () => {
+    const md = await extract(`<table><thead><tr><th><p>Term</p></th><th>Use</th></tr></thead>
+      <tbody><tr><td><p>one</p><p>two</p></td><td>three<br>four</td></tr></tbody></table>`);
+    expect(md).toContain("| Term | Use |");
+    expect(md).toMatch(/\| one<br>two \| three ?<br> ?four \|/);
+  });
+
+  // Prevents: the stacked items of a cell running together (the takeover table
+  // on LessWrong), and a blank spacer paragraph doubling the break.
+  it("keeps the stacked items of a cell apart in a table without a heading row", async () => {
+    const md = await extract(`<table><tr><td><p>Rapid gain</p><p><br>&nbsp;</p><p><strong>Some </strong>pressure</p></td><td>x</td></tr>
+      <tr><td>y</td><td>z</td></tr></table>`);
+    expect(md).toContain("| Rapid gain<br>**Some** pressure | x |");
+  });
+
+  it("does not add breaks at a cell's edges", async () => {
+    const md = await extract(`<table><tr><td><p>only</p></td><td><ul><li>a</li><li>b</li></ul></td></tr><tr><td>c</td><td>d</td></tr></table>`);
+    expect(md).toContain("| only | a<br>b |");
+  });
+
+  // Prevents: a table without a heading row losing its links.
+  it("keeps web links, with a target that cannot break the cell", async () => {
+    const md = await extract(`<table><tr><td><a href="https://e.org/a|b_(c)"><strong>Flash</strong> economy</a></td><td>x</td></tr>
+      <tr><td>y</td><td>z</td></tr></table>`);
+    expect(md).toContain("| [**Flash** economy](https://e.org/a%7Cb_%28c%29) | x |");
+  });
+
+  it("keeps a link's words apart from the text around it", async () => {
+    const md = await extract(`<table><tr><td>see<a href="https://e.org/a"> this </a>now</td><td>x</td></tr><tr><td>y</td><td>z</td></tr></table>`);
+    expect(md).toContain("| see [this](https://e.org/a) now | x |");
+  });
+
+  // Prevents: a `|` splitting a cell, which used to hide behind the torn row.
+  it("escapes a pipe in a cell's text, in tables with and without a heading row", async () => {
+    const headed = await extract(`<table><thead><tr><th>a|b</th><th>c</th></tr></thead><tbody><tr><td>d|e</td><td><p>f</p><p>g</p></td></tr></tbody></table>`);
+    expect(headed).toContain("| a\\|b | c |");
+    expect(headed).toContain("| d\\|e | f<br>g |");
+    const plain = await extract(`<table><tr><td>d|e</td><td>x</td></tr><tr><td>y</td><td>z</td></tr></table>`);
+    expect(plain).toContain("| d\\|e | x |");
+  });
+
+  it("leaves a pipe in code and in raw TeX to their own rules", async () => {
+    const md = await extract(`<table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td><code>x|y</code></td><td>$P(a|b)$</td></tr></tbody></table>`);
+    expect(md).toContain("`x|y`");
+    expect(md).toContain("P(a|b)");
+  });
+
+  it("keeps a line break in code out of the Markdown", async () => {
+    const md = await extract(`<table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td><code>line1<br>line2</code></td><td>x</td></tr></tbody></table>`);
+    expect(md).not.toContain("<br>");
+    expect(md).not.toContain("span");
+  });
+
+  it("does not open a link on a break when it wrapped a block", async () => {
+    const md = await extract(`<table><tr><td><a href="https://e.org/a"><div>Linked</div></a></td><td>x</td></tr><tr><td>y</td><td>z</td></tr></table>`);
+    expect(md).toContain("[Linked](https://e.org/a)");
+  });
+
+  it("keeps only the text of a link into the page", async () => {
+    const md = await extract(`<table><tr><td><a href="#Tab2">Table 2</a></td><td>x</td></tr><tr><td>y</td><td>z</td></tr></table>`);
+    expect(md).toContain("| Table 2 | x |");
+  });
+
+  // A body marker in this state already fails; a table without a heading row
+  // never did, and must not start to.
+  it("keeps the plain number when a marker's note is not in the article", async () => {
+    const md = await extract(`<table><tr><td>Fact<sup class="footnote-ref"><a href="#fn9" id="r1">9</a></sup></td><td>x</td></tr><tr><td>y</td><td>z</td></tr></table>`);
+    expect(md).not.toContain("[^");
+  });
+
+  // Prevents: a footnote marker in a cell fusing with the word before it ("X30").
+  it("keeps a footnote marker in a table without a heading row", async () => {
+    const md = await extract(`<table><tr><td>X<sup class="footnote-ref"><a href="#fn1" id="r1">1</a></sup></td><td>x</td></tr><tr><td>y</td><td>z</td></tr></table>
+      <ol class="footnotes"><li id="fn1">The note.</li></ol>`);
+    expect(md).toMatch(/\| X ?\[\^1\] \| x \|/);
+    expect(md).toContain("[^1]: The note.");
+  });
+
+});
+
+describe("extractArticle — spaces held in empty-looking elements", () => {
+  const prose = `<p>${"Real sentence of article body text here. ".repeat(40)}</p>`;
+  const extract = async (inner: string) =>
+    (await extractArticle(`<html><head><title>T</title></head><body><article><h1>T</h1>${prose}${inner}${prose}</article></body></html>`, "https://example.com/post", {})).body;
+
+  // Prevents: "if-then,commitments" and ");[Allison 2017]" in imported text.
+  it("keeps the word break", async () => {
+    const md = await extract(`<p>the <em>if-then</em>,<em> </em>commitments and 1999);<a href="https://e.org/gone"> </a><a href="https://e.org/a">Allison</a></p>`);
+    expect(md).toContain("_if-then_, commitments");
+    expect(md).toContain("1999); [Allison](https://e.org/a)");
+  });
+
+  it("leaves raw text blocks as they are", () => {
+    const html = `<xmp>Use <span> </span> for a gap</xmp><textarea><b> </b></textarea><pre><span> </span></pre>`;
+    expect(keepBlankInlineSpaces(html)).toBe(html);
+  });
+
+  it("leaves a hidden element's space off the page", () => {
+    const html = `foo<span style="display:none"> </span>bar<span hidden> </span>baz<span class="a"id="x"> </span>`;
+    expect(keepBlankInlineSpaces(html)).toBe(html);
+  });
+
+  it("reads a non-breaking space the same way", async () => {
+    expect(await extract(`<p>one<span>&nbsp;</span>two</p>`)).toMatch(/one[ \u00a0]two/);
+  });
+
+  it("leaves a named anchor, and an element holding more than a space", () => {
+    const html = `<p>a<a id="here"> </a>b<a name="x"> </a>c<em> <img src="d.png"> </em></p>`;
+    expect(keepBlankInlineSpaces(html)).toBe(html);
+  });
+});
+
+describe("extractArticle — the page's heading beside its title", () => {
+  const prose = `<p>${"Real sentence of article body text here. ".repeat(40)}</p>`;
+  const extract = (head: string, body: string, url = "https://example.com/post") =>
+    extractArticle(`<html><head>${head}</head><body>${body}</body></html>`, url, {});
+
+  // Prevents: og:title beating the visible title ("... (SSIR)"). A heading never
+  // becomes the title by itself: it was wrong too often (below). The reviewer
+  // gets it as a lead instead.
+  it("reports a heading that words the title differently, and keeps both as they were", async () => {
+    const ex = await extract(
+      '<meta property="og:title" content="Unpacking the Theory of Change (SSIR)">',
+      `<article><h1>Unpacking the Theory of Change</h1>${prose}<h2>Next section</h2>${prose}</article>`,
+    );
+    expect(ex.meta.title).toBe("Unpacking the Theory of Change (SSIR)");
+    expect(ex.pageHeading).toBe("Unpacking the Theory of Change");
+  });
+
+  // Each of these went wrong when the heading replaced the title outright.
+  it.each([
+    ["a masthead over a numbered issue", "The Alignment Newsletter #42", "<h1>The Alignment Newsletter</h1>"],
+    ["a part number", "Embedded Agency (part 2)", "<h1>Embedded Agency</h1>"],
+    ["a heading with a permalink", "Introduction to RL", '<h1>Introduction to RL<a href="#t">¶</a></h1>'],
+    ["a heading with a note marker", "On Measuring Alignment", "<h1>On Measuring Alignment<sup>1</sup></h1>"],
+    ["lines glued by a break", "Deep Learning: A Survey of Methods", "<h1>Deep Learning<br>A Survey of Methods</h1>"],
+    ["a screen-reader prefix", "Measuring Alignment Progress", '<h1><span class="sr-only">Blog post: </span>Measuring Alignment Progress</h1>'],
+  ])("never lets %s change the title", async (_name, title, heading) => {
+    const ex = await extract(`<meta property="og:title" content="${title}">`, `<article>${heading}${prose}</article>`);
+    expect(ex.meta.title).toBe(title);
+  });
+
+  it("says nothing when the heading is the title", async () => {
+    const ex = await extract(
+      '<meta property="og:title" content="Unpacking the Theory of Change">',
+      `<article><h1>Unpacking the theory of change</h1>${prose}</article>`,
+    );
+    expect(ex.pageHeading).toBeUndefined();
+  });
+
+  it("says nothing about a site name, site chrome, or two headings that both fit", async () => {
+    const title = '<meta property="og:title" content="A Real Article Title Here">';
+    expect((await extract(title, `<article><h1>Example Blog</h1>${prose}</article>`)).pageHeading).toBeUndefined();
+    expect((await extract(title, `<nav><h1>A Real Article Title</h1></nav><article>${prose}</article>`)).pageHeading).toBeUndefined();
+    expect(
+      (await extract(title, `<article><h1>A Real Article</h1><h1>Real Article Title Here Now</h1>${prose}</article>`)).pageHeading,
+    ).toBeUndefined();
+  });
+
+  it("leaves a repeated title in the body for the reviewer", async () => {
+    const ex = await extract(
+      '<meta property="og:title" content="Unpacking the Theory of Change (SSIR)">',
+      `<section><p>Lead.</p></section><h2>Unpacking the Theory of Change</h2>${prose}`,
+    );
+    expect(ex.body).toContain("Unpacking the Theory of Change");
+  });
+});
+
+describe("extractArticle — Wix placeholders", () => {
+  const prose = `<p>${"Real sentence of article body text here. ".repeat(40)}</p>`;
+  const extract = async (src: string) =>
+    (await extractArticle(`<html><head><title>T</title></head><body><article><h1>T</h1>${prose}<img alt="Skyline" src="${src}">${prose}</article></body></html>`, "https://example.com/post", {})).body;
+  const media = "https://static.wixstatic.com/media/4bc7041ef2e94013a1802911c4c70070.jpg";
+
+  // Prevents: hosting a 147-pixel blurred placeholder as the article's image.
+  it("takes the original instead of the blurred placeholder", async () => {
+    const md = await extract(`${media}/v1/fill/w_147,h_98,al_c,q_80,usm_0.66_1.00_0.01,blur_2/4bc7041ef2e94013a1802911c4c70070.jpg`);
+    expect(md).toContain(`![Skyline](${media})`);
+  });
+
+  it("leaves a sized image that is not blurred", async () => {
+    const sized = `${media}/v1/fill/w_1200,h_800,al_c,q_85/4bc7041ef2e94013a1802911c4c70070.jpg`;
+    expect(await extract(sized)).toContain(`![Skyline](${sized})`);
   });
 });

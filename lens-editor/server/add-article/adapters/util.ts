@@ -65,6 +65,27 @@ export function stripSiteSuffix(
   return t;
 }
 
+function titleWords(title: string): string[] {
+  return title.toLowerCase().replace(/['’]/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/**
+ * The one heading that seems to name the same article as `title` in other
+ * words, if there is one: it shares most of the longer title's words, without
+ * being the same title. Far from proof, as a masthead over a numbered issue
+ * passes too, so this only ever points a reader at the difference.
+ */
+export function headingBesideTitle(headings: string[], title: string): string | undefined {
+  const words = new Set(titleWords(title));
+  const matches = [...new Set(headings)].filter((heading) => {
+    const own = new Set(titleWords(heading));
+    const shared = [...own].filter((word) => words.has(word)).length;
+    return shared / Math.max(own.size, words.size || 1) >= 0.5 && heading.length <= 300;
+  });
+  const sameWords = matches.length === 1 && titleWords(matches[0]).join(" ") === titleWords(title).join(" ");
+  return matches.length === 1 && !sameWords ? matches[0] : undefined;
+}
+
 /**
  * Normalize an author display string. Some sites render bylines as a handle
  * (e.g. "Joe_Carlsmith"); turn underscores into spaces and collapse

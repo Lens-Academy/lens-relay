@@ -50,6 +50,7 @@ vi.mock("./claude", () => ({
   resolveArticleReviewerConfig: () => ({ provider: "claude", model: "sonnet" }),
   reviewArticle: reviewMocks.reviewArticle,
   buildRevertNotice: (reverts: { detail: string }[]) => reverts.map((r) => r.detail).join("; "),
+  buildMetadataNotice: (provenance: object) => JSON.stringify(provenance),
   ArticleReviewRejectedError: class ArticleReviewRejectedError extends Error {
     constructor(public readonly reason: string) { super(reason); }
   },

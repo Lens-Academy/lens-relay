@@ -12,6 +12,7 @@ import {
   MAX_REVIEW_ROUNDS,
   UNREVIEWED_STATUS,
   REVIEW_VERSION,
+  buildMetadataNotice,
   buildRevertNotice,
   resolveArticleReviewerConfig,
   reviewArticle,
@@ -346,6 +347,16 @@ export function ensureRequiredMeta(
   return { ...meta, author, published: meta.published || createdDate };
 }
 
+/** The fragment of a submitted URL, unless it is a browser's text-highlight link. */
+function urlFragment(url: string): string {
+  try {
+    const { hash } = new URL(url);
+    return hash.startsWith("#:~:") ? "" : hash;
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Import an article deterministically: fetch raw HTML, isolate the article and
  * convert HTML→Markdown with a fixed converter (no LLM in the body path), then
@@ -435,6 +446,13 @@ export async function processArticle(
       // relabelling that companion body as the rendered candidate.
       ex = { ...ex, meta: { ...ex.meta, title: titledCandidate.meta.title } };
     }
+  }
+  if (evidence.manifest.linked_tables) {
+    await reporter.programmatic({
+      code: "programmatic.linked-tables-inlined",
+      count: evidence.manifest.linked_tables.inlined.length,
+      detail: evidence.manifest.linked_tables,
+    });
   }
   await reporter.extraction({
     via: ex.via,
@@ -789,6 +807,16 @@ export async function processArticle(
       signal,
       reviewer,
       reviewCandidates,
+      buildMetadataNotice({
+        // Either candidate may have found what the other missed.
+        dateIsFallback: availableExtractions.every((candidate) => !candidate.meta.published),
+        authorIsFallback: availableExtractions.every((candidate) => candidate.meta.author.length === 0),
+        forumAccounts: ex.via === "forum-adapter",
+        pdfProperties: ex.via.startsWith("pdf"),
+        urlFragment: urlFragment(job.url),
+        pageHeading: availableExtractions.map((candidate) => candidate.pageHeading).find(Boolean),
+        title: meta.title,
+      }),
     );
     trackReviewModel(outcome.model);
     if (

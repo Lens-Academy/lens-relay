@@ -47,6 +47,12 @@
  *     straight after a letter cannot open emphasis, so readers saw the
  *     underscores. Emphasis around nothing but punctuation is invisible
  *     anyway, so drop the tag and keep the text.
+ *
+ *  9. Table cells. A Markdown table row is one line, but a cell can hold
+ *     paragraphs, lists and line breaks. Flatten those to inline content with a
+ *     break marker between the parts, so a stacked cell keeps its items apart
+ *     and a table with a heading row is not torn across lines. A literal `|`
+ *     is marked too, since it would split the cell.
  */
 
 /** Drop leading blank lines and trailing whitespace, keeping the first line's indent. */
@@ -632,6 +638,14 @@ function hoistEdgeBreaks(root: Element): void {
   }
 }
 
+/** Unwrap emphasis inside emphasis of the same kind. `<b>Table 1 <b>Terms</b></b>`
+ *  became `**Table 1 **Terms****`, where the markers no longer pair. */
+function unwrapNestedEmphasis(root: Element): void {
+  for (const el of [...root.querySelectorAll("strong strong, strong b, b strong, b b, em em, em i, i em, i i")]) {
+    el.replaceWith(...el.childNodes);
+  }
+}
+
 /** Unwrap emphasis elements whose text is only punctuation and whitespace (`<em>.</em>`). */
 function unwrapPunctuationEmphasis(root: Element): void {
   for (const el of [...root.querySelectorAll(EMPHASIS)].reverse()) {
@@ -640,13 +654,144 @@ function unwrapPunctuationEmphasis(root: Element): void {
   }
 }
 
-/** Normalize an article body DOM subtree in place (listings, citations, fonts, breaks, footnotes, links). */
+/** Marks a line break inside a table cell; extract.ts writes it as `<br>`. */
+export const CELL_BREAK_ATTR = "data-lens-cell-break";
+/** Marks a literal `|` in a table cell; extract.ts writes it as `\|`. */
+export const CELL_PIPE_ATTR = "data-lens-cell-pipe";
+
+const CELL_BLOCKS =
+  "address, article, aside, blockquote, center, dd, details, dir, div, dl, dt, fieldset, figcaption, figure, footer, " +
+  "form, h1, h2, h3, h4, h5, h6, header, hgroup, hr, li, main, menu, nav, ol, p, section, summary, ul";
+
+function cellBreak(doc: Document): Element {
+  const span = doc.createElement("span");
+  span.setAttribute(CELL_BREAK_ATTR, "");
+  span.textContent = "<br>"; // an empty span would count as blank and never reach its turndown rule
+  return span;
+}
+
+/** Replace `el`'s line breaks and block elements, at any depth, with break markers. */
+function flattenCellBlocks(el: Element, doc: Document): void {
+  for (const child of [...el.children]) {
+    if (child.nodeName === "CODE") continue; // code keeps its text; a marker would print as `<br>`
+    if (child.nodeName === "BR") {
+      // LaTeXML's break only wraps a line of one label; it is not a new item.
+      child.replaceWith(child.classList.contains("ltx_break") ? doc.createTextNode(" ") : cellBreak(doc));
+      continue;
+    }
+    flattenCellBlocks(child, doc);
+    if (child.matches(CELL_BLOCKS)) child.replaceWith(cellBreak(doc), ...child.childNodes, cellBreak(doc));
+  }
+}
+
+function isCellBreak(node: ChildNode | null): boolean {
+  return node?.nodeType === 1 && (node as Element).hasAttribute(CELL_BREAK_ATTR);
+}
+
+/** Text that shows as nothing but space, a non-breaking one included. */
+function isBlankText(node: ChildNode | null): boolean {
+  return node?.nodeType === 3 && !(node.textContent || "").trim();
+}
+
+/** Move break markers at the edge of an inline element out of it, keeping the
+ *  element's text as it is: a link or emphasis that wrapped a block must neither
+ *  open nor close on a break, and the break still parts it from its neighbour.
+ *  Inner elements go first, so a break leaves every element around it. */
+function hoistCellBreaks(cell: Element): void {
+  /** The first break walking from `start`, past blank text. */
+  const breakFrom = (start: ChildNode | null, next: "nextSibling" | "previousSibling") => {
+    let node = start;
+    while (isBlankText(node)) node = node![next];
+    return isCellBreak(node) ? node : null;
+  };
+  for (const el of [...cell.querySelectorAll("*")].reverse()) {
+    if (isCellBreak(el)) continue;
+    for (let b = breakFrom(el.firstChild, "nextSibling"); b; b = breakFrom(el.firstChild, "nextSibling")) el.before(b);
+    for (let b = breakFrom(el.lastChild, "previousSibling"); b; b = breakFrom(el.lastChild, "previousSibling")) el.after(b);
+  }
+  // Nested blocks leave runs of breaks inside a link or emphasis too.
+  for (const b of cell.querySelectorAll(`[${CELL_BREAK_ATTR}]`)) {
+    if (breakFrom(b.previousSibling, "previousSibling")) b.remove();
+  }
+}
+
+/** Drop break markers at the cell's edges and all but one of a run, with the blank text between them. */
+function trimCellBreaks(cell: Element): void {
+  let seenContent = false;
+  let lastBreak: ChildNode | null = null;
+  for (const node of [...cell.childNodes]) {
+    if (isCellBreak(node)) {
+      if (!seenContent || lastBreak) node.remove();
+      else lastBreak = node;
+    } else if (isBlankText(node)) {
+      if (!seenContent || lastBreak) node.remove();
+    } else {
+      seenContent = true;
+      lastBreak = null;
+    }
+  }
+  lastBreak?.remove();
+}
+
+/** Where a cell's `|` needs no marking, or a marker would print: code protects
+ *  its own, a formula holds its TeX in an attribute, the rest are raw text. */
+const CELL_TEXT_LEFT_ALONE = "code, math, .mjpage, .math-tex, xmp, noembed, noframes, noscript, textarea";
+
+/** Keep a `|` in a cell's text, link or image from splitting the cell. In raw
+ *  `$…$` TeX a `|` is `normalizeTables`' to fix. A link's hover title is not
+ *  article text, so it can go. */
+function markCellPipes(cell: Element, doc: Document): void {
+  if (!cell.innerHTML.includes("|")) return;
+  cell.querySelectorAll('a[title*="|"]').forEach((a) => a.removeAttribute("title"));
+  cell.querySelectorAll('a[href*="|"]').forEach((a) => a.setAttribute("href", a.getAttribute("href")!.replace(/\|/g, "%7C")));
+  cell.querySelectorAll('img[alt*="|"]').forEach((img) => img.setAttribute("alt", img.getAttribute("alt")!.replace(/\s*\|\s*/g, " / ")));
+  if (cell.textContent?.includes("$")) return;
+  const walker = doc.createTreeWalker(cell, 4 /* NodeFilter.SHOW_TEXT */);
+  const hits: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const text = n as Text;
+    if (text.data.includes("|") && !text.parentElement?.closest(CELL_TEXT_LEFT_ALONE)) hits.push(text);
+  }
+  for (const text of hits) {
+    const parts: (Element | string)[] = [];
+    text.data.split("|").forEach((part, i) => {
+      if (i > 0) {
+        const span = doc.createElement("span");
+        span.setAttribute(CELL_PIPE_ATTR, "");
+        span.textContent = "|";
+        parts.push(span);
+      }
+      if (part) parts.push(part);
+    });
+    text.replaceWith(...parts);
+  }
+}
+
+/** Bring every table cell's content down to one line of inline content. Display
+ *  equations (LaTeXML layout tables) are not tables, and a cell holding a
+ *  nested table or preformatted text has no one-line form. */
+function flattenTableCells(root: Element): void {
+  const doc = root.ownerDocument;
+  if (!doc) return;
+  for (const cell of root.querySelectorAll("td, th")) {
+    if (cell.closest(".ltx_equation, .ltx_equationgroup")) continue;
+    if (cell.querySelector("table, pre")) continue;
+    flattenCellBlocks(cell, doc);
+    hoistCellBreaks(cell);
+    trimCellBreaks(cell);
+    markCellPipes(cell, doc);
+  }
+}
+
+/** Normalize an article body DOM subtree in place (listings, citations, fonts, breaks, footnotes, links, table cells). */
 export function normalizeArticleDom(root: Element, baseUrl: string): void {
   convertLtxListings(root);
   repairLtxCitations(root);
   convertLtxFontSpans(root);
+  unwrapNestedEmphasis(root);
   unwrapPunctuationEmphasis(root);
   hoistEdgeBreaks(root);
+  flattenTableCells(root);
   normalizeFootnotes(root);
   localizeSelfFragments(root, baseUrl);
   absolutizeLinks(root, baseUrl);

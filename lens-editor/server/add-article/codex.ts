@@ -10,9 +10,9 @@ export function buildCodexVerifyPrompt(
   workDir: string,
   repairRound = 0,
   requiresBaseSelection = false,
-  revertNotice = "",
+  passNotice = "",
 ): string {
-  return buildVerifyPrompt(workDir, repairRound, requiresBaseSelection, revertNotice)
+  return buildVerifyPrompt(workDir, repairRound, requiresBaseSelection, passNotice)
     .replaceAll(
       "edit article.md in place",
       "edit article.md in place with apply_patch",
@@ -29,7 +29,7 @@ export function buildCodexArgs(
   model = DEFAULT_CODEX_REVIEW_MODEL,
   repairRound = 0,
   requiresBaseSelection = false,
-  revertNotice = "",
+  passNotice = "",
 ): string[] {
   const args = [
     "exec",
@@ -57,7 +57,7 @@ export function buildCodexArgs(
       `mcp_servers.article_review.args=${JSON.stringify(selector.args)}`,
     );
   }
-  args.push(buildCodexVerifyPrompt(workDir, repairRound, requiresBaseSelection, revertNotice));
+  args.push(buildCodexVerifyPrompt(workDir, repairRound, requiresBaseSelection, passNotice));
   return args;
 }
 
@@ -135,7 +135,7 @@ export async function runCodexArticleVerify(
   signal?: AbortSignal,
   requiresBaseSelection = false,
   selectorEnv?: NodeJS.ProcessEnv,
-  revertNotice = "",
+  passNotice = "",
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-article-codex-"));
   const statusPath = path.join(workDir, ".review-status.txt");
@@ -152,7 +152,7 @@ export async function runCodexArticleVerify(
     await fs.cp(path.join(sourceWorkDir, "evidence"), path.join(workDir, "evidence"), { recursive: true });
     const result = await spawnCodex(
       workDir,
-      buildCodexArgs(workDir, statusPath, model, repairRound, requiresBaseSelection, revertNotice),
+      buildCodexArgs(workDir, statusPath, model, repairRound, requiresBaseSelection, passNotice),
       timeoutMs,
       signal,
       selectorEnv,
