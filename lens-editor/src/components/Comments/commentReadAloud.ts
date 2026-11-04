@@ -8,7 +8,7 @@
  * (no read-aloud, tests) comment clicks behave as usual.
  */
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, useSyncExternalStore } from 'react';
 import type { ReadAloudEngine, ReadingUnit } from '../../lib/read-aloud/engine';
 import { splitSentences, type CharRange } from '../../lib/read-aloud/text';
 import type { ThreadView } from './types';
@@ -18,6 +18,12 @@ export const CommentReadAloudContext = createContext<ReadAloudEngine | null>(nul
 export function useCommentReadAloudEngine(): ReadAloudEngine | null {
   return useContext(CommentReadAloudContext);
 }
+
+/** Whether audio plays (or is about to): when a click on a comment reads it. Re-renders only when that changes. */
+export function useReadAloudPlaying(engine: ReadAloudEngine | null): boolean {
+  return useSyncExternalStore(engine?.subscribe ?? noopSubscribe, () => engine?.isPlaying ?? false);
+}
+const noopSubscribe = () => () => {};
 
 /** Silence between one message of a thread and the next, in seconds. */
 const MESSAGE_PAUSE_S = 0.5;

@@ -5,7 +5,6 @@ import { formatTimestamp } from '../../lib/format-timestamp';
 import { AddCommentForm } from './AddCommentForm';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useMenuPopover } from '../Menu/useMenuPopover';
-import { useReadAloudSnapshot } from '../ReadAloud/useReadAloudSnapshot';
 import {
   buildThreadReading,
   textOffsetAtPoint,
@@ -13,6 +12,7 @@ import {
   unitAtOffset,
   useCommentReadAloudEngine,
   useHeardInThread,
+  useReadAloudPlaying,
   type HeardInMessage,
 } from './commentReadAloud';
 
@@ -166,11 +166,10 @@ export function CommentCard(props: CommentCardProps): ReactElement {
   // Read-aloud: while audio plays, a click on a message's text reads the
   // thread from there (commentReadAloud.ts), and the heard sentence is marked.
   const readAloud = useCommentReadAloudEngine();
-  const readAloudSnap = useReadAloudSnapshot(readAloud);
-  const listening = readAloudSnap != null && (readAloudSnap.status === 'playing' || readAloudSnap.status === 'loading');
+  const listening = useReadAloudPlaying(readAloud);
   const heard = useHeardInThread(readAloud, thread);
   const readFrom = (message: MessageView, offset: number): boolean => {
-    if (!readAloud?.isPlaying) return false;
+    if (!readAloud?.isPlaying) return false; // Paused since the render
     const reading = buildThreadReading(thread);
     const unit = unitAtOffset(reading, message.id, offset);
     if (unit == null) return false;

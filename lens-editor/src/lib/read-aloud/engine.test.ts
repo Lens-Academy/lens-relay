@@ -222,4 +222,20 @@ describe('ReadAloudEngine', () => {
     expect(engine.getSnapshot().source).toBe(PAGE_SOURCE);
     expect(requested[0]).toBe('Page two');
   });
+
+  it('resumes the page at the same sentence after an edit above it during a comment', async () => {
+    const { engine, requested } = setup();
+    engine.setUnits([{ text: 'Page one' }, { text: 'Page two' }, { text: 'Page three' }]);
+    engine.playPage(2);
+    await flush();
+    runFrame();
+    engine.playOther('comment:t1', [{ text: 'Hello' }]);
+    // Two sentences inserted above; the caller's mapping (here a stale one) is only a hint.
+    engine.setUnits([{ text: 'New a' }, { text: 'New b' }, { text: 'Page one' }, { text: 'Page two' }, { text: 'Page three' }], 0);
+    engine.stop();
+    requested.length = 0;
+    engine.play();
+    await flush();
+    expect(requested[0]).toBe('Page three');
+  });
 });

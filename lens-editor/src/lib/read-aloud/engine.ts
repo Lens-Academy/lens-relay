@@ -90,6 +90,20 @@ export function prefetchDepthFor(rate: number): number {
   return rate <= 1.5 ? BASE_PREFETCH : BASE_PREFETCH + Math.ceil((rate - 1.5) / 0.75);
 }
 
+/**
+ * Where unit `i` of `old` is in `units` after an edit: the same text near
+ * `hint` (the caller's mapping) or near `i`, else the position clamped.
+ */
+function findMoved(old: ReadingUnit[], units: ReadingUnit[], i: number, hint?: number | null): number {
+  const text = old[i]?.text;
+  for (const base of hint != null ? [hint, i] : [i]) {
+    for (let d = 0; d <= 8; d = d > 0 ? -d : 1 - d) {
+      if (units[base + d]?.text === text) return base + d;
+    }
+  }
+  return Math.max(0, Math.min(hint ?? i, units.length - 1));
+}
+
 export class ReadAloudEngine {
   private units: ReadingUnit[] = [];
   /** The page's units, kept while another source is read. */
@@ -162,9 +176,14 @@ export class ReadAloudEngine {
    * kept for every unit whose text is unchanged.
    */
   setUnits(units: ReadingUnit[], current?: number | null) {
+    const oldPage = this.pageUnits;
     this.pageUnits = units;
-    // Another source is being read: the page's units wait until it is back.
-    if (this.snapshot.source !== PAGE_SOURCE) return;
+    // Another source is being read: the page's units wait until it is back,
+    // and the sentence to resume at follows the edit by its text.
+    if (this.snapshot.source !== PAGE_SOURCE) {
+      if (this.resumeAt != null) this.resumeAt = findMoved(oldPage, units, this.resumeAt, current);
+      return;
+    }
     const old = this.units;
     this.units = units;
     this.update({ unitCount: units.length });

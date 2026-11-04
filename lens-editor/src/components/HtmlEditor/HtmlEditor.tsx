@@ -584,9 +584,9 @@ export function HtmlEditor({
           </div>
         )}
         {mode !== 'source' && commentsVisible && !isMobile && (
+          <CommentReadAloudContext.Provider value={readAloudOn ? readAloud : null}>
           <div className="flex w-80 flex-shrink-0 flex-col border-l border-gray-200 bg-gray-50/50">
             <div className="relative min-h-0 flex-1 overflow-hidden">
-            <CommentReadAloudContext.Provider value={readAloudOn ? readAloud : null}>
             <CommentsLayer
               ref={commentsLayerRef}
               threads={placedViews}
@@ -604,7 +604,6 @@ export function HtmlEditor({
               draft={draftComment}
               emptyHint={unplacedViews.length > 0 ? '' : emptyHint}
             />
-            </CommentReadAloudContext.Provider>
             </div>
             {unplacedViews.length > 0 && (
               // Comments whose text is gone have no place in the margin:
@@ -640,6 +639,7 @@ export function HtmlEditor({
               </div>
             )}
           </div>
+          </CommentReadAloudContext.Provider>
         )}
       </div>
       {isMobile && (

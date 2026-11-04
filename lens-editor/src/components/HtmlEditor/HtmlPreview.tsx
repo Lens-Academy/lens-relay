@@ -815,7 +815,9 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
             engine.setUnits(units);
             engine.playPage(play);
           } else {
-            const cur = engine.getSnapshot().current;
+            // `current` counts in the page's units only while the page is read.
+            const snap = engine.getSnapshot();
+            const cur = snap.source === PAGE_SOURCE ? snap.current : null;
             engine.setUnits(units, cur === null ? null : findUnit(units, previous[cur]?.text, cur));
           }
           break;

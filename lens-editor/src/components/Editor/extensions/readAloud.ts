@@ -228,7 +228,9 @@ export class ReadAloudController {
     if (this.engine.isPlaying) {
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY }, false);
       const target = pos == null ? null : unitAtPos(reading, pos);
-      const range = target == null || target === this.engine.getSnapshot().current ? null : reading.docRanges[target];
+      const snap = this.engine.getSnapshot();
+      const heardHere = snap.source === PAGE_SOURCE && target === snap.current;
+      const range = target == null || heardHere ? null : reading.docRanges[target];
       const prev = view.state.field(marksField).marks.hover;
       if (prev?.from !== range?.from) this.dispatch({ hover: range });
       view.contentDOM.classList.toggle('cm-read-aloud-over-text', target != null);
