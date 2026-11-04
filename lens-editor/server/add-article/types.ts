@@ -2,6 +2,7 @@ import type {
   ArticleImportMode,
   ArticleJobStatus,
 } from "../../shared/article-import-contract";
+import type { JobLinkBack } from "../../shared/source-links-contract";
 import type { VideoInput } from "../add-video/video-url";
 
 export type { ArticleImportMode };
@@ -86,6 +87,8 @@ export interface ArticleJob {
    *  replacing its transcript and timings in place, instead of skipping it as
    *  a duplicate. */
   replaceExisting?: boolean;
+  /** Pages whose links to this source become wikilinks once the job ends. */
+  link_back?: JobLinkBack[];
   created_at: string;
   updated_at: string;
 }

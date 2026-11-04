@@ -9,6 +9,7 @@ pub mod doc_connection;
 pub mod doc_resolver;
 pub mod doc_sync;
 pub mod event;
+pub mod external_links;
 pub mod link_indexer;
 pub mod link_parser;
 pub mod metrics;

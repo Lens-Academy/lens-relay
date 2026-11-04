@@ -34,9 +34,9 @@ interface TableWidgetData {
 // them with a backslash when writing user input to the doc; reverse the
 // escape when displaying. Without this, typing or pasting `|` would split
 // the row into a new column on the next reparse. A wikilink is left as it is:
-// our table parser keeps the `|` of [[note|alias]] in the cell, and the relay's
-// link index and the platform read that form but not Obsidian's [[note\|alias]]
-// (which GitHub needs, and which the editor reads too).
+// our table parser keeps the `|` of [[note|alias]] in the cell, and the platform
+// reads that form but not Obsidian's [[note\|alias]] (which GitHub needs, and
+// which the editor and the relay's link index read too).
 function escapeForCell(s: string): string {
   let out = '';
   for (let i = 0; i < s.length; i++) {

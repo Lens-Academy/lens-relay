@@ -281,6 +281,44 @@ mod tests {
         read_doc_content(server, &doc_id)
     }
 
+    // Prevents: a page uploaded in one go missing the note a create or an edit
+    // would have ended with, since the uploader never sees its text as tokens
+    #[tokio::test]
+    async fn upload_inherits_the_external_links_note() {
+        let server = build_blob_test_server_with_folder().await;
+        let mut access = default_access();
+        access.raw_token = Some("tok".to_string());
+        let sid = server.mcp_sessions.create_session(access, None, None);
+
+        let ticket = issue(&server, &sid, json!({"file_path": "Lens/Reading.md"}))
+            .await
+            .unwrap();
+        let page = "[a](https://example.com/a)\n";
+        let (status, text) = perform_upload(&server, &ticket, Body::from(page)).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert!(
+            text.contains("External links: this page links to 1 source"),
+            "{text}"
+        );
+
+        let ticket = issue(
+            &server,
+            &sid,
+            json!({"file_path": "Lens/Reading.md", "replace": true}),
+        )
+        .await
+        .unwrap();
+        let page = "[a](https://example.com/a)\n[b](https://example.com/b)\n";
+        let (status, text) = perform_upload(&server, &ticket, Body::from(page)).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert!(
+            text.contains("External links: this edit adds 1 source"),
+            "{text}"
+        );
+        assert!(text.contains("https://example.com/b (line 2)"), "{text}");
+        assert!(!text.contains("https://example.com/a (line"), "{text}");
+    }
+
     // Prevents: the link creating a file through a path other than `create`,
     // or a spent link working a second time.
     #[tokio::test]

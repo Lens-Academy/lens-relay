@@ -10,6 +10,7 @@ import { EditorArea } from './EditorArea';
 import { DisplayNameProvider } from '../../contexts/DisplayNameContext';
 import { RELAY_ID } from '../../App';
 import { getPromotionStatus } from '../../lib/promotion-api';
+import { useYDoc as sharedTestDoc } from '../../lib/ydoc-provider';
 
 const mocks = vi.hoisted(() => ({
   metadata: null as null | Record<string, { id: string; type: 'markdown'; version: number }>,
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
     folderUuid: null as string | null,
     isAllFolders: true,
   },
+  sourceBarThrows: false,
 }));
 
 const renderWithProviders = (ui: React.ReactElement) =>
@@ -110,6 +112,16 @@ vi.mock('../DiscussionPanel', () => ({
 vi.mock('../DiscussionPanel/useHasDiscussion', () => ({
   useHasDiscussion: () => false,
 }));
+
+vi.mock('../SourceLinksBar/useSourceLinks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../SourceLinksBar/useSourceLinks')>();
+  return {
+    useSourceLinks: (options: Parameters<typeof actual.useSourceLinks>[0]) => {
+      if (mocks.sourceBarThrows) throw new Error('A bug in the sources bar');
+      return actual.useSourceLinks(options);
+    },
+  };
+});
 
 describe('EditorArea', () => {
   beforeEach(() => {
@@ -323,5 +335,110 @@ describe('EditorArea', () => {
     expect(within(dialog).queryByText('Other.md')).not.toBeInTheDocument();
 
     document.body.removeChild(headerControls);
+  });
+});
+
+describe('EditorArea sources bar', () => {
+  const DOC_UUID = 'c0000001-0000-4000-8000-000000000001';
+  const DOC_ID = `${RELAY_ID}-${DOC_UUID}`;
+  const LINK = 'https://example.com/post';
+  const REGION = { name: 'Sources on this page' };
+  const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const { urls } = JSON.parse(String(init?.body)) as { urls: string[] };
+    return new Response(JSON.stringify({
+      ready: true,
+      results: urls.map((url) => ({ url, status: 'queued', id: 'j1' })),
+      links: urls.map((url) => ({ url, key: url, kind: 'article', state: 'new' })),
+      queue: { workers: 2, avg_job_minutes: 4, queued: 0, processing: 0 },
+    }));
+  });
+
+  function setText(text: string) {
+    const contents = sharedTestDoc().getText('contents');
+    contents.delete(0, contents.length);
+    contents.insert(0, text);
+  }
+
+  function renderArea(path: string) {
+    mocks.metadata = { [path]: { id: DOC_UUID, type: 'markdown', version: 0 } };
+    return renderWithProviders(<EditorArea currentDocId={DOC_ID} />);
+  }
+
+  beforeEach(() => {
+    mocks.sourceBarThrows = false;
+    mocks.metadata = null;
+    mocks.auth = {
+      canWrite: true,
+      canEdit: true,
+      canPromote: true,
+      role: 'edit',
+      folderUuid: null,
+      isAllFolders: true,
+    };
+    fetchMock.mockClear();
+    vi.stubGlobal('fetch', fetchMock);
+    localStorage.clear();
+    vi.mocked(getPromotionStatus).mockResolvedValue({ state: 'clean' } as never);
+    setText(`See ${LINK}`);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setText('');
+  });
+
+  it('floats a page\'s sources over the top of the page, taking up no room', async () => {
+    renderArea('/Lens/Notes/page.md');
+    const bar = await screen.findByRole('region', REGION);
+    expect(within(bar).getByText("example.com/post isn't in the library yet.")).toBeInTheDocument();
+    // Outside the scroller, so it stays in view from 300 lines down
+    expect(bar.compareDocumentPosition(screen.getByTestId('mock-editor')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const wrapper = bar.parentElement as HTMLElement;
+    expect(wrapper.className).toContain('h-0');
+    expect(wrapper.className).toContain('absolute');
+    // In the page area, where the paste prompt and menus can go over it
+    expect(wrapper.parentElement?.className).toContain('lens-page-area');
+  });
+
+  it('passes Suggesting mode down', async () => {
+    localStorage.setItem('lens-editor:suggestion-mode', 'true');
+    renderArea('/Lens/Notes/page.md');
+    const bar = await screen.findByRole('region', REGION);
+    await userEvent.click(within(bar).getByRole('button', { name: 'Import and link' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const body = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as { linkBack: { protectHuman?: boolean } };
+    expect(body.linkBack.protectHuman).toBe(true);
+    localStorage.removeItem('lens-editor:suggestion-mode');
+  });
+
+  it('asks nothing for someone who can only suggest', async () => {
+    mocks.auth = { ...mocks.auth, canEdit: false };
+    renderArea('/Lens/Notes/page.md');
+    await act(async () => {});
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('region', REGION)).not.toBeInTheDocument();
+  });
+
+  it('asks nothing for a link scoped to one folder other than Lens Edu', async () => {
+    mocks.auth = { ...mocks.auth, isAllFolders: false, folderUuid: 'some-other-folder' };
+    renderArea('/Lens/Notes/page.md');
+    await act(async () => {});
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing on a Lens Edu page', async () => {
+    renderArea('/Lens Edu/Lenses/page.md');
+    await act(async () => {});
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('region', REGION)).not.toBeInTheDocument();
+  });
+
+  it('keeps a crash in the bar away from the editor', async () => {
+    mocks.sourceBarThrows = true;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderArea('/Lens/Notes/page.md');
+    expect(screen.getByTestId('mock-editor')).toBeInTheDocument();
+    expect(screen.getByText(/Sources could not be shown/)).toBeInTheDocument();
+    consoleError.mockRestore();
   });
 });

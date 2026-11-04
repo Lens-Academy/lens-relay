@@ -35,6 +35,12 @@ export function tokenAllowsFolderName(
   return payload.folder === EDU_FOLDER && folderName === EDU_FOLDER_NAME;
 }
 
+/** Whether a verified token reaches every folder, so anything a job says about
+ *  a page is something it may see. */
+export function tokenCoversAllFolders(payload: ShareTokenPayload | undefined): boolean {
+  return payload?.folder === ALL_FOLDERS;
+}
+
 /**
  * Hono middleware: require a `share` token, from `X-Share-Token` or
  * `Authorization: Bearer`, with at least `minRole` on the Lens Edu folder (or

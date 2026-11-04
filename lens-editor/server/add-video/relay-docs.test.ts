@@ -6,7 +6,10 @@ import {
   createRelayDoc,
   editRelayDoc,
   findRelayAttachmentByHash,
+  linkRelaySource,
+  listRelayFrontmatters,
   RelayAttachmentConflictError,
+  RelayLinkError,
   updateRelayDoc,
 } from './relay-docs';
 
@@ -225,5 +228,114 @@ describe('editRelayDoc', () => {
     // An edit that registers its author but then finds no change must not leave the entry.
     expect(await editRelayDoc('x', () => false)).toBe(false);
     expect(posted).toHaveLength(0);
+  });
+});
+
+describe('listRelayFrontmatters', () => {
+  it('splits the folder path for POST /doc/frontmatters and returns the docs', async () => {
+    const docs = [{ path: 'Lens Edu/articles/x.md', frontmatter: '---\ntitle: x\n---' }];
+    mockFetch.mockResolvedValueOnce(jsonResponse(200, { docs }));
+
+    await expect(listRelayFrontmatters('Lens Edu/articles')).resolves.toEqual(docs);
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe('http://localhost:8090/doc/frontmatters');
+    expect(opts.headers.Authorization).toBe('Bearer test-token');
+    expect(JSON.parse(opts.body)).toEqual({ folder: 'Lens Edu', subfolder: 'articles' });
+  });
+
+  it('leaves subfolder out for a top-level folder', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(200, { docs: [] }));
+    await listRelayFrontmatters('Lens');
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ folder: 'Lens' });
+  });
+
+  // Prevents: a full scan of 1,280 documents being cut off at the 30 s check timeout.
+  it('allows a scan minutes, not the check timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockImplementationOnce((_url, opts) => new Promise((_, reject) => {
+        opts.signal.addEventListener('abort', () => reject(opts.signal.reason));
+      }));
+      const scan = listRelayFrontmatters('Lens Edu/articles').then(() => 'finished', (e) => String(e));
+      let settled = false;
+      void scan.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await scan).toMatch(/timed out/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('throws on a relay error', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(500, 'boom'));
+    await expect(listRelayFrontmatters('Lens Edu/articles')).rejects.toThrow(/500 boom/);
+  });
+});
+
+describe('linkRelaySource', () => {
+  const request = {
+    docId: 'doc-1',
+    urls: ['https://example.com/a'],
+    target: 'Lens Edu/articles/x.md',
+    title: 'X',
+    actor: 'human:Luc',
+    author: 'Luc',
+    protectHuman: false,
+  };
+
+  it('posts the swap and returns the counts', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(200, { linked: 1, suggested: 0, unswappable: 0 }));
+
+    await expect(linkRelaySource(request)).resolves.toEqual({ linked: 1, suggested: 0, unswappable: 0 });
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe('http://localhost:8090/doc/link-source');
+    expect(JSON.parse(opts.body)).toEqual({
+      doc_id: 'doc-1',
+      urls: ['https://example.com/a'],
+      target: 'Lens Edu/articles/x.md',
+      title: 'X',
+      actor: 'human:Luc',
+      author: 'Luc',
+      protect_human: false,
+    });
+  });
+
+  // The editor sends this when a person is in Suggesting mode, so it can't
+  // depend on the actor being an agent.
+  it('passes protect_human on for any actor', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(200, { linked: 0, suggested: 1, unswappable: 0 }));
+    await linkRelaySource({ ...request, protectHuman: true });
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toMatchObject({ actor: 'human:Luc', protect_human: true });
+  });
+
+  it.each([
+    ['doc_not_found', 404],
+    ['target_missing', 422],
+    ['page_not_eligible', 422],
+  ])('reads the refusal %s', async (code, status) => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(status, { error: code }));
+    const error = await linkRelaySource(request).catch((e) => e);
+    expect(error).toBeInstanceOf(RelayLinkError);
+    expect(error.code).toBe(code);
+    expect(error.message).not.toContain(code);
+  });
+
+  it('keeps every other failure a plain error', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(503, 'busy'));
+    const busy = await linkRelaySource(request).catch((e) => e);
+    expect(busy).not.toBeInstanceOf(RelayLinkError);
+    expect(busy.message).toMatch(/503 busy/);
+
+    // A body-shape rejection is a 422 too, and is our bug rather than a missing file.
+    mockFetch.mockResolvedValueOnce(jsonResponse(422, 'missing field `actor`'));
+    expect(await linkRelaySource(request).catch((e) => e)).not.toBeInstanceOf(RelayLinkError);
+
+    // A relay without the route: this must not read as a page that has gone.
+    mockFetch.mockResolvedValueOnce(jsonResponse(404, ''));
+    expect(await linkRelaySource(request).catch((e) => e)).not.toBeInstanceOf(RelayLinkError);
   });
 });

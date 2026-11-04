@@ -81,6 +81,24 @@ describe("processArticle video re-import", () => {
     expect(videoMocks.importVideo.mock.calls[0][3].replaceExisting).toBeUndefined();
   });
 
+  it("records the document a full import wrote", async () => {
+    relayMocks.checkRelayVideoIds.mockResolvedValue({ "oH-txHzE4jA": null });
+    videoMocks.importVideo.mockResolvedValue({ mdPath: "Lens Edu/video_transcripts/chess-clip.md" });
+    const j = job();
+
+    await processArticle(j);
+    expect(j).toMatchObject({ title: "Chess clip", relay_path: "Lens Edu/video_transcripts/chess-clip.md" });
+  });
+
+  it("names a skipped video after the document it found, with its full path", async () => {
+    relayMocks.checkRelayVideoIds.mockResolvedValue({ "oH-txHzE4jA": "/video_transcripts/Chess.md" });
+    const j = job();
+
+    const err = await processArticle(j).catch((e) => e);
+    expect(err.docPath).toBe("Lens Edu/video_transcripts/Chess.md");
+    expect(j).toMatchObject({ title: "Chess clip" });
+  });
+
   it("refuses to re-import when the existing transcript cannot be looked up", async () => {
     relayMocks.checkRelayVideoIds.mockRejectedValue(new Error("relay down"));
 
