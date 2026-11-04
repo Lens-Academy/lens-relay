@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ReadAloudEngine, prefetchDepthFor, type FetchSpeech, type ReadAloudHighlight } from './engine';
+import { PAGE_SOURCE, ReadAloudEngine, prefetchDepthFor, type FetchSpeech, type ReadAloudHighlight } from './engine';
 import { TtsUnavailableError, type StreamEvent } from './api';
 import type { PcmPlayer } from './player';
 
@@ -82,14 +82,14 @@ describe('ReadAloudEngine', () => {
     await flush();
     player.playbackTime = 0.6;
     runFrame();
-    expect(highlights.at(-1)).toEqual({ unit: 0, word: { start: 6, end: 10 } });
+    expect(highlights.at(-1)).toEqual({ source: PAGE_SOURCE, unit: 0, word: { start: 6, end: 10 } });
     player.playbackTime = 1.1;
     runFrame();
-    expect(highlights.at(-1)).toEqual({ unit: 1, word: { start: 0, end: 5 } });
+    expect(highlights.at(-1)).toEqual({ source: PAGE_SOURCE, unit: 1, word: { start: 0, end: 5 } });
     expect(engine.getSnapshot()).toMatchObject({ current: 1, status: 'playing' });
     engine.setPrefs({ highlightMode: 'sentence' });
     runFrame();
-    expect(highlights.at(-1)).toEqual({ unit: 1, word: null });
+    expect(highlights.at(-1)).toEqual({ source: PAGE_SOURCE, unit: 1, word: null });
   });
 
   it('stops at the end, when the player has played everything', async () => {
@@ -180,5 +180,46 @@ describe('ReadAloudEngine', () => {
     engine.play(0);
     await flush();
     expect(requested).toEqual(['The A.S.I. risk']);
+  });
+
+  it('reads another source (a comment), then is back on the page where it was', async () => {
+    const { engine, player, requested, highlights } = setup();
+    engine.setUnits([{ text: 'Page one' }, { text: 'Page two' }, { text: 'Page three' }]);
+    engine.playPage(1);
+    await flush();
+    runFrame();
+    expect(highlights.at(-1)).toMatchObject({ source: PAGE_SOURCE, unit: 1 });
+
+    requested.length = 0;
+    engine.playOther('comment:t1', [{ text: 'Nice point' }, { text: 'Agreed' }], 0);
+    await flush();
+    expect(requested).toEqual(['Nice point', 'Agreed']);
+    expect(engine.getSnapshot()).toMatchObject({ source: 'comment:t1', unitCount: 2 });
+    runFrame();
+    expect(highlights.at(-1)).toMatchObject({ source: 'comment:t1', unit: 0 });
+
+    // The page changes meanwhile: kept for later, not read now.
+    engine.setUnits([{ text: 'Page one' }, { text: 'Page two' }, { text: 'Page three' }, { text: 'Page four' }]);
+    expect(engine.getSnapshot().unitCount).toBe(2);
+
+    // The comment ends: back on the page, and Play goes on from page sentence 1.
+    player.onEmpty?.();
+    expect(engine.getSnapshot()).toMatchObject({ source: PAGE_SOURCE, status: 'idle', unitCount: 4 });
+    requested.length = 0;
+    engine.play();
+    await flush();
+    expect(requested[0]).toBe('Page two');
+  });
+
+  it('goes from a comment straight back to a clicked page sentence', async () => {
+    const { engine, requested } = setup();
+    engine.setUnits([{ text: 'Page one' }, { text: 'Page two' }]);
+    engine.playPage(0);
+    engine.playOther('comment:t1', [{ text: 'Hello' }]);
+    requested.length = 0;
+    engine.playPage(1);
+    await flush();
+    expect(engine.getSnapshot().source).toBe(PAGE_SOURCE);
+    expect(requested[0]).toBe('Page two');
   });
 });

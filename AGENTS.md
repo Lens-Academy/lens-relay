@@ -318,6 +318,8 @@ highlighting, after lens-platform's immersion reader but without its audio cache
 source positions (`markdown-reading.ts`), so it works with CodeMirror's virtualised DOM. HTML: the preview frame's
 `bridge/tts-layer.ts` sends the page's sentences to the parent and draws highlights and hover play buttons inside the
 frame. While audio plays a click jumps to the sentence; otherwise clicks behave as usual.
+A click on a comment's text while audio plays reads that thread from there and then stops, with Play going back to
+the page where it was (`Comments/commentReadAloud.ts`, the engine's `playOther`).
 
 **Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
 - The MCP `edit` tool applies Markdown edits directly when they only add text or change

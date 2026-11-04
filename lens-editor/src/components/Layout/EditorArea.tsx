@@ -37,6 +37,7 @@ import { isConceptPath } from '../../lib/concept-graph';
 import { PanelErrorBoundary } from '../PanelErrorBoundary';
 import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
+import { CommentReadAloudContext } from '../Comments/commentReadAloud';
 import { pinInsertKey, useThreadsFromYText } from '../Comments/criticmarkupAdapter';
 import { commentTarget } from '../Comments/commentTarget';
 import type { ThreadView } from '../Comments/types';
@@ -648,6 +649,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           style={{ width: commentMarginCollapsed ? 0 : Math.max(320, manager.getWidth('comment-margin')) }}
         >
           {editorView && (
+            <CommentReadAloudContext.Provider value={readAloudEngine}>
             <CommentsLayer
               ref={commentsLayerRef}
               threads={threads}
@@ -665,6 +667,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onReact={canWrite ? callbacks.onReact : undefined}
               onFocusChange={scrollToThread}
             />
+            </CommentReadAloudContext.Provider>
           )}
         </div>
 
@@ -725,6 +728,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             side="bottom"
             label="Comments"
           >
+            <CommentReadAloudContext.Provider value={readAloudEngine}>
             <MobileCommentsSheet
               key={commentSheetEpochRef.current}
               threads={threads}
@@ -739,6 +743,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               numbered={false}
               onReact={canWrite ? callbacks.onReact : undefined}
             />
+            </CommentReadAloudContext.Provider>
           </MobileDrawer>
 
           <MobileDrawer
