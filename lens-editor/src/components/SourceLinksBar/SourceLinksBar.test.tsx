@@ -10,10 +10,14 @@ import { FakeSourceServer } from './fake-source-server.test-helper';
 import { DONE_CLEARS_MS, POLL_MS, SCAN_DEBOUNCE_MS } from './source-links-session';
 import { SourceLinksBar } from './SourceLinksBar';
 import type { SourceLinkMenuTarget } from './sourceLinkMenu';
+import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 
-const yjs = vi.hoisted(() => ({ doc: undefined as unknown, isMobile: false }));
+const yjs = vi.hoisted(() => ({ doc: undefined as unknown, awareness: undefined as unknown, isMobile: false }));
 
-vi.mock('../../lib/ydoc-provider', () => ({ useYDoc: () => yjs.doc }));
+vi.mock('../../lib/ydoc-provider', () => ({
+  useYDoc: () => yjs.doc,
+  useYjsProvider: () => ({ awareness: yjs.awareness }),
+}));
 vi.mock('../../contexts/MobileContext', () => ({ useMobile: () => ({ isMobile: yjs.isMobile }) }));
 vi.mock('../../lib/relay-api', () => ({
   relayHeaders: (extra?: Record<string, string>) => ({ ...extra, 'X-Share-Token': 'token' }),
@@ -44,16 +48,27 @@ function links(count: number): string {
 
 const menuTarget: RefObject<SourceLinkMenuTarget | null> = { current: null };
 
+/** The library copy of A, as the folder metadata has it. */
+const METADATA = {
+  '/Lens Edu/articles/a.md': { id: 'a0000000-0000-4000-8000-00000000000a', type: 'markdown', version: 0 },
+} as unknown as FolderMetadata;
+
 /** Where the editor's caret is on screen, for the bar to keep off it. */
 const editor = { caret: null as { top: number; bottom: number } | null };
+
+/** The editor's scroller: a real element, so the bar can follow its scrolling. */
+const scroller = document.createElement('div');
+scroller.getBoundingClientRect = () => ({ bottom: 600 }) as DOMRect;
 
 /** Something standing in for the editor above the bar. */
 const editorView = {
   focus: () => document.querySelector<HTMLElement>('[data-testid=page]')?.focus(),
   hasFocus: true,
   // Past the end of every page here: a caret on a bare URL holds it back
-  state: { selection: { main: { head: 1_000_000 } } },
-  scrollDOM: { getBoundingClientRect: () => ({ bottom: 600 }) },
+  // A document never in step with the Y.Text, so swaps here go to the server;
+  // localSwap.test.ts has the real editor
+  state: { selection: { main: { head: 1_000_000 } }, doc: { length: -1 } },
+  scrollDOM: scroller,
   coordsAtPos: () => editor.caret,
   requestMeasure({ read, write }: { read: (view: EditorView) => number; write: (value: number) => void }) {
     write(read(this as unknown as EditorView));
@@ -64,7 +79,14 @@ function Page({ docId }: { docId: string }) {
   return (
     <>
       <textarea data-testid="page" />
-      <SourceLinksBar docId={docId} path="/Lens/Notes/page.md" canImport editorView={editorView} menuTargetRef={menuTarget} />
+      <SourceLinksBar
+        docId={docId}
+        path="/Lens/Notes/page.md"
+        canImport
+        metadata={METADATA}
+        editorView={editorView}
+        menuTargetRef={menuTarget}
+      />
     </>
   );
 }
@@ -118,13 +140,13 @@ describe('every state in the table', () => {
   it('Offer, all new', async () => {
     await mount(docWith(`${A} and ${B} and ${C}`));
     expect(bar().getByText("3 sources on this page aren't in the library yet.")).toBeInTheDocument();
-    expect(buttons()).toEqual(['Import and link', 'Choose', 'Dismiss']);
+    expect(buttons()).toEqual(['Import and link', 'Choose', 'Dismiss', '×']);
   });
 
   it('Offer, one', async () => {
     await mount(docWith(`See ${A}`));
     expect(bar().getByText("example.com/a isn't in the library yet.")).toBeInTheDocument();
-    expect(buttons()).toEqual(['Import and link', 'Dismiss']);
+    expect(buttons()).toEqual(['Import and link', 'Dismiss', '×']);
   });
 
   it('Offer, all in library', async () => {
@@ -132,20 +154,20 @@ describe('every state in the table', () => {
     server.set(B, { state: 'library', path: 'Lens/articles/b.md' });
     await mount(docWith(`${A} and ${B}`));
     expect(bar().getByText('2 sources on this page are already in the library.')).toBeInTheDocument();
-    expect(buttons()).toEqual(['Use library copies', 'Choose', 'Dismiss']);
+    expect(buttons()).toEqual(['Use library copies', 'Choose', 'Dismiss', '×']);
   });
 
   it('Offer, mixed', async () => {
     server.set(A, { state: 'library', path: 'Lens/articles/a.md' });
     await mount(docWith(`${A} ${B} ${C} https://example.com/d`));
     expect(bar().getByText('4 sources on this page: 1 is in the library, 3 can be imported.')).toBeInTheDocument();
-    expect(buttons()).toEqual(['Import and link', 'Choose', 'Dismiss']);
+    expect(buttons()).toEqual(['Import and link', 'Choose', 'Dismiss', '×']);
   });
 
   it('Offer, more than 10 new', async () => {
     await mount(docWith(links(34)));
     expect(bar().getByText("34 sources on this page aren't in the library yet.")).toBeInTheDocument();
-    expect(buttons()).toEqual(['Choose', 'Dismiss']);
+    expect(buttons()).toEqual(['Choose', 'Dismiss', '×']);
     expect(bar().getByRole('button', { name: 'Choose' }).className).toContain('bg-blue-600');
   });
 
@@ -159,7 +181,7 @@ describe('every state in the table', () => {
     await mount(docWith(`${A} and ${B}`));
     await clickAndWait('Import and link');
     expect(bar().getByText('Importing 2 sources, about 8 min. You can keep working or close this page.')).toBeInTheDocument();
-    expect(buttons()).toEqual(['Details', 'Stop']);
+    expect(buttons()).toEqual(['Details', 'Stop', '×']);
   });
 
   it('Done, clearing after 8 seconds', async () => {
@@ -175,7 +197,7 @@ describe('every state in the table', () => {
     });
     await pass(SCAN_DEBOUNCE_MS);
     expect(bar().getByText('2 sources imported and linked.')).toBeInTheDocument();
-    expect(bar().queryAllByRole('button')).toEqual([]);
+    expect(buttons()).toEqual(['×']);
 
     await pass(DONE_CLEARS_MS - 1);
     expect(queryRegion()).toBeInTheDocument();
@@ -187,7 +209,7 @@ describe('every state in the table', () => {
     server.set(A, { state: 'failed', job_id: 'j1', error: 'Timed out' });
     await mount(docWith(`See ${A}`));
     expect(bar().getByText("1 source couldn't be imported.")).toBeInTheDocument();
-    expect(buttons()).toEqual(['Retry', 'Details', 'Dismiss']);
+    expect(buttons()).toEqual(['Retry', 'Details', 'Dismiss', '×']);
   });
 
   it('shows no bar on a page with nothing to say', async () => {
@@ -250,12 +272,13 @@ describe('the actions', () => {
     expect(readLinkOffers(doc).has(A)).toBe(true);
   });
 
-  it('Stop cancels and brings the offer back', async () => {
+  it('Stop cancels, and does not offer it again straight away', async () => {
     await mount(docWith(`See ${A}`));
     await clickAndWait('Import and link');
     await clickAndWait('Stop');
     expect(server.cancels).toEqual([[`job:${A}`]]);
-    expect(buttons()).toEqual(['Import and link', 'Dismiss']);
+    expect(queryRegion()).not.toBeInTheDocument();
+    expect([...readSeenLinkOffers('relay-doc-1')]).toEqual([A]);
   });
 
   it('Retry goes back to work', async () => {
@@ -273,7 +296,7 @@ describe('the actions', () => {
     server.set(A, { state: 'importing', job_id: 'j1', eta_minutes: 6 });
     await mount(docWith(`See ${A}`));
     expect(bar().getByText('Importing 1 source, about 6 min. You can keep working or close this page.')).toBeInTheDocument();
-    expect(buttons()).toEqual(['Details', 'Stop']);
+    expect(buttons()).toEqual(['Details', 'Stop', '×']);
   });
 
   it('the right-click shows Working and takes the dismissal back', async () => {
@@ -375,13 +398,31 @@ describe('Choose', () => {
     expect(bar().getByRole('button', { name: 'Details' })).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('lets 34 rows be unticked at once, since that is what Choose is for', async () => {
+  it('starts a long list unticked, so 34 imports are never one click away', async () => {
     await openChoose(links(34));
-    expect(bar().getByRole('button', { name: 'Import and link 34' })).toBeInTheDocument();
-    click('Untick all');
+    expect(bar().getAllByRole('checkbox').filter((box) => (box as HTMLInputElement).checked)).toHaveLength(0);
     expect(bar().getByRole('button', { name: 'Import and link 0' })).toBeDisabled();
     click('Tick all');
     expect(bar().getByRole('button', { name: 'Import and link 34' })).toBeInTheDocument();
+    click('Untick all');
+    expect(bar().getByRole('button', { name: 'Import and link 0' })).toBeDisabled();
+  });
+
+  it('starts exactly 10 ticked, and 11 unticked', async () => {
+    await openChoose(links(10));
+    expect(bar().getByRole('button', { name: 'Import and link 10' })).toBeInTheDocument();
+    cleanup();
+    await openChoose(links(11));
+    expect(bar().getByRole('button', { name: 'Import and link 0' })).toBeInTheDocument();
+  });
+
+  it('keeps ticks through closing and opening again', async () => {
+    await openChoose(`${A} and ${B}`);
+    fireEvent.click(bar().getByRole('checkbox', { name: /example.com\/a/ }));
+    click('Choose');
+    click('Choose');
+    expect(bar().getByRole('checkbox', { name: /example.com\/a/ })).not.toBeChecked();
+    expect(bar().getByRole('checkbox', { name: /example.com\/b/ })).toBeChecked();
   });
 
   it('has no bulk button on a short list', async () => {
@@ -389,7 +430,7 @@ describe('Choose', () => {
     expect(bar().queryByRole('button', { name: 'Untick all' })).not.toBeInTheDocument();
   });
 
-  it('keeps ticks through an edit, ticks a new link, and drops a deleted one', async () => {
+  it('keeps ticks through an edit, leaves a new link unticked, and drops a deleted one', async () => {
     const doc = await openChoose(`${A} and ${B} and ${C}`);
     fireEvent.click(bar().getByRole('checkbox', { name: /example.com\/a/ }));
 
@@ -403,7 +444,7 @@ describe('Choose', () => {
     expect(bar().getByRole('checkbox', { name: /example.com\/a/ })).not.toBeChecked();
     expect(bar().queryByRole('checkbox', { name: /example.com\/b/ })).not.toBeInTheDocument();
     expect(bar().getByRole('checkbox', { name: /example.com\/c/ })).toBeChecked();
-    expect(bar().getByRole('checkbox', { name: /example.com\/d/ })).toBeChecked();
+    expect(bar().getByRole('checkbox', { name: /example.com\/d/ })).not.toBeChecked();
   });
 
   it('cancels a label\'s handing the keyboard to its tick box', async () => {
@@ -454,7 +495,7 @@ describe('Choose', () => {
     });
     await pass(SCAN_DEBOUNCE_MS);
     expect(bar().queryByRole('list')).not.toBeInTheDocument();
-    expect(buttons()).toEqual(['Import and link', 'Dismiss']);
+    expect(buttons()).toEqual(['Import and link', 'Dismiss', '×']);
   });
 
   it('Dismiss turns down everything listed, ticked or not', async () => {
@@ -489,7 +530,7 @@ describe('Details', () => {
     server.set(A, { state: 'failed', job_id: `job:${A}`, error: 'Timed out' });
     await pass(POLL_MS);
     expect(bar().getByText('Timed out')).toBeInTheDocument();
-    expect(buttons()).toEqual(['Retry', 'Details', 'Dismiss']);
+    expect(buttons()).toEqual(['Retry', 'Details', 'Dismiss', '×']);
   });
 });
 
@@ -557,7 +598,7 @@ describe('the keyboard stays with the page', () => {
     click('Choose');
     page().focus();
     const order: string[] = [];
-    for (let i = 0; i < 8; i += 1) {
+    for (let i = 0; i < 9; i += 1) {
       await events.tab();
       const active = document.activeElement as HTMLElement;
       order.push(active.getAttribute('aria-label') || active.textContent || active.tagName);
@@ -566,6 +607,7 @@ describe('the keyboard stays with the page', () => {
       'Import and link',
       'Choose',
       'Dismiss',
+      'Hide',
       'INPUT',
       'Open example.com/a',
       'INPUT',
@@ -718,9 +760,10 @@ describe('the look', () => {
     await mount(docWith(`${A} and ${B}`));
     for (const button of bar().getAllByRole('button')) {
       expect(button.className).toContain('min-h-10');
-      expect(button.className).toContain('flex-1');
+      if (button.textContent !== '×') expect(button.className).toContain('flex-1');
     }
-    expect(bar().getByRole('button', { name: 'Choose' }).parentElement?.className).toContain('grow');
+    expect(bar().getByRole('button', { name: 'Hide' }).className).toContain('min-w-10');
+    expect(bar().getByRole('button', { name: 'Choose' }).parentElement?.className).toContain('basis-full');
   });
 });
 
@@ -766,6 +809,96 @@ describe('floating over the page', () => {
     await mount(docWith(`See ${A}`));
     expect(card().style.transform).toBe('');
     (editorView as { hasFocus: boolean }).hasFocus = true;
+  });
+});
+
+describe('Hide', () => {
+  it('hides the bar for now, for this person, and Dismiss stays the answer for everyone', async () => {
+    const doc = docWith(`${A} and ${B}`);
+    await mount(doc);
+    const hide = bar().getByRole('button', { name: 'Hide' });
+    expect(hide).toHaveAttribute('title', 'Hide for now');
+    fireEvent.click(hide);
+    expect(queryRegion()).not.toBeInTheDocument();
+    expect(readLinkOffers(doc).size).toBe(0);
+    expect([...readSeenLinkOffers('relay-doc-1')]).toEqual([A, B]);
+  });
+
+  it('is there while an import runs, and when it is done', async () => {
+    await mount(docWith(`See ${A}`));
+    await clickAndWait('Import and link');
+    expect(bar().getByRole('button', { name: 'Hide' })).toBeInTheDocument();
+    click('Hide');
+    expect(queryRegion()).not.toBeInTheDocument();
+  });
+
+  it('gives the keyboard back when used from the keyboard', async () => {
+    const events = user();
+    await mount(docWith(`See ${A}`));
+    bar().getByRole('button', { name: 'Hide' }).focus();
+    await events.keyboard('{Enter}');
+    expect(page()).toHaveFocus();
+  });
+});
+
+describe('Open', () => {
+  it('opens the library copy, in the editor, for a row in the library', async () => {
+    server.set(A, { state: 'library', path: 'Lens Edu/articles/a.md', title: 'The A Paper' });
+    await mount(docWith(`${A} and ${B}`));
+    click('Choose');
+    const copy = bar().getByRole('link', { name: 'Open the library copy of The A Paper' });
+    expect(copy.getAttribute('href')).toMatch(/^\/a0000000\/Lens-Edu\/articles\/a\.md/);
+    expect(copy).toHaveAttribute('target', '_blank');
+    expect(bar().getByRole('link', { name: 'Open example.com/b' })).toHaveAttribute('href', B);
+  });
+
+  it('falls back to the source when the copy is not in the metadata', async () => {
+    server.set(B, { state: 'library', path: 'Lens Edu/articles/b.md', title: 'B' });
+    await mount(docWith(`${A} and ${B}`));
+    click('Choose');
+    expect(bar().getByRole('link', { name: 'Open B' })).toHaveAttribute('href', B);
+  });
+});
+
+describe('the editor scrolling under the bar', () => {
+  const card = () => region().firstElementChild as HTMLElement;
+
+  it('asks the editor to keep the caret below it', async () => {
+    await mount(docWith(`See ${A}`));
+    // happy-dom lays nothing out: the card is 0 high, so the margin is the gaps
+    expect(menuTarget.current?.scrollMargin?.()).toBe(14);
+  });
+
+  it('asks nothing once it has gone', async () => {
+    const doc = docWith(`See ${A}`);
+    await mount(doc);
+    act(() => dismissLinkOffers(doc, [A], 'Sam'));
+    expect(menuTarget.current?.scrollMargin?.()).toBe(0);
+  });
+
+  it('places itself again when the page scrolls', async () => {
+    editor.caret = { top: 300, bottom: 320 };
+    await mount(docWith(`See ${A}`));
+    expect(card().style.transform).toBe('');
+    editor.caret = { top: 0, bottom: 20 };
+    act(() => {
+      scroller.dispatchEvent(new Event('scroll'));
+    });
+    expect(card().style.transform).not.toBe('');
+  });
+
+  it('stays where it opened while the list is open, even over the caret', async () => {
+    editor.caret = { top: 300, bottom: 320 };
+    await mount(docWith(`${A} and ${B}`));
+    click('Choose');
+    editor.caret = { top: 0, bottom: 20 };
+    act(() => {
+      scroller.dispatchEvent(new Event('scroll'));
+      menuTarget.current?.editorChanged?.(editorView);
+    });
+    expect(card().style.transform).toBe('');
+    click('Choose');
+    expect(card().style.transform).not.toBe('');
   });
 });
 

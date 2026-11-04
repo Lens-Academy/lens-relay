@@ -215,8 +215,9 @@ describe("POST /api/add-article/links/check", () => {
 
   describe("with a path", () => {
     const page = "Lens/Notes/a.md";
+    // setup() resolves a path to `relay-<path>`.
     const link = (overrides: Partial<JobLinkBack> = {}): JobLinkBack => ({
-      doc_id: "relay-a",
+      doc_id: `relay-${page}`,
       doc_path: page,
       actor: "human:Luc",
       author: "Luc",
@@ -225,7 +226,7 @@ describe("POST /api/add-article/links/check", () => {
       state: "waiting",
       ...overrides,
     });
-    const other = () => link({ doc_id: "relay-b", doc_path: "Lens/Notes/b.md" });
+    const other = () => link({ doc_id: "relay-Lens/Notes/b.md", doc_path: "Lens/Notes/b.md" });
     const checkPage = async (s: ReturnType<typeof setup>, url = "https://example.com/a") => {
       const resp = await s.post("/links/check", { urls: [url], path: page });
       expect(resp.status).toBe(200);
@@ -1003,11 +1004,15 @@ describe("POST /api/add-article/cancel with a path", () => {
     return (await resp.json()).results;
   };
 
+  const startedHere = (s: ReturnType<typeof setup>, url = "https://example.com/a", others: string[] = []) =>
+    s.queue.add(url, "article", undefined, {
+      linkBack: [link(page), ...others.map(link)],
+      startedBy: `relay-${page}`,
+    });
+
   it("takes the page off a job others are waiting on, and leaves the job running", async () => {
     const s = await running();
-    const job = s.queue.add("https://example.com/a", "article", undefined, {
-      linkBack: [link(page), link("Lens/Notes/b.md")],
-    });
+    const job = startedHere(s, "https://example.com/a", ["Lens/Notes/b.md"]);
     await flush();
     expect(await cancel(s, [job.id], page)).toEqual([{ id: job.id, cancelled: false, detached: true }]);
     expect(s.queue.get(job.id)?.status).toBe("processing");
@@ -1015,36 +1020,41 @@ describe("POST /api/add-article/cancel with a path", () => {
     expect(s.queue.get(job.id)?.link_back?.map((l) => l.doc_path)).toEqual(["Lens/Notes/b.md"]);
   });
 
-  it("cancels as usual when the page's link-backs are all there are", async () => {
+  it("cancels a job the page started that nobody else joined", async () => {
     const s = await running();
-    const job = s.queue.add("https://example.com/a", "article", undefined, { linkBack: [link(page)] });
+    const job = startedHere(s);
     await flush();
     expect(await cancel(s, [job.id], page)).toEqual([{ id: job.id, cancelled: true, was: "processing" }]);
     await flush();
     expect(s.queue.get(job.id)?.status).toBe("cancelled");
+    expect(s.queue.get(job.id)).not.toHaveProperty("link_back");
   });
 
-  it("answers each job by its own link-backs", async () => {
+  it("answers each job by who started it and who else waits", async () => {
     const s = await running();
-    const shared = s.queue.add("https://example.com/a", "article", undefined, {
-      linkBack: [link(page), link("Lens/Notes/b.md")],
+    const shared = startedHere(s, "https://example.com/a", ["Lens/Notes/b.md"]);
+    const own = startedHere(s, "https://example.com/b");
+    const theirs = s.queue.add("https://example.com/c", "article", undefined, {
+      linkBack: [link("Lens/Notes/b.md"), link(page)],
+      startedBy: "relay-Lens/Notes/b.md",
     });
-    const own = s.queue.add("https://example.com/b", "article", undefined, { linkBack: [link(page)] });
     await flush();
-    expect(await cancel(s, [shared.id, own.id, "nope"], page)).toEqual([
+    expect(await cancel(s, [shared.id, own.id, theirs.id, "nope"], page)).toEqual([
       { id: shared.id, cancelled: false, detached: true },
       { id: own.id, cancelled: true, was: "processing" },
+      { id: theirs.id, cancelled: false, detached: true },
       { id: "nope", cancelled: false, error: "No such job" },
     ]);
   });
 
-  it("cancels anything without a path, as before", async () => {
+  it("cancels anything without a path, as before, and keeps its link-backs", async () => {
     const s = await running();
     const job = s.queue.add("https://example.com/a", "article", undefined, {
       linkBack: [link(page), link("Lens/Notes/b.md")],
     });
     await flush();
     expect(await cancel(s, [job.id])).toEqual([{ id: job.id, cancelled: true, was: "processing" }]);
+    expect(s.queue.get(job.id)?.link_back).toHaveLength(2);
   });
 
   it("needs a string, and a folder the token can write", async () => {
@@ -1055,6 +1065,200 @@ describe("POST /api/add-article/cancel with a path", () => {
     expect((await s.post("/cancel", { ids: [job.id], path: 7 })).status).toBe(400);
     expect((await s.post("/cancel", { ids: [job.id], path: page }, makeToken({ folder: EDU_FOLDER }))).status).toBe(403);
     expect(s.queue.get(job.id)?.link_back).toHaveLength(2);
+  });
+});
+
+describe("Stop and retry, from the review's probes", () => {
+  const linkBackFrom = (path: string, actor = "human:Luc") => ({ path, actor, author: actor.slice(6) });
+  const submit = async (s: ReturnType<typeof setup>, url: string, linkBack?: object) =>
+    (await (await s.post("", { urls: [url], importMode: "article", ...(linkBack ? { linkBack } : {}) })).json()).results[0];
+
+  // probe-stop-plain: Luc imports from the Add Source page, Ana's page joins
+  // with "Import and link", then Ana presses Stop.
+  it("doesn't let a page that joined cancel someone else's import", async () => {
+    const s = setup({ index: await loaded({}) });
+    const luc = await submit(s, "https://example.com/a");
+    await flush();
+    const check = await (await s.post("/links/check", { urls: ["https://example.com/a"], path: "Lens/Ana.md" })).json();
+    expect(check.links[0].state).toBe("new");
+    const ana = await submit(s, "https://example.com/a", linkBackFrom("Lens/Ana.md", "human:Ana"));
+    expect(ana).toMatchObject({ status: "already_queued", id: luc.id });
+    const stop = await (await s.post("/cancel", { ids: [luc.id], path: "Lens/Ana.md" })).json();
+    expect(stop.results).toEqual([{ id: luc.id, cancelled: false, detached: true }]);
+    expect(s.queue.get(luc.id)?.status).toBe("processing");
+    expect(s.queue.get(luc.id)).not.toHaveProperty("link_back");
+  });
+
+  it("records the page whose request created the job", async () => {
+    const s = setup({ index: await loaded({}) });
+    const row = await submit(s, "https://example.com/a", linkBackFrom("Lens/Notes/a.md"));
+    expect(s.queue.get(row.id)?.started_by).toBe("relay-Lens/Notes/a.md");
+    const plain = await submit(s, "https://example.com/b");
+    expect(s.queue.get(plain.id)).not.toHaveProperty("started_by");
+  });
+
+  // probe-routes part 1: the page presses Stop, then someone retries the
+  // cancelled job from the Add Source page.
+  it("doesn't swap a stopped page's link through a later retry", async () => {
+    const s = setup({
+      index: await loaded({}),
+      processJob: async (job) => {
+        if (job.retry_of) job.relay_path = "Lens Edu/articles/a.md";
+        else await new Promise<void>(() => {});
+      },
+    });
+    const row = await submit(s, "https://example.com/a", linkBackFrom("Lens/Notes/a.md"));
+    await flush();
+    const stop = await (await s.post("/cancel", { ids: [row.id], path: "Lens/Notes/a.md" })).json();
+    expect(stop.results).toEqual([{ id: row.id, cancelled: true, was: "processing" }]);
+    await flush();
+    expect(s.queue.get(row.id)).not.toHaveProperty("link_back");
+    const retry = await (await s.post(`/${row.id}/retry`, {})).json();
+    await flush();
+    expect(s.queue.get(retry.id)).toMatchObject({ status: "done" });
+    expect(s.queue.get(retry.id)).not.toHaveProperty("link_back");
+    expect(s.linkSource).not.toHaveBeenCalled();
+  });
+
+  it("keeps the starter on a retry only while it still waits", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = setup({ index: await loaded({}), workers: 2, processJob: async () => { throw new Error("boom"); } });
+    const kept = await submit(s, "https://example.com/a", linkBackFrom("Lens/Notes/a.md"));
+    await flush();
+    const keptRetry = await (await s.post(`/${kept.id}/retry`, {})).json();
+    expect(s.queue.get(keptRetry.id)?.started_by).toBe("relay-Lens/Notes/a.md");
+
+    // The starter stopped while another page waited, so the retry has no starter.
+    const left = setup({ index: await loaded({}), workers: 2, processJob: () => new Promise<void>(() => {}) });
+    const row = await submit(left, "https://example.com/b", linkBackFrom("Lens/Notes/a.md"));
+    await submit(left, "https://example.com/b", linkBackFrom("Lens/Notes/b.md"));
+    await (await left.post("/cancel", { ids: [row.id], path: "Lens/Notes/a.md" })).json();
+    left.queue.cancel(row.id);
+    await flush();
+    const retry = await (await left.post(`/${row.id}/retry`, {})).json();
+    expect(left.queue.get(retry.id)).not.toHaveProperty("started_by");
+    expect(left.queue.get(retry.id)?.link_back?.map((l) => l.doc_path)).toEqual(["Lens/Notes/b.md"]);
+    vi.restoreAllMocks();
+  });
+});
+
+describe("a renamed page, from the review's probes", () => {
+  const url = "https://example.com/a";
+  const start = async (s: ReturnType<typeof setup>) => {
+    const r = await (await s.post("", {
+      urls: [url],
+      importMode: "article",
+      linkBack: { path: "Lens/Notes/a.md", actor: "human:Luc", author: "Luc" },
+    })).json();
+    await flush();
+    return r.results[0].id as string;
+  };
+  const stateFor = async (s: ReturnType<typeof setup>, path: string) =>
+    (await (await s.post("/links/check", { urls: [url], path })).json()).links[0].state;
+
+  // probe-rename: both names are the same document.
+  it("matches the page's link-backs by doc id under its new name", async () => {
+    const s = setup({ index: await loaded({}), resolveDocId: vi.fn(async () => "doc-1") });
+    const id = await start(s);
+    expect(await stateFor(s, "Lens/Notes/a.md")).toBe("importing");
+    expect(await stateFor(s, "Lens/Notes/b.md")).toBe("importing");
+    const stop = await (await s.post("/cancel", { ids: [id], path: "Lens/Notes/b.md" })).json();
+    expect(stop.results).toEqual([{ id, cancelled: true, was: "processing" }]);
+    expect(s.queue.get(id)).not.toHaveProperty("link_back");
+    await flush();
+    expect(s.linkSource).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the path the link-back was made with when the relay can't say", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const resolveDocId = vi.fn(async (path: string) => {
+      if (path === "Lens/Notes/a.md" && resolveDocId.mock.calls.length === 1) return "doc-1";
+      throw new Error("relay down");
+    });
+    const s = setup({ index: await loaded({}), resolveDocId });
+    await start(s);
+    expect(await stateFor(s, "Lens/Notes/b.md")).toBe("new");
+    expect(await stateFor(s, "Lens/Notes/c.md")).toBe("new");
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("matches by path when the page isn't known by that name", async () => {
+    const resolveDocId = vi.fn(async (path: string) => (path === "Lens/Notes/a.md" && resolveDocId.mock.calls.length === 1 ? "doc-1" : null));
+    const s = setup({ index: await loaded({}), resolveDocId });
+    await start(s);
+    expect(await stateFor(s, "Lens/Notes/a.md")).toBe("importing");
+  });
+
+  // The offer polls: a lookup per poll would be a relay call per poll.
+  it("caches the lookup for about 30 seconds, failures too", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const resolveDocId = vi.fn(async (path: string) => {
+      if (path === "Lens/Notes/down.md") throw new Error("relay down");
+      return `relay-${path}`;
+    });
+    const s = setup({ index: await loaded({}), resolveDocId });
+    const ask = (path: string) => s.post("/links/check", { urls: [url], path });
+    await ask("Lens/Notes/b.md");
+    await ask("Lens/Notes/b.md");
+    await s.post("/cancel", { ids: ["nope"], path: "Lens/Notes/b.md" });
+    await ask("Lens/Notes/down.md");
+    await ask("Lens/Notes/down.md");
+    expect(resolveDocId.mock.calls.map(([path]) => path)).toEqual(["Lens/Notes/b.md", "Lens/Notes/down.md"]);
+    now += 30_000;
+    await ask("Lens/Notes/b.md");
+    expect(resolveDocId).toHaveBeenCalledTimes(3);
+    warn.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  it("doesn't look anything up without a path", async () => {
+    const s = setup({ index: await loaded({}) });
+    await s.post("/links/check", { urls: [url] });
+    await s.post("/cancel", { ids: ["nope"] });
+    expect(s.resolveDocId).not.toHaveBeenCalled();
+  });
+});
+
+describe("sources that only share a key, from the review's probes", () => {
+  const linkBack = { path: "Lens/Notes/a.md", actor: "human:Luc", author: "Luc" };
+  const bare = "https://app.example.com/view";
+  const first = `${bare}?ref=111`;
+  const second = `${bare}?ref=222`;
+
+  // probe-routes part 2: `/view` matches both refs, which don't match each other.
+  it("joins a URL to a group only if it matches every member", async () => {
+    const s = setup({ index: await loaded({}), workers: 2 });
+    const rows = (await (await s.post("", { urls: [bare, first, second], importMode: "article", linkBack })).json()).results;
+    expect(rows.map((r: ImportResultRow) => r.status)).toEqual(["queued", "already_queued", "queued"]);
+    expect(rows[1].id).toBe(rows[0].id);
+    expect(rows[2].id).not.toBe(rows[0].id);
+    const [one, two] = rows.filter((r: ImportResultRow) => r.status === "queued").map((r: ImportResultRow) => s.queue.get(r.id!)!.link_back![0].urls);
+    expect(one).toEqual(expect.arrayContaining([bare, first]));
+    expect(one).not.toContain(second);
+    expect(two).toContain(second);
+    expect(two).not.toContain(first);
+    // Both sources could claim this spelling, so neither swaps it.
+    expect(two).not.toContain(bare);
+    expect([...one, ...two]).not.toContain("https://www.app.example.com/view");
+  });
+
+  it("doesn't join a job that already carries a link this one doesn't match", async () => {
+    const s = setup({ index: await loaded({}), workers: 2 });
+    const job = s.queue.add(bare, "article", undefined, {
+      linkBack: [{
+        doc_id: "relay-b", doc_path: "Lens/Notes/b.md", actor: "human:Ana", author: "Ana",
+        protect_human: false, urls: [bare, first], state: "waiting",
+      }],
+    });
+    await flush();
+    const [row] = (await (await s.post("", { urls: [second], importMode: "article", linkBack })).json()).results;
+    expect(row.status).toBe("queued");
+    expect(row.id).not.toBe(job.id);
+    const check = await (await s.post("/links/check", { urls: [second, first] })).json();
+    expect(check.links.map((l: { job_id: string }) => l.job_id)).toEqual([row.id, job.id]);
   });
 });
 
@@ -1070,6 +1274,7 @@ describe("GET /api/add-article/status", () => {
   it("shows link-backs to an all-folders token only", async () => {
     const s = setup({ index: await loaded({}) });
     const job = s.queue.add("https://example.com/a", "article", undefined, {
+      startedBy: "relay-a",
       linkBack: [{
         doc_id: "relay-a",
         doc_path: "Lens/Private/a.md",
@@ -1082,9 +1287,11 @@ describe("GET /api/add-article/status", () => {
     });
     const [all] = await jobs(s, makeToken({ folder: ALL_FOLDERS }));
     expect(all.link_back[0].doc_path).toBe("Lens/Private/a.md");
+    expect(all.started_by).toBe("relay-a");
 
     const [edu] = await jobs(s, makeToken({ folder: EDU_FOLDER }));
     expect(edu).not.toHaveProperty("link_back");
+    expect(edu).not.toHaveProperty("started_by");
     expect(edu).toMatchObject({ id: job.id, url: "https://example.com/a" });
     expect(JSON.stringify(edu)).not.toContain("Lens/Private");
   });

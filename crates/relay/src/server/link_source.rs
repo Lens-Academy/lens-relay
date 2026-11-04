@@ -315,6 +315,9 @@ impl PageSwap<'_> {
         placed: &[Placed],
     ) -> (LinkSourceResponse, Vec<ActivityEvent>) {
         let protect_human = self.request.protect_human;
+        // A person in Suggesting mode wants every swap as a suggestion, an
+        // agent's text included; an agent gets the edit policy.
+        let suggest_all = protect_human && self.request.actor.starts_with("human:");
         let runs = protect_human.then(|| visible_runs(txn, text)).flatten();
         let actors = client_actor_map(txn);
         let log_activity = self.request.actor.starts_with("ai:");
@@ -324,8 +327,16 @@ impl PageSwap<'_> {
         for one in placed.iter().rev() {
             let Placed { swap, pos } = one;
             let hunks = hunks_of(raw, swap);
+            // What a swap inserts is markup only, unless the title brought some.
+            if hunks.iter().any(|hunk| {
+                critic_markup::reject_if_contains_markup(&hunk.new_text, "link").is_err()
+            }) {
+                counts.unswappable += 1;
+                continue;
+            }
             let direct = !protect_human
-                || edit_policy::check_provenance(&hunks, runs.as_deref(), &actors).is_ok();
+                || (!suggest_all
+                    && edit_policy::check_provenance(&hunks, runs.as_deref(), &actors).is_ok());
             if direct {
                 let clock_from = txn.state_vector().get(&client);
                 for hunk in hunks.iter().rev() {
@@ -888,16 +899,18 @@ mod tests {
     // Prevents: a stray closer in a title ending the suggestion early and
     // spilling metadata into the page
     #[tokio::test]
-    async fn a_title_that_would_break_the_markup_is_left_as_a_link() {
+    async fn a_title_with_a_closer_is_cleaned_before_it_is_suggested() {
         let server = test_server().await;
         let original = "https://example.com/a";
         write_human(&server, original);
         let mut request = agent_request();
         request["title"] = json!("C++} and more");
 
-        assert_counts(&server, &request, 0, 0, 1).await;
+        assert_counts(&server, &request, 0, 1, 0).await;
 
-        assert_eq!(content(&server), original);
+        let raw = content(&server);
+        assert_eq!(accepted_view(&parse(&raw)), "[[../articles/x|C++ and more]]");
+        assert_eq!(base_view(&parse(&raw)), original);
     }
 
     // Prevents: a name ending CriticMarkup's metadata or markup early
@@ -932,6 +945,37 @@ mod tests {
 
         assert_counts(&server, &agent_request(), 0, 0, 1).await;
         assert_eq!(content(&server), original);
+    }
+
+    // Prevents: a person in Suggesting mode getting a direct change because
+    // the link happened to be an agent's text
+    #[tokio::test]
+    async fn suggesting_mode_suggests_even_an_agents_link() {
+        let server = test_server().await;
+        write_ai(&server, "See [The paper](https://example.com/a) now.");
+        let mut body = person_request();
+        body["protect_human"] = json!(true);
+
+        assert_counts(&server, &body, 0, 1, 0).await;
+        let raw = content(&server);
+        assert_eq!(accepted_view(&parse(&raw)), "See [[../articles/x|The paper]] now.");
+        assert_eq!(base_view(&parse(&raw)), "See [The paper](https://example.com/a) now.");
+    }
+
+    // Prevents: a source's title opening CriticMarkup or a comment in the
+    // page, so that rejecting suggestions later takes a person's text with it
+    #[tokio::test]
+    async fn a_title_cannot_bring_markup_into_the_page() {
+        let server = test_server().await;
+        write_ai(&server, "https://example.com/a\n\nHuman paragraph.\n");
+        let mut body = person_request();
+        body["title"] = json!("Why {++ matters %% here");
+
+        assert_counts(&server, &body, 1, 0, 0).await;
+        assert_eq!(
+            content(&server),
+            "[[../articles/x|Why ++ matters % here]]\n\nHuman paragraph.\n"
+        );
     }
 
     // Prevents: one awkward link costing the others on the page their swap

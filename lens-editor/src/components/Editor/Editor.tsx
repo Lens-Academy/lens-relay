@@ -582,6 +582,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
             sourceLinkTargetRef?.current?.editorChanged?.(update.view);
           }
         }),
+        // and the editor keeps the caret from scrolling up under it
+        EditorView.scrollMargins.of(() => ({ top: sourceLinkTargetRef?.current?.scrollMargin?.() ?? 0 })),
       ],
     });
 

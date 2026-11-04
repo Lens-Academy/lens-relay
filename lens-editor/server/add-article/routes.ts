@@ -24,7 +24,9 @@ import { classifySourceLink } from "./link-classify";
 import {
   folderOfPath,
   jobsBySource,
+  pageMatcher,
   resolveLinkBack,
+  sameSourceAsJob,
   sourceLinkStatus,
   swapOutcome,
   type LinkBackTemplate,
@@ -34,6 +36,8 @@ export { EDU_FOLDER };
 const MAX_URLS_PER_REQUEST = 20;
 const MAX_LINKS_PER_CHECK = 300;
 const MAX_CANCEL_IDS = 200;
+/** How long a page's doc id is trusted: the offer polls, and a rename is rare. */
+const PAGE_ID_TTL_MS = 30_000;
 
 function validateUrl(raw: string): string | null {
   let parsed: URL;
@@ -48,7 +52,8 @@ function validateUrl(raw: string): string | null {
 
 /** One source a link-back request names, and the row it was answered with. */
 interface RequestSource {
-  first: string;
+  /** The URLs that make it up, as sent and as `validateUrl` spells them. */
+  members: string[];
   /** Every spelling to replace. */
   spellings: Set<string>;
   row?: ImportResultRow;
@@ -57,26 +62,43 @@ interface RequestSource {
 /**
  * A link-back request's URLs by source, under their import key. Spellings of one
  * page share one job or swap, so each gets replaced, while URLs that only share
- * a key (`sameSource`) stay apart. `validateUrl` can change a URL (`parsed.href`),
- * so the spelling as sent is kept: it is what the page holds, and a swap matches
- * text. Variants are filtered because the dedup form drops what tells some pages
- * apart: without its route, `/app#/b` is a link to `/app`.
+ * a key stay apart. `sameSource` isn't transitive (`/view` matches both
+ * `?ref=111` and `?ref=222`), so a URL joins a group only if it matches every
+ * member. `validateUrl` can change a URL (`parsed.href`), so the spelling as
+ * sent is kept: it is what the page holds, and a swap matches text. Variants are
+ * filtered because the dedup form drops what tells some pages apart: without its
+ * route, `/app#/b` is a link to `/app`.
  */
 function requestSources(urls: unknown[]): Map<string, RequestSource[]> {
   const sources = new Map<string, RequestSource[]>();
   for (const raw of urls) {
     const url = typeof raw === "string" ? validateUrl(raw) : null;
     if (!url) continue;
+    const sent = (raw as string).trim();
     const key = normalizeImportKey(url);
     const sameKey = sources.get(key) ?? [];
     sources.set(key, sameKey);
-    let source = sameKey.find(({ first }) => sameSource(url, first));
+    let source = sameKey.find(({ members }) => members.every((member) => sameSource(url, member)));
     if (!source) {
-      source = { first: url, spellings: new Set() };
+      source = { members: [], spellings: new Set() };
       sameKey.push(source);
     }
-    for (const spelling of dedupUrlVariants((raw as string).trim(), url, extractVideoInput(url)?.url)) {
+    source.members.push(sent, url);
+    for (const spelling of dedupUrlVariants(sent, url, extractVideoInput(url)?.url)) {
       if (sameSource(spelling, url)) source.spellings.add(spelling);
+    }
+  }
+  // A spelling two sources could claim (the bare `/view` behind both refs) goes
+  // to the one the page sent it for, or to neither: a swap must not guess.
+  for (const sameKey of sources.values()) {
+    const claims = new Map<string, number>();
+    for (const { spellings } of sameKey) {
+      for (const spelling of spellings) claims.set(spelling, (claims.get(spelling) ?? 0) + 1);
+    }
+    for (const source of sameKey) {
+      for (const spelling of source.spellings) {
+        if (claims.get(spelling)! > 1 && !source.members.includes(spelling)) source.spellings.delete(spelling);
+      }
     }
   }
   return sources;
@@ -104,6 +126,29 @@ export function createAddArticleRoutes(
   const linkSource = options.linkSource ?? linkRelaySource;
   const resolveDocId = options.resolveDocId ?? ((path: string) => resolveRelayDocIdByPath(path));
 
+  // A page's link-backs, found by its doc id so a page renamed since still
+  // matches, and by path when the relay can't say. The lookup is cached, failures
+  // too, so the offer's polling costs no relay calls and a hung relay no waits.
+  const pageIds = new Map<string, { at: number; id: Promise<string | null | undefined> }>();
+  const pageLinks = async (path: string) => {
+    const now = Date.now();
+    let cached = pageIds.get(path);
+    if (!cached || now - cached.at >= PAGE_ID_TTL_MS) {
+      if (pageIds.size > 1_000) {
+        for (const [key, entry] of pageIds) if (now - entry.at >= PAGE_ID_TTL_MS) pageIds.delete(key);
+      }
+      cached = {
+        at: now,
+        id: resolveDocId(path).catch((error) => {
+          console.warn(`[add-article] could not look up ${path}, matching its link-backs by path: ${error}`);
+          return undefined;
+        }),
+      };
+      pageIds.set(path, cached);
+    }
+    return pageMatcher(path, await cached.id);
+  };
+
   router.use("/*", requireEduShareToken({ minRole: "edit" }));
 
   // Where each of a page's links stands, for the editor's offer. Only sources
@@ -123,14 +168,15 @@ export function createAddArticleRoutes(
     if (page !== undefined && !tokenAllowsFolderName(shareTokenPayload(c), folderOfPath(page))) {
       return c.json({ error: "Access denied: this token can't see that folder" }, 403);
     }
+    const forPage = page === undefined ? undefined : await pageLinks(page);
     const ready = library.ensureLoaded();
     const jobs = jobsBySource(queue.status());
     const urls = new Set(body.urls.filter((url): url is string => typeof url === "string"));
     const links = [...urls].flatMap((url) => {
       const kind = classifySourceLink(url);
       if (!kind) return [];
-      const sourceJobs = (jobs.get(normalizeImportKey(url)) ?? []).filter((job) => sameSource(url, job.url));
-      return [sourceLinkStatus(url, kind, library.lookup(url), sourceJobs, (job) => queue.view(job), page)];
+      const sourceJobs = (jobs.get(normalizeImportKey(url)) ?? []).filter((job) => sameSourceAsJob(url, job));
+      return [sourceLinkStatus(url, kind, library.lookup(url), sourceJobs, (job) => queue.view(job), forPage)];
     });
     const { workers, avg_job_minutes, queued, processing } = queue.summary();
     const response: SourceLinksCheckResponse = {
@@ -272,7 +318,7 @@ export function createAddArticleRoutes(
       // trailing-slash / mirror-host / youtu.be-vs-watch variants of one
       // document don't spawn parallel jobs.
       const key = normalizeImportKey(url);
-      const source = sources?.get(key)?.find(({ first }) => sameSource(url, first));
+      const source = sources?.get(key)?.find(({ members }) => members.includes(url));
       if (source?.row) {
         // That one job or swap covers every spelling of the source.
         const { row } = source;
@@ -304,7 +350,7 @@ export function createAddArticleRoutes(
       const active = queue.findActive(
         url,
         normalizeImportKey,
-        link ? (job) => sameSource(url, job.url) : undefined,
+        link ? (job) => link.urls.every((spelling) => sameSourceAsJob(spelling, job)) : undefined,
       );
       if (active) {
         if (link) queue.attachLinkBack(active.id, link);
@@ -317,7 +363,7 @@ export function createAddArticleRoutes(
         url,
         importMode,
         undefined,
-        link ? { replaceExisting, linkBack: [link] } : { replaceExisting },
+        link ? { replaceExisting, linkBack: [link], startedBy: link.doc_id } : { replaceExisting },
       );
       const row: ImportResultRow = { url: shownUrl, status: "queued", id: job.id };
       if (source) source.row = row;
@@ -361,7 +407,7 @@ export function createAddArticleRoutes(
       const view = queue.view(job);
       if (allFolders) return view;
       // Link-backs name pages in folders this token can't see.
-      const { link_back: _hidden, ...visible } = view;
+      const { link_back: _links, started_by: _starter, ...visible } = view;
       return visible;
     });
     return c.json({ queue: queue.summary(), jobs: views });
@@ -370,8 +416,8 @@ export function createAddArticleRoutes(
   // Remove several jobs at once (the import_cancel MCP tool): queued jobs
   // leave the queue, running ones are stopped. Per-id results, never a 404
   // for the whole batch because one id was already finished. With `path`, a
-  // page stops only its own interest: a job other pages are waiting on carries
-  // on for them, without this page.
+  // page stops only its own interest: it cancels a job it started that nobody
+  // else has joined, and otherwise leaves the job running without it.
   router.post("/cancel", async (c) => {
     const body = await c.req.json<{ ids?: unknown; path?: unknown }>().catch(() => null);
     const ids = body?.ids;
@@ -388,13 +434,14 @@ export function createAddArticleRoutes(
     if (page !== undefined && !tokenAllowsFolderName(shareTokenPayload(c), folderOfPath(page))) {
       return c.json({ error: "Access denied: this token can't write to that folder" }, 403);
     }
+    const forPage = page === undefined ? undefined : await pageLinks(page);
     const results = (ids as string[]).map((id) => {
       const job = queue.get(id);
       if (!job) return { id, cancelled: false, error: "No such job" };
-      if (page !== undefined && queue.detachLinkBack(id, page)) {
-        return { id, cancelled: false, detached: true };
-      }
       const before = job.status;
+      const stopped = forPage ? queue.stopForPage(id, forPage) : "unchanged";
+      if (stopped === "cancelled") return { id, cancelled: true, was: before };
+      if (stopped === "detached") return { id, cancelled: false, detached: true };
       if (!queue.cancel(id)) {
         return {
           id,
@@ -431,15 +478,21 @@ export function createAddArticleRoutes(
     const active = queue.findActive(
       job.url,
       normalizeImportKey,
-      waiting.length > 0 ? (other) => sameSource(job.url, other.url) : undefined,
+      waiting.length > 0
+        ? (other) => waiting.every((link) => link.urls.every((spelling) => sameSourceAsJob(spelling, other)))
+        : undefined,
     );
     if (active) {
       for (const link of waiting) queue.attachLinkBack(active.id, link);
       return c.json({ error: "URL is already queued", id: active.id }, 409);
     }
+    // The page that started the job still started the retry, if it is still
+    // waiting on it; a page that pressed Stop is gone from `waiting`.
+    const startedBy = waiting.some((link) => link.doc_id === job.started_by) ? job.started_by : undefined;
     const retried = queue.add(job.url, job.importMode, job.id, {
       replaceExisting: job.replaceExisting,
       ...(waiting.length > 0 ? { linkBack: waiting } : {}),
+      ...(startedBy ? { startedBy } : {}),
     });
     return c.json({ id: retried.id, status: "queued" });
   });

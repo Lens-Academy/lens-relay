@@ -11,7 +11,7 @@
 
 use crate::link_parser::TextEdit;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use url::Url;
 
@@ -165,13 +165,11 @@ pub fn frontmatter_of(text: &str) -> &str {
     frontmatter_end(text).map_or("", |end| &text[..end])
 }
 
-/// A fence line's character, run length and the text after the run.
+/// A fence line's character, run length and the text after the run. A fence
+/// may be indented any amount and sit in a quote or callout: inside a list
+/// item or a callout it still is one.
 fn fence_line(line: &str) -> Option<(u8, usize, &str)> {
-    let indent = line.bytes().take_while(|b| *b == b' ').count();
-    if indent > 3 {
-        return None;
-    }
-    let rest = &line[indent..];
+    let rest = line.trim_start_matches([' ', '\t', '>']);
     let fence = *rest.as_bytes().first()?;
     if fence != b'`' && fence != b'~' {
         return None;
@@ -226,9 +224,26 @@ fn starts_list_item(line: &str) -> bool {
     matches!(rest.as_bytes().get(marker), Some(b' ' | b'\t'))
 }
 
-/// Ends of the regions decided line by line, by where they start (rule 3).
-fn block_regions(text: &str) -> HashMap<usize, usize> {
+/// A GFM delimiter row (`--- | ---`, `|:--|--:|`), in a quote or not.
+fn is_delimiter_row(line: &str) -> bool {
+    let row = line.trim_start_matches([' ', '\t', '>']);
+    row.contains('|')
+        && row.contains('-')
+        && row.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
+}
+
+/// What the line-by-line pass found: the skipped regions, by where they start
+/// (rule 3), and the starts of table lines, outer pipes or not (rule 8).
+struct Blocks {
+    regions: HashMap<usize, usize>,
+    table_lines: HashSet<usize>,
+}
+
+fn block_regions(text: &str) -> Blocks {
     let mut regions = HashMap::new();
+    let mut table_lines = HashSet::new();
+    let mut in_table = false;
+    let mut pipe_line: Option<usize> = None;
     let mut offset = 0;
     if let Some(end) = frontmatter_end(text) {
         offset = end;
@@ -268,7 +283,25 @@ fn block_regions(text: &str) -> HashMap<usize, usize> {
             regions.insert(offset, end);
         } else if after_blank && !blank && is_indented(line) && !starts_list_item(line) {
             open_indent = Some(offset);
+        } else {
+            let has_pipe = line.contains('|');
+            if in_table && (blank || !has_pipe) {
+                in_table = false;
+            }
+            if in_table {
+                table_lines.insert(offset);
+            } else if let (true, Some(header)) = (is_delimiter_row(line), pipe_line) {
+                table_lines.insert(header);
+                table_lines.insert(offset);
+                in_table = true;
+            }
+            pipe_line = (!blank && has_pipe).then_some(offset);
+            after_blank = blank;
+            offset = end;
+            continue;
         }
+        in_table = false;
+        pipe_line = None;
         after_blank = blank;
         offset = end;
     }
@@ -278,7 +311,10 @@ fn block_regions(text: &str) -> HashMap<usize, usize> {
     if let Some(from) = open_indent {
         regions.insert(from, text.len());
     }
-    regions
+    Blocks {
+        regions,
+        table_lines,
+    }
 }
 
 /// The offset just past a `[…]` label that starts at `open`, on one line.
@@ -303,8 +339,9 @@ fn label_end(bytes: &[u8], open: usize) -> Option<usize> {
     None
 }
 
-/// The URL of the `(…)` at `open`, and the offset past it (rule 4).
-fn destination(text: &str, open: usize) -> Option<(&str, usize)> {
+/// The URL of the `(…)` at `open`, the offset past it, and whether it has a
+/// title (rule 4).
+fn destination(text: &str, open: usize) -> Option<(&str, usize, bool)> {
     let bytes = text.as_bytes();
     let skip_blanks = |mut i: usize| {
         while matches!(bytes.get(i), Some(b' ' | b'\t')) {
@@ -341,11 +378,12 @@ fn destination(text: &str, open: usize) -> Option<(&str, usize)> {
     }
 
     i = skip_blanks(i);
-    if let Some(quote @ (b'"' | b'\'' | b'(')) = bytes.get(i).copied() {
-        let closer = if quote == b'(' { ")" } else { &text[i..i + 1] };
+    let titled = matches!(bytes.get(i), Some(b'"' | b'\'' | b'('));
+    if titled {
+        let closer = if bytes[i] == b'(' { ")" } else { &text[i..i + 1] };
         i = skip_blanks(find_from(text, closer, i + 1)? + 1);
     }
-    (bytes.get(i) == Some(&b')')).then_some((url, i + 1))
+    (bytes.get(i) == Some(&b')')).then_some((url, i + 1, titled))
 }
 
 /// A bare URL's end after rule 5's stops and trims.
@@ -394,11 +432,12 @@ fn bare_end(text: &str, start: usize) -> usize {
     end
 }
 
-fn is_in_table(text: &str, offset: usize) -> bool {
+fn is_in_table(text: &str, table_lines: &HashSet<usize>, offset: usize) -> bool {
     let line_start = text[..offset].rfind('\n').map_or(0, |newline| newline + 1);
-    text[line_start..offset]
-        .trim_start_matches(|c| is_js_space(c) || c == '>')
-        .starts_with('|')
+    table_lines.contains(&line_start)
+        || text[line_start..offset]
+            .trim_start_matches(|c| is_js_space(c) || c == '>')
+            .starts_with('|')
 }
 
 /// Whether `offset` is where a link's destination starts: the end of a label
@@ -475,7 +514,10 @@ fn follows_word(text: &str, offset: usize) -> bool {
 /// Every external link in a page, in document order.
 pub fn scan(text: &str) -> Vec<ExternalLink> {
     let bytes = text.as_bytes();
-    let regions = block_regions(text);
+    let Blocks {
+        regions,
+        table_lines,
+    } = block_regions(text);
     let mut links = Vec::new();
     let add = |links: &mut Vec<ExternalLink>,
                url: &str,
@@ -490,8 +532,9 @@ pub fn scan(text: &str) -> Vec<ExternalLink> {
             form,
             start,
             end,
-            in_table: is_in_table(text, start),
-            swappable,
+            in_table: is_in_table(text, &table_lines, start),
+            // A link to a part of a page would lose the part (rule 7).
+            swappable: swappable && !url.contains('#'),
         })
     };
 
@@ -539,7 +582,7 @@ pub fn scan(text: &str) -> Vec<ExternalLink> {
             let dest = label_end(bytes, i + 1)
                 .filter(|after| bytes.get(*after) == Some(&b'('))
                 .and_then(|after| destination(text, after));
-            i = dest.map_or(i + 2, |(_, end)| end);
+            i = dest.map_or(i + 2, |(_, end, _)| end);
             continue;
         }
         if byte == b'<' {
@@ -570,10 +613,13 @@ pub fn scan(text: &str) -> Vec<ExternalLink> {
             let dest = label_end(bytes, i)
                 .filter(|after| bytes.get(*after) == Some(&b'('))
                 .and_then(|after| destination(text, after).map(|dest| (after, dest)));
-            if let Some((after, (url, end))) = dest {
+            if let Some((after, (url, end, titled))) = dest {
                 if scheme_len(url.as_bytes()).is_some() {
                     let label = &text[i + 1..after - 1];
-                    let swappable = !label.contains(['[', ']', '|', '*', '`']);
+                    // A label a wikilink alias would show as typed (rule 7).
+                    let swappable = !titled
+                        && !label.contains(['[', ']', '|', '*', '`', '_', '~', '$', '<', '>'])
+                        && !label.contains("==");
                     add(
                         &mut links,
                         url,
@@ -696,13 +742,21 @@ pub fn url_key(url: &str) -> &str {
 
 /// `title` as a wikilink alias, or the file stem at the end of `rel` when
 /// nothing is left of it.
+/// Braces go because every CriticMarkup delimiter has one, and a run of `%`
+/// becomes one so it can't open an Obsidian comment: the title comes from
+/// the source page, and an alias is inserted as written.
 fn alias_from_title(title: Option<&str>, rel: &str) -> String {
     let clean = |text: &str| -> String {
-        text.chars()
-            .filter(|c| !matches!(c, '[' | ']' | '|' | '\n' | '\r'))
-            .collect::<String>()
-            .trim()
-            .to_string()
+        let mut out = String::with_capacity(text.len());
+        for c in text.chars() {
+            if matches!(c, '[' | ']' | '|' | '{' | '}' | '\n' | '\r')
+                || (c == '%' && out.ends_with('%'))
+            {
+                continue;
+            }
+            out.push(c);
+        }
+        out.trim().to_string()
     };
     match clean(title.unwrap_or("")) {
         alias if alias.is_empty() => clean(rel.rsplit('/').next().unwrap_or(rel)),
@@ -1156,7 +1210,7 @@ mod tests {
     // whoever asked for the swap
     #[test]
     fn a_label_is_left_out_of_the_edits() {
-        let text = "See [The paper](https://example.com/a \"T\") now";
+        let text = "See [The paper](https://example.com/a) now";
         let urls = vec!["https://example.com/a".to_string()];
         let swap = &swap_links(text, &urls, "x", Some("T")).swaps[0];
         assert_eq!(swap.edits.len(), 2);

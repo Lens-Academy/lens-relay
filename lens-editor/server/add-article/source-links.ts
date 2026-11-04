@@ -11,7 +11,7 @@ import type { ShareTokenPayload } from "../share-token";
 import type { LibraryEntry } from "./library-index";
 import type { ArticleJobView } from "./queue";
 import type { ArticleJob } from "./types";
-import { normalizeImportKey } from "./url-normalize";
+import { normalizeImportKey, sameSource } from "./url-normalize";
 
 /** "human:<name>" or the MCP session's "ai:<model>[:<name>]". Strict, because
  *  `ai:` is what forces the human-text edit policy. */
@@ -20,6 +20,15 @@ const ACTOR_RE = /^(?:human|ai):\S/;
 /** The shared folder a full relay path is in. */
 export function folderOfPath(path: string): string {
   return path.split("/")[0];
+}
+
+/** Picks out one page's link-backs. */
+export type PageMatcher = (link: Pick<JobLinkBack, "doc_id" | "doc_path">) => boolean;
+
+/** By doc id when the page's is known, so link-backs made before a rename still
+ *  match; else by the path they were made with. */
+export function pageMatcher(path: string, docId: string | null | undefined): PageMatcher {
+  return docId ? (link) => link.doc_id === docId : (link) => link.doc_path === path;
 }
 
 /** A link-back request once checked, waiting for its URLs. */
@@ -94,6 +103,14 @@ export function swapOutcome({ linked, suggested, unswappable }: LinkSourceResult
   return { state: "failed", error: left };
 }
 
+/** Whether a link may ride on a job: the same page as the job's URL and as
+ *  every link it already carries. `sameSource` isn't transitive, and two links
+ *  on one job become the same wikilink. */
+export function sameSourceAsJob(url: string, job: ArticleJob): boolean {
+  return sameSource(url, job.url) &&
+    (job.link_back ?? []).every((link) => link.urls.every((spelling) => sameSource(url, spelling)));
+}
+
 /** Jobs by the source they import, oldest first. */
 export function jobsBySource(jobs: ArticleJob[]): Map<string, ArticleJob[]> {
   const bySource = new Map<string, ArticleJob[]>();
@@ -130,9 +147,9 @@ export function sourceLinkStatus(
   entry: LibraryEntry | undefined,
   jobs: ArticleJob[],
   view: (job: ArticleJob) => ArticleJobView,
-  page?: string,
+  page?: PageMatcher,
 ): SourceLinkStatus {
-  const forPage = (job: ArticleJob) => job.link_back?.find((link) => link.doc_path === page);
+  const forPage = (job: ArticleJob) => (page ? job.link_back?.find(page) : undefined);
   const concerns = (job: ArticleJob) => page === undefined || forPage(job) !== undefined;
 
   const row = { url, key: normalizeImportKey(url), kind };

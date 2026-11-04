@@ -10,6 +10,8 @@ export interface SourceLinkMenuTarget {
   importSource(url: string): void;
   /** The caret moved or the text changed. */
   editorChanged?(view: EditorView): void;
+  /** How far down the page the editor should keep the caret, clear of the bar. */
+  scrollMargin?(): number;
 }
 
 const LINK_NODES = new Set(['Link', 'Autolink', 'URL']);

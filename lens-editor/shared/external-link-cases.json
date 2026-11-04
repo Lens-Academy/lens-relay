@@ -1,9 +1,9 @@
 {
   "scan": [
     { "name": "1 inline link", "text": "See [The paper](https://example.com/a) now.", "links": [{ "url": "https://example.com/a", "form": "inline", "label": "The paper" }] },
-    { "name": "1 inline link with a title", "text": "[a](https://example.com/a \"A title\")", "links": [{ "url": "https://example.com/a", "form": "inline", "label": "a" }] },
+    { "name": "1 inline link with a title", "text": "[a](https://example.com/a \"A title\")", "links": [{ "url": "https://example.com/a", "form": "inline", "label": "a", "swappable": false }] },
     { "name": "1 autolink", "text": "<https://example.com/a>", "links": [{ "url": "https://example.com/a", "form": "autolink" }] },
-    { "name": "1 bare URL", "text": "Read https://example.com/a?x=1&y=2#frag today", "links": [{ "url": "https://example.com/a?x=1&y=2#frag", "form": "bare" }] },
+    { "name": "1 bare URL", "text": "Read https://example.com/a?x=1&y=2#frag today", "links": [{ "url": "https://example.com/a?x=1&y=2#frag", "form": "bare", "swappable": false }] },
     { "name": "1 scheme is case-insensitive and spelling is kept", "text": "HTTPS://Example.com/A and [b](HTTP://example.com/B)", "links": [{ "url": "HTTPS://Example.com/A", "form": "bare" }, { "url": "HTTP://example.com/B", "form": "inline", "label": "b" }] },
     { "name": "1 document order", "text": "[a](https://example.com/a) then https://example.com/b then <https://example.com/c>", "links": [{ "url": "https://example.com/a", "form": "inline", "label": "a" }, { "url": "https://example.com/b", "form": "bare" }, { "url": "https://example.com/c", "form": "autolink" }] },
     { "name": "1 other schemes and relative links are not links", "text": "[m](mailto:x@example.com) [f](ftp://example.com/a) [r](relative/path.md) [h](#heading)", "links": [] },
@@ -32,6 +32,9 @@
     { "name": "7 pipe in a label", "text": "[a|b](https://example.com/a)", "links": [{ "url": "https://example.com/a", "form": "inline", "label": "a|b", "swappable": false }] },
     { "name": "7 emphasis in a label", "text": "[**a**](https://example.com/a)", "links": [{ "url": "https://example.com/a", "form": "inline", "label": "**a**", "swappable": false }] },
     { "name": "7 code in a label", "text": "[`a`](https://example.com/a)", "links": [{ "url": "https://example.com/a", "form": "inline", "label": "`a`", "swappable": false }] },
+    {"name": "7 underscores in a label", "text": "[_the_ sample](https://example.com/a)", "links": [{"url": "https://example.com/a", "form": "inline", "label": "_the_ sample", "swappable": false}]},
+    {"name": "7 other markup in a label", "text": "[~~old~~](https://example.com/a) [$x^2$](https://example.com/b) [<kbd>k</kbd>](https://example.com/c) [==hi==](https://example.com/d)", "links": [{"url": "https://example.com/a", "form": "inline", "label": "~~old~~", "swappable": false}, {"url": "https://example.com/b", "form": "inline", "label": "$x^2$", "swappable": false}, {"url": "https://example.com/c", "form": "inline", "label": "<kbd>k</kbd>", "swappable": false}, {"url": "https://example.com/d", "form": "inline", "label": "==hi==", "swappable": false}]},
+    {"name": "7 a link to part of a page", "text": "[a](https://example.com/a#part) <https://example.com/b#x> https://example.com/c#y", "links": [{"url": "https://example.com/a#part", "form": "inline", "label": "a", "swappable": false}, {"url": "https://example.com/b#x", "form": "autolink", "swappable": false}, {"url": "https://example.com/c#y", "form": "bare", "swappable": false}]},
     { "name": "7 empty label", "text": "[](https://example.com/a)", "links": [{ "url": "https://example.com/a", "form": "inline", "label": "" }] },
     {"name": "3 indented code", "text": "a\n\n    [x](https://example.com/a)\n    https://example.com/b\n\n    https://example.com/c\nhttps://example.com/d", "links": [{"url": "https://example.com/d", "form": "bare"}]},
     {"name": "3 indented code with a tab", "text": "a\n\n\thttps://example.com/a\n", "links": []},
@@ -47,6 +50,11 @@
     {"name": "6 a destination in angle brackets, after a label over two lines", "text": "[a\nb](<https://example.com/a>)", "links": [{"url": "https://example.com/a", "form": "autolink", "swappable": false}]},
     {"name": "6 a spaced destination, after a label over two lines", "text": "[a\nb]( https://example.com/a )", "links": [{"url": "https://example.com/a", "form": "bare", "swappable": false}]},
     {"name": "8 a table in a blockquote", "text": "> | [x](https://example.com/a) | b |", "links": [{"url": "https://example.com/a", "form": "inline", "label": "x", "in_table": true}]},
+    {"name": "3 a fence in a list item", "text": "- Setup\n\t```bash\n\tcurl https://docs.example.com/guide\n\n\techo done\n\t```\nhttps://example.com/b", "links": [{"url": "https://example.com/b", "form": "bare"}]},
+    {"name": "3 a tilde fence indented under a list item", "text": "- Setup\n    ~~~\n    https://example.com/a\n    ~~~\nhttps://example.com/b", "links": [{"url": "https://example.com/b", "form": "bare"}]},
+    {"name": "3 a fence in a callout", "text": "> [!example]\n> ~~~\n> curl https://docs.example.com/guide\n> ~~~\nhttps://example.com/b", "links": [{"url": "https://example.com/b", "form": "bare"}]},
+    {"name": "8 a table without outer pipes", "text": "Name | Link\n--- | ---\nGuide | [the guide](https://example.com/a)\n\nhttps://example.com/b", "links": [{"url": "https://example.com/a", "form": "inline", "label": "the guide", "in_table": true}, {"url": "https://example.com/b", "form": "bare"}]},
+    {"name": "8 a line with a pipe is not a table without a delimiter row", "text": "a | [x](https://example.com/a)", "links": [{"url": "https://example.com/a", "form": "inline", "label": "x"}]},
     { "name": "8 table rows", "text": "| a | b |\n|---|---|\n| [x](https://example.com/a) | https://example.com/b |\nnot a row https://example.com/c", "links": [{ "url": "https://example.com/a", "form": "inline", "label": "x", "in_table": true }, { "url": "https://example.com/b", "form": "bare", "in_table": true }, { "url": "https://example.com/c", "form": "bare" }] }
   ],
   "classify": [
@@ -78,6 +86,8 @@
     { "name": "table uses an escaped separator", "text": "| [x](https://example.com/a) | b |", "url": "https://example.com/a", "rel": "../articles/x", "title": "Title", "expected": "| [[../articles/x\\|x]] | b |" },
     { "name": "title is cleaned", "text": "https://example.com/a", "url": "https://example.com/a", "rel": "../articles/x", "title": "A [draft] | v2", "expected": "[[../articles/x|A draft  v2]]" },
     { "name": "every occurrence changes", "text": "[a](https://example.com/a) and [b](https://example.com/a)", "url": "https://example.com/a", "rel": "x", "title": "T", "expected": "[[x|a]] and [[x|b]]" },
+    {"name": "title markup is cleaned", "text": "https://example.com/a", "url": "https://example.com/a", "rel": "../articles/x", "title": "Why {++ matters %% here", "expected": "[[../articles/x|Why ++ matters % here]]"},
+    {"name": "a table without outer pipes escapes the separator", "text": "Name | Link\n--- | ---\nGuide | [x](https://example.com/a)", "url": "https://example.com/a", "rel": "../articles/x", "title": "T", "expected": "Name | Link\n--- | ---\nGuide | [[../articles/x\\|x]]"},
     { "name": "unswappable stays", "text": "[a|b](https://example.com/a)", "url": "https://example.com/a", "rel": "x", "title": "T", "expected": "[a|b](https://example.com/a)" }
   ]
 }

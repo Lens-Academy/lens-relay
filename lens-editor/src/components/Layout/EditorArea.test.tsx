@@ -36,7 +36,7 @@ const renderWithProviders = (ui: React.ReactElement) =>
 vi.mock('../../lib/ydoc-provider', () => {
   const Y = require('yjs');
   const ydoc = new Y.Doc();
-  return { useYDoc: () => ydoc };
+  return { useYDoc: () => ydoc, useYjsProvider: () => ({ awareness: null }) };
 });
 
 // Mock the providers that EditorArea needs

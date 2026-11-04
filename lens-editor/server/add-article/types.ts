@@ -89,6 +89,11 @@ export interface ArticleJob {
   replaceExisting?: boolean;
   /** Pages whose links to this source become wikilinks once the job ends. */
   link_back?: JobLinkBack[];
+  /** Doc id of the page whose link-back created the job; absent for an import
+   *  started anywhere else (the Add Source page, an agent without link_from).
+   *  Only that page's Stop may cancel the job, and only while no other page
+   *  waits on it. */
+  started_by?: string;
   created_at: string;
   updated_at: string;
 }

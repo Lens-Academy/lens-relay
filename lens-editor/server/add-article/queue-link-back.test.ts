@@ -456,46 +456,125 @@ describe("attachLinkBack", () => {
   });
 });
 
-describe("detachLinkBack", () => {
+describe("stopForPage", () => {
   const running = () => makeQueue({ processJob: () => new Promise<void>(() => {}) });
+  const pageA = (link: { doc_id: string }) => link.doc_id === "relay-doc1";
+  const pageB = waiting({ doc_id: "relay-doc2", doc_path: "Lens/Notes/b.md" });
 
-  it("takes a page off a job other pages wait on", () => {
+  it("records which page started a job, and only that", () => {
     const { queue } = running();
-    const job = queue.add("https://example.com/a", "article", undefined, {
-      linkBack: [waiting(), waiting({ doc_id: "relay-doc2", doc_path: "Lens/Notes/b.md" })],
-    });
-    expect(queue.detachLinkBack(job.id, "Lens/Notes/a.md")).toBe(true);
-    expect(queue.get(job.id)?.link_back?.map((link) => link.doc_path)).toEqual(["Lens/Notes/b.md"]);
+    const started = queue.add("https://example.com/a", "article", undefined, { linkBack: [waiting()], startedBy: "relay-doc1" });
+    const plain = queue.add("https://example.com/b", "article");
+    expect(queue.get(started.id)?.started_by).toBe("relay-doc1");
+    expect(queue.get(plain.id)).not.toHaveProperty("started_by");
+    queue.attachLinkBack(plain.id, waiting());
+    expect(queue.get(plain.id)).not.toHaveProperty("started_by");
+  });
+
+  it("cancels a job the page started that nobody else joined, taking its link-back off first", async () => {
+    const { queue } = running();
+    const job = queue.add("https://example.com/a", "article", undefined, { linkBack: [waiting()], startedBy: "relay-doc1" });
+    expect(queue.stopForPage(job.id, pageA)).toBe("cancelled");
+    expect(queue.get(job.id)?.status).toBe("cancelled");
+    expect(queue.get(job.id)).not.toHaveProperty("link_back");
+  });
+
+  it("leaves a job it started running when another page has joined", () => {
+    const { queue } = running();
+    const job = queue.add("https://example.com/a", "article", undefined, { linkBack: [waiting(), pageB], startedBy: "relay-doc1" });
+    expect(queue.stopForPage(job.id, pageA)).toBe("detached");
     expect(queue.get(job.id)?.status).toBe("queued");
+    expect(queue.get(job.id)?.link_back?.map((link) => link.doc_id)).toEqual(["relay-doc2"]);
+  });
+
+  // Prevents: a page that joined someone's import from the Add Source page
+  // cancelling it with its Stop.
+  it("never cancels a job someone else started, or one started from no page", () => {
+    const { queue } = running();
+    const plain = queue.add("https://example.com/a", "article");
+    queue.attachLinkBack(plain.id, waiting());
+    expect(queue.stopForPage(plain.id, pageA)).toBe("detached");
+    expect(queue.get(plain.id)?.status).toBe("queued");
+    expect(queue.get(plain.id)).not.toHaveProperty("link_back");
+
+    const theirs = queue.add("https://example.com/b", "article", undefined, { linkBack: [pageB], startedBy: "relay-doc2" });
+    queue.attachLinkBack(theirs.id, waiting());
+    expect(queue.stopForPage(theirs.id, pageA)).toBe("detached");
+    expect(queue.get(theirs.id)?.status).toBe("queued");
+    // The starter, though alone now, can stop it.
+    expect(queue.stopForPage(theirs.id, (link) => link.doc_id === "relay-doc2")).toBe("cancelled");
   });
 
   it("drops every entry of that page, whoever asked", () => {
     const { queue } = running();
     const job = queue.add("https://example.com/a", "article", undefined, {
-      linkBack: [waiting(), waiting({ actor: "ai:fable-5:luc" }), waiting({ doc_path: "Lens/Notes/b.md" })],
+      linkBack: [waiting(), waiting({ actor: "ai:fable-5:luc" }), pageB],
     });
-    queue.detachLinkBack(job.id, "Lens/Notes/a.md");
-    expect(queue.get(job.id)?.link_back).toHaveLength(1);
+    queue.stopForPage(job.id, pageA);
+    expect(queue.get(job.id)?.link_back).toEqual([pageB]);
   });
 
-  it("leaves a job whose link-backs are all this page's", () => {
+  it("knows its starter by the path it was made with when the doc id is unknown", () => {
     const { queue } = running();
-    const job = queue.add("https://example.com/a", "article", undefined, { linkBack: [waiting()] });
-    expect(queue.detachLinkBack(job.id, "Lens/Notes/a.md")).toBe(false);
-    expect(queue.get(job.id)?.link_back).toHaveLength(1);
+    const job = queue.add("https://example.com/a", "article", undefined, { linkBack: [waiting()], startedBy: "relay-doc1" });
+    expect(queue.stopForPage(job.id, (link) => link.doc_path === "Lens/Notes/a.md")).toBe("cancelled");
   });
 
-  it("leaves a job with none, one that has ended, and one that doesn't exist", async () => {
+  it("leaves a job that has ended, or doesn't exist, to the plain cancel", async () => {
     const { queue } = makeQueue();
-    const plain = queue.add("https://example.com/a", "article");
-    expect(queue.detachLinkBack(plain.id, "Lens/Notes/a.md")).toBe(false);
-    const ended = queue.add("https://example.com/b", "article", undefined, {
-      linkBack: [waiting(), waiting({ doc_path: "Lens/Notes/b.md" })],
-    });
+    const ended = queue.add("https://example.com/b", "article", undefined, { linkBack: [waiting()], startedBy: "relay-doc1" });
     await settled(queue);
-    expect(queue.detachLinkBack(ended.id, "Lens/Notes/a.md")).toBe(false);
-    expect(queue.get(ended.id)?.link_back).toHaveLength(2);
-    expect(queue.detachLinkBack("nope", "Lens/Notes/a.md")).toBe(false);
+    expect(queue.stopForPage(ended.id, pageA)).toBe("unchanged");
+    expect(queue.get(ended.id)?.link_back).toHaveLength(1);
+    expect(queue.stopForPage("nope", pageA)).toBe("unchanged");
+  });
+
+  // Its article is written: a Stop now must not lose the link either.
+  it("leaves a job that is closing its report, with its link-back", async () => {
+    const { queue } = makeQueue({
+      processJob: async () => {},
+      reporterFactory: async (job) => ({
+        id: `r-${job.id}`,
+        persistent: false,
+        finish: () => new Promise<void>(() => {}),
+        summary: () => undefined,
+      }) as never,
+    });
+    const job = queue.add("https://example.com/a", "article", undefined, { linkBack: [waiting()], startedBy: "relay-doc1" });
+    await until(() => expect(queue.get(job.id)?.report_id).toBeDefined());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(queue.stopForPage(job.id, pageA)).toBe("unchanged");
+    expect(queue.get(job.id)?.link_back).toHaveLength(1);
+  });
+});
+
+describe("pages swap on their own", () => {
+  // Prevents: one page retrying for 45 minutes (it was deleted, say) holding
+  // up every other page waiting on the job.
+  it("doesn't make one page wait for another's retries", async () => {
+    const linkSource = vi.fn(async (request: { docId: string }) => {
+      if (request.docId === "relay-doc1") return new Promise<never>(() => {});
+      return LINKED;
+    });
+    const { queue } = makeQueue({ linkSource: linkSource as never });
+    const job = queue.add("https://example.com/a", "article", undefined, {
+      linkBack: [waiting(), waiting({ doc_id: "relay-doc2", doc_path: "Lens/Notes/b.md" })],
+    });
+    await until(() => expect(queue.get(job.id)?.link_back?.[1].state).toBe("linked"));
+    expect(queue.get(job.id)?.link_back?.[0].state).toBe("waiting");
+    expect(linkSource).toHaveBeenCalledTimes(2);
+  });
+
+  it("swaps each one once, however often the job is looked at again", async () => {
+    let release!: () => void;
+    const linkSource = vi.fn(() => new Promise<typeof LINKED>((resolve) => { release = () => resolve(LINKED); }));
+    const { queue } = makeQueue({ linkSource: linkSource as never });
+    const job = queue.add("https://example.com/a", "article", undefined, { linkBack: [waiting()] });
+    await until(() => expect(linkSource).toHaveBeenCalledOnce());
+    (queue as unknown as { swapLinkBacks(job: ArticleJob): void }).swapLinkBacks(queue.get(job.id)!);
+    release();
+    await settled(queue);
+    expect(linkSource).toHaveBeenCalledOnce();
   });
 });
 

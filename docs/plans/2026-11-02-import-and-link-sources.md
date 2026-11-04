@@ -12,8 +12,9 @@ the page depends on.
   empty. The editor scans the open page's text instead, so a page written by an agent, pasted in, or synced from
   Obsidian gets the same offer the first time someone who can import opens it.
 - **Ask once, and never block.** Dismissing a link records it in the page's `link_offers_v0` Y.Map, so nobody is asked
-  about that link on that page again. A link someone simply ignored, or left unticked, is remembered per browser: after
-  5 seconds on screen it isn't offered to that person again. Right-clicking a link can still import it.
+  about that link on that page again. Hide (×) is for this person only. A link someone ignored, hid, left unticked or
+  stopped is remembered per browser: after 5 seconds on screen it isn't offered to that person again. Right-clicking a
+  link can still import it.
 - **The server finishes the job.** Accepting records a `link_back` on the import job, and the server swaps the link
   when the job ends. The person can keep working or close the tab, and an agent need not wait or poll. A browser that
   swapped links itself would strand them when the tab closed.
@@ -24,8 +25,9 @@ the page depends on.
   brings the link back. An import that finishes later is still the server's swap, so that one can't be undone this way.
 - **A URL matches the library more strictly than it dedups.** A dedup miss costs a duplicate import; a wrong match
   rewrites a page. `sameSource` keeps the port, route-style fragments (`#/…`) and differing `?ref=` apart.
-- **Someone else's job is not this page's news.** `/links/check` takes the page's path, so another page's running or
-  failed import reads as an ordinary offer, and accepting joins it. Stop leaves other pages' link-backs running.
+- **Someone else's job is not this page's news.** `/links/check` takes the page's path (matched by doc id, so a rename
+  doesn't lose it), so another page's running or failed import reads as an ordinary offer, and accepting joins it. Stop
+  cancels only an import this page started that no other page has joined; otherwise it takes this page's link-back off.
 - **One call, whatever the source's state.** `POST /api/add-article` with `linkBack` links what is already in the
   library at once and queues the rest. The MCP tool is the same call with `link_from`.
 - **Humans decide directly; agents follow the edit policy.** A person clicking "Import and link" changes the page
@@ -50,7 +52,8 @@ The scanner takes raw Markdown, CriticMarkup included, and returns links in docu
    case-insensitive and the URL keeps its spelling.
 2. Images are not links: `![alt](url)`. A link whose label is an image is one link, and it is not swappable.
 3. Skipped regions: leading YAML frontmatter, fenced code (``` and ~~~, CommonMark closing rule, an unclosed fence runs
-   to the end), indented code (four spaces or a tab after a blank line, unless it starts a list item, and the lines
+   to the end; a fence may be indented any amount and sit in a quote or callout), indented code (four spaces or a tab
+   after a blank line, unless it starts a list item, and the lines
    after it while they stay indented or blank), inline code, `%%…%%`, `{++ ++}` `{-- --}` `{~~ ~~}` `{== ==}`
    `{>> <<}`, `<!-- -->`, `[[wikilinks]]`, raw HTML tags, which may span lines, the contents of `<pre>`, `<code>`,
    `<script>` and `<style>`, and reference definitions (`[id]: url`).
@@ -59,9 +62,11 @@ The scanner takes raw Markdown, CriticMarkup included, and returns links in docu
    trailing `. , ; : ! ? ' * _ ~` are trimmed, and a trailing `)` is trimmed while the URL has more `)` than `(`.
 6. A label stays on one line. An autolink or bare URL straight after `](`, spaces allowed, is the end of a label that
    did not, so it is not swappable.
-7. A label containing `[`, `]`, `|`, `*` or a backtick is not swappable: a wikilink alias shows them as typed. An empty
-   label is swappable and takes the source's title.
-8. `in_table` is true when the link's line starts with `|` after spaces and any `>`.
+7. Not swappable, because a wikilink would lose something: a label containing `[ ] | * \` _ ~ $ < >` or `==` (an alias
+   shows them as typed), a link with a title (`[a](url "title")`), and a URL with a `#fragment` (the copy has no
+   such anchor). An empty label is swappable and takes the source's title.
+8. `in_table` is true when the link's line starts with `|` after spaces and any `>`, or is a row of a table found by
+   its delimiter row (`--- | ---`), outer pipes or not.
 
 A link that isn't swappable is not offered, to a person or an agent: it would be imported and stay as it is.
 
@@ -94,7 +99,8 @@ A page gets the offer when it is a `.md` file outside `Lens Edu/` and `_trash/`,
 
 - `rel` comes from `compute_relative_wikilink`, from the page's current path. The job holds the page's doc id, so a page
   moved during an import still gets the right link.
-- `title` has `[`, `]`, `|` and newlines removed. An empty result falls back to the target's file stem.
+- `title` has `[`, `]`, `|`, braces and newlines removed, and a run of `%` becomes one, so a source's title can't open
+  markup or a comment in the page. An empty result falls back to the target's file stem.
 - Links are found again in the live text at swap time. Offsets from earlier are never used.
 - Unswappable links are left and counted.
 - A direct swap edits only the markup around a label, so the label keeps its author.
@@ -102,9 +108,10 @@ A page gets the offer when it is a `.md` file outside `Lens Edu/` and `_trash/`,
 ## Editor
 
 A one-line bar that floats over the top of the page area, so it stays in view for someone who pasted a link 300 lines
-down and never moves the text. If the caret would sit under it, it steps down below the caret's line. It never takes
-the keyboard and is never a dialog. A bare URL with the caret at or inside it is still being typed, so it isn't offered
-until the caret leaves. Every state below is in `src/components/SourceLinksBar/bar-model.ts`.
+down and never moves the text. If the caret would sit under it, it steps down below the caret's line, and CodeMirror
+keeps a scroll margin of its height. It never takes the keyboard and is never a dialog. A link with anyone's caret in
+it, local or remote, is still being typed, so it isn't offered until the caret leaves. Every state below is in
+`src/components/SourceLinksBar/bar-model.ts`.
 
 | State | Text | Actions |
 |---|---|---|
@@ -118,7 +125,8 @@ until the caret leaves. Every state below is in `src/components/SourceLinksBar/b
 | Failed | 1 source couldn't be imported. | **Retry**, Details, Dismiss |
 
 Choose opens a list under the bar, one row per source with a tick box, its host and path (or title if in the library),
-an "In library" or "Video" tag, and a link to open it. Its footer has "Import and link N" and the estimate. In the
+an "In library" or "Video" tag, and a link to open it (the library copy for an "In library" row). Above 10 sources the
+list starts unticked. Its footer has "Import and link N" and the estimate. In the
 Working and Failed states Details shows the same rows with each one's state and any error.
 
 Right-click on an external link adds "Import and link this source", which also works on a dismissed link.

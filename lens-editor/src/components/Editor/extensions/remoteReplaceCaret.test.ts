@@ -194,11 +194,77 @@ describe('remoteReplaceCaret and y-sync', () => {
     expect(view.state.selection.mainIndex).toBe(1);
   });
 
-  it('handles a replacement of the same length, which only the text can tell apart', () => {
-    const same = 'x'.repeat(URL_A.length);
+  it('handles a swap of the same length, which only the text can tell apart', () => {
+    const same = `[[${'x'.repeat(URL_A.length - 4)}]]`;
     const { view, fromElsewhere } = editorOn(TEXT);
     view.dispatch({ selection: { anchor: to } });
     fromElsewhere((contents) => swap(contents, 5, to, same));
     expect(view.state.selection.main.head).toBe(to);
+  });
+});
+
+describe('remoteReplaceCaret leaves ordinary co-editing to CodeMirror', () => {
+  const TEXT = 'Ana is writing here.\n\nBen rewrites this whole sentence.\n';
+  const from = TEXT.indexOf('Ben rewrites');
+  const to = TEXT.indexOf('sentence.') + 'sentence.'.length;
+
+  it('someone retyping a sentence the caret is in', () => {
+    // Before the fix: "T<ANA>otally new words."
+    const typed = typedAfter(TEXT, TEXT.indexOf('whole'), (c) => swap(c, from, to, 'Totally new words.'));
+    expect(typed).toContain('XXTotally new words.');
+  });
+
+  it('someone replacing the word the caret is at the end of', () => {
+    const end = TEXT.indexOf('rewrites') + 'rewrites'.length;
+    const typed = typedAfter(TEXT, end, (c) => swap(c, end - 'rewrites'.length, end, 'redoes'));
+    expect(typed).toContain('Ben XXredoes this');
+  });
+
+  it('a replacement that removes a URL but puts no wikilink in', () => {
+    const LINE = `Read ${URL_A} then`;
+    const end = 5 + URL_A.length;
+    expect(typedAfter(LINE, end, (c) => swap(c, 5, end, 'plain words'))).toBe('Read XXplain words then');
+  });
+
+  it('a wikilink typed over text that was no link', () => {
+    const LINE = 'Read the paper then';
+    const end = LINE.indexOf(' then');
+    expect(typedAfter(LINE, end, (c) => swap(c, 5, end, '[[paper]]'))).toBe('Read XX[[paper]] then');
+  });
+});
+
+describe('remoteReplaceCaret and a link swapped as a suggestion', () => {
+  const META = '{"author":"Ben","timestamp":1}@@';
+  const TEXT = `Read [lbl](${URL_A}) today.`;
+  const start = TEXT.indexOf('[');
+  const end = TEXT.indexOf(')') + 1;
+  const AFTER = `--}{++${META}[[articles/a|lbl]]++}`;
+  /** As the relay writes it: one transaction, the closer at the end, the opener at the start. */
+  const suggest = (contents: Y.Text) => {
+    contents.insert(end, AFTER);
+    contents.insert(start, `{--${META}`);
+  };
+  const wrapped = `Read {--${META}[lbl](${URL_A})${AFTER}`;
+
+  it.each([
+    ['right after the )', end],
+    ['in the URL', TEXT.indexOf('example')],
+    ['in the label', TEXT.indexOf('lbl') + 1],
+    ['right after the [', start + 1],
+  ])('moves a caret %s past the whole suggestion', (_where, at) => {
+    expect(typedAfter(TEXT, at, suggest)).toBe(`${wrapped}XX today.`);
+  });
+
+  it('leaves a caret in front of the link in front of it', () => {
+    expect(typedAfter(TEXT, start, suggest)).toBe(`Read XX{--${META}[lbl](${URL_A})${AFTER} today.`);
+  });
+
+  it('leaves a caret elsewhere where it was', () => {
+    expect(typedAfter(TEXT, TEXT.indexOf('today') + 2, suggest)).toBe(`${wrapped} toXXday.`);
+  });
+
+  it('does not take any insertion of markup for one', () => {
+    const plain = (contents: Y.Text) => contents.insert(end, '{++an aside++}');
+    expect(typedAfter(TEXT, end, plain)).toBe(`Read [lbl](${URL_A})XX{++an aside++} today.`);
   });
 });

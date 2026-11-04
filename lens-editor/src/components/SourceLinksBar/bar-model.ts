@@ -21,6 +21,8 @@ export interface SourceRow {
   urls: string[];
   kind: SourceKind;
   label: string;
+  /** Full relay path of the library copy, for a row in the library. */
+  libraryPath?: string;
   state: RowState;
   step?: RowStep;
   /** Done rows: whether an import was needed, or only the link. */
@@ -64,7 +66,7 @@ function sources(count: number): string {
 
 /** The bar's distance from the top of the page, and from the caret. */
 export const BAR_TOP_PX = 8;
-const CARET_GAP_PX = 6;
+export const CARET_GAP_PX = 6;
 
 /**
  * How far down the bar has to sit to stay off the caret: it floats over the page,

@@ -151,8 +151,8 @@ export class ArticleJobQueue {
   private linkSource: NonNullable<QueueOptions["linkSource"]>;
   private linkRetryDelaysMs: number[];
   private library: NonNullable<QueueOptions["library"]>;
-  /** Jobs whose link-backs are being swapped right now. */
-  private swapping = new Set<string>();
+  /** Link-backs being swapped right now. */
+  private swapping = new Set<JobLinkBack>();
 
   constructor(options: QueueOptions) {
     this.processJob = options.processJob;
@@ -178,7 +178,7 @@ export class ArticleJobQueue {
     url: string,
     importMode: ArticleImportMode,
     retryOf?: string,
-    options: { replaceExisting?: boolean; linkBack?: JobLinkBack[] } = {},
+    options: { replaceExisting?: boolean; linkBack?: JobLinkBack[]; startedBy?: string } = {},
   ): ArticleJob {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
@@ -195,6 +195,7 @@ export class ArticleJobQueue {
       retry_of: retryOf,
       ...(options.replaceExisting ? { replaceExisting: true } : {}),
       ...(options.linkBack?.length ? { link_back: options.linkBack } : {}),
+      ...(options.startedBy ? { started_by: options.startedBy } : {}),
       created_at: now,
       updated_at: now,
     };
@@ -251,18 +252,36 @@ export class ArticleJobQueue {
     this.persist();
   }
 
-  /** Take a page off a running job that other pages are also waiting on, which
-   *  must carry on for them. False when no other page is: stopping the job is
-   *  then the caller's call. */
-  detachLinkBack(id: string, docPath: string): boolean {
+  /**
+   * A page's Stop. The job is cancelled only when this page started it and no
+   * other page has joined; otherwise it carries on for whoever else wants it.
+   * Either way the page's own link-backs come off first, so a retry later (from
+   * the Add Source page, say) can't swap links the page asked to keep.
+   * "unchanged" when the job has ended or is closing its report, which the
+   * plain cancel answers for.
+   */
+  stopForPage(id: string, isPage: (link: Pick<JobLinkBack, "doc_id" | "doc_path">) => boolean):
+    "cancelled" | "detached" | "unchanged" {
     const job = this.jobs.get(id);
-    if (!job || (job.status !== "queued" && job.status !== "processing")) return false;
-    const others = job.link_back?.filter((link) => link.doc_path !== docPath) ?? [];
-    if (others.length === 0) return false;
-    job.link_back = others;
-    job.updated_at = new Date().toISOString();
+    if (!job || (job.status !== "queued" && job.status !== "processing") || this.finishing.has(id)) {
+      return "unchanged";
+    }
+    const links = job.link_back ?? [];
+    const others = links.filter((link) => !isPage(link));
+    // The starter's own link-back carries its path, for when the page's doc id
+    // couldn't be looked up.
+    const starter = job.started_by === undefined
+      ? undefined
+      : links.find((link) => link.doc_id === job.started_by) ?? { doc_id: job.started_by, doc_path: "" };
+    const startedHere = starter !== undefined && isPage(starter);
+    if (others.length !== links.length) {
+      if (others.length > 0) job.link_back = others;
+      else delete job.link_back;
+      job.updated_at = new Date().toISOString();
+    }
+    if (startedHere && others.length === 0 && this.cancel(id)) return "cancelled";
     this.persist();
-    return true;
+    return "detached";
   }
 
   /** Move a job's unswapped link-backs out of it, for a retry to carry. */
@@ -406,7 +425,7 @@ export class ArticleJobQueue {
         }
         this.recordImport(job);
         this.persist();
-        if (job.link_back?.length) void this.swapLinkBacks(job);
+        if (job.link_back?.length) this.swapLinkBacks(job);
         this.drain();
       });
     }
@@ -430,28 +449,27 @@ export class ArticleJobQueue {
   /** Link-backs left waiting by a restart, on jobs that had already finished. */
   private resumeLinkBacks(): void {
     for (const job of this.jobs.values()) {
-      if (job.link_back?.length) void this.swapLinkBacks(job);
+      if (job.link_back?.length) this.swapLinkBacks(job);
     }
   }
 
   /**
-   * Swap the links waiting on a finished job, a page at a time. This runs beside
-   * the queue, so a slow relay holds no worker, and it only ever writes to the
-   * link-backs: the job's own status is already settled. A failed or cancelled
-   * job swaps nothing, so its links stay as written and a retry can carry them.
+   * Swap the links waiting on a finished job, each page on its own, so one page
+   * that keeps failing (a deleted page retries for about 45 minutes) holds up
+   * nobody else. This runs beside the queue, so a slow relay holds no worker,
+   * and it only ever writes to the link-backs: the job's own status is already
+   * settled. A failed or cancelled job swaps nothing, so its links stay as
+   * written and a retry can carry them.
    */
-  private async swapLinkBacks(job: ArticleJob): Promise<void> {
-    if ((job.status !== "done" && job.status !== "skipped") || this.swapping.has(job.id)) return;
-    this.swapping.add(job.id);
-    try {
-      for (const link of job.link_back ?? []) {
-        if (link.state === "waiting") await this.swapLinkBack(job, link);
-      }
-    } catch (error) {
-      // Nothing awaits this, and an unhandled rejection kills Node.
-      console.error(`[add-article] job=${job.id} link-back stopped: ${error}`);
-    } finally {
-      this.swapping.delete(job.id);
+  private swapLinkBacks(job: ArticleJob): void {
+    if (job.status !== "done" && job.status !== "skipped") return;
+    for (const link of job.link_back ?? []) {
+      if (link.state !== "waiting" || this.swapping.has(link)) continue;
+      this.swapping.add(link);
+      void this.swapLinkBack(job, link)
+        // Nothing awaits this, and an unhandled rejection kills Node.
+        .catch((error) => console.error(`[add-article] job=${job.id} link-back for ${link.doc_path} stopped: ${error}`))
+        .finally(() => this.swapping.delete(link));
     }
   }
 

@@ -28,7 +28,7 @@ const RAW_TEXT_OPEN_RE = /^<(?:pre|code|script|style)[ \t\r\n>]/i;
 const RAW_TEXT_CLOSE_RE = /<\/(?:pre|code|script|style)[ \t\r\n]*>/gi;
 const INDENTED_RE = /^(?: {4}| {0,3}\t)/;
 const LIST_ITEM_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]/;
-const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const FENCE_RE = /^[ \t>]*(`{3,}|~{3,})(.*)$/;
 const REFERENCE_RE = /^ {0,3}\[[^\]\n]+\]:\s/;
 const CRITIC_CLOSERS: Record<string, string> = {
   "{++": "++}",
@@ -38,9 +38,20 @@ const CRITIC_CLOSERS: Record<string, string> = {
   "{>>": "<<}",
 };
 
-/** Ends of the regions decided line by line, by where they start (rule 3). */
-function blockRegions(text: string): Map<number, number> {
+/** A GFM delimiter row (`--- | ---`, `|:--|--:|`), in a quote or not. */
+function isDelimiterRow(line: string): boolean {
+  const row = line.replace(/^[ \t>]*/, "");
+  return row.includes("|") && row.includes("-") && /^[|\-: \t]*$/.test(row);
+}
+
+/** What the line-by-line pass found: the skipped regions, by where they start
+ *  (rule 3), and the starts of table lines, outer pipes or not (rule 8). A
+ *  fence may be indented any amount and sit in a quote or callout. */
+function blockRegions(text: string): { regions: Map<number, number>; tableLines: Set<number> } {
   const regions = new Map<number, number>();
+  const tableLines = new Set<number>();
+  let inTable = false;
+  let pipeLine: number | null = null;
   let offset = 0;
 
   if (/^---\r?\n/.test(text)) {
@@ -77,13 +88,29 @@ function blockRegions(text: string): Map<number, number> {
       regions.set(offset, end);
     } else if (afterBlank && !blank && INDENTED_RE.test(line) && !LIST_ITEM_RE.test(line)) {
       indented = offset;
+    } else {
+      const hasPipe = line.includes("|");
+      if (inTable && (blank || !hasPipe)) inTable = false;
+      if (inTable) {
+        tableLines.add(offset);
+      } else if (isDelimiterRow(line) && pipeLine !== null) {
+        tableLines.add(pipeLine);
+        tableLines.add(offset);
+        inTable = true;
+      }
+      pipeLine = !blank && hasPipe ? offset : null;
+      afterBlank = blank;
+      offset = end;
+      continue;
     }
+    inTable = false;
+    pipeLine = null;
     afterBlank = blank;
     offset = end;
   }
   if (fence) regions.set(fence.from, text.length);
   if (indented !== null) regions.set(indented, text.length);
-  return regions;
+  return { regions, tableLines };
 }
 
 /** Index just past a `[…]` label that starts at `open`, on one line, or -1. */
@@ -99,8 +126,9 @@ function labelEnd(text: string, open: number): number {
   return -1;
 }
 
-/** The URL of the `(…)` at `open`, and the index past it (rule 4). */
-function destination(text: string, open: number): { url: string; end: number } | null {
+/** The URL of the `(…)` at `open`, the index past it, and whether it has a
+ *  title (rule 4). */
+function destination(text: string, open: number): { url: string; end: number; titled: boolean } | null {
   let i = open + 1;
   while (text[i] === " " || text[i] === "\t") i += 1;
   let url = "";
@@ -126,13 +154,14 @@ function destination(text: string, open: number): { url: string; end: number } |
   }
   while (text[i] === " " || text[i] === "\t") i += 1;
   const quote = text[i];
-  if (quote === '"' || quote === "'" || quote === "(") {
+  const titled = quote === '"' || quote === "'" || quote === "(";
+  if (titled) {
     const close = text.indexOf(quote === "(" ? ")" : quote, i + 1);
     if (close === -1) return null;
     i = close + 1;
     while (text[i] === " " || text[i] === "\t") i += 1;
   }
-  return text[i] === ")" ? { url, end: i + 1 } : null;
+  return text[i] === ")" ? { url, end: i + 1, titled } : null;
 }
 
 /** A bare URL's end after rule 5's stops and trims. */
@@ -151,10 +180,13 @@ function bareEnd(text: string, start: number): number {
   return end;
 }
 
-function isInTable(text: string, offset: number): boolean {
+function isInTable(text: string, tableLines: Set<number>, offset: number): boolean {
   const lineStart = offset === 0 ? 0 : text.lastIndexOf("\n", offset - 1) + 1;
-  return /^[\s>]*\|/.test(text.slice(lineStart, offset));
+  return tableLines.has(lineStart) || /^[\s>]*\|/.test(text.slice(lineStart, offset));
 }
+
+/** A label a wikilink alias would show as typed (rule 7). */
+const LABEL_MARKUP_RE = /[[\]|*`_~$<>]|==/;
 
 /** Whether `offset` is where a link's destination starts: the end of a label
  *  that ran over a line, so the scanner never saw it as a label (rule 6). */
@@ -184,10 +216,11 @@ function codeSpanEnd(text: string, open: number, run: number): number {
 
 /** Every external link in a page, in document order. */
 export function scanExternalLinks(text: string): ExternalLink[] {
-  const regions = blockRegions(text);
+  const { regions, tableLines } = blockRegions(text);
   const links: ExternalLink[] = [];
+  // A link to a part of a page would lose the part (rule 7).
   const add = (url: string, label: string | null, form: ExternalLinkForm, start: number, end: number, swappable: boolean) =>
-    links.push({ url, label, form, start, end, inTable: isInTable(text, start), swappable });
+    links.push({ url, label, form, start, end, inTable: isInTable(text, tableLines, start), swappable: swappable && !url.includes("#") });
 
   let i = 0;
   while (i < text.length) {
@@ -260,7 +293,7 @@ export function scanExternalLinks(text: string): ExternalLink[] {
       if (dest) {
         if (SCHEME_RE.test(dest.url)) {
           const label = text.slice(i + 1, after - 1);
-          add(dest.url, label, "inline", i, dest.end, !/[[\]|*`]/.test(label));
+          add(dest.url, label, "inline", i, dest.end, !dest.titled && !LABEL_MARKUP_RE.test(label));
         }
         i = dest.end;
         continue;
@@ -288,7 +321,9 @@ export interface LinkEdit {
 
 /** `title` as a wikilink alias, or the file stem at the end of `rel`. */
 function aliasFrom(title: string | undefined, rel: string): string {
-  const clean = (text: string) => text.replace(/[[\]|\r\n]/g, "").trim();
+  // Braces go because every CriticMarkup delimiter has one, and a run of `%`
+  // becomes one so it can't open a comment: the title comes from the source.
+  const clean = (text: string) => text.replace(/[[\]|{}\r\n]/g, "").replace(/%+/g, "%").trim();
   return clean(title ?? "") || clean(rel.slice(rel.lastIndexOf("/") + 1));
 }
 

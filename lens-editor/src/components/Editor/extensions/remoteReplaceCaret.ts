@@ -2,20 +2,44 @@ import { EditorSelection, EditorState, Transaction, type Extension } from '@code
 import type * as Y from 'yjs';
 
 /**
- * Keeps the caret past text someone else replaced. When another person's edit
- * replaces text the caret is in, or just after, a plain mapping leaves it before
- * the new text, so the next thing typed lands in front of it: someone writing
- * after a bare URL would find their words before the wikilink it became. A caret
- * at the start of the replaced text stays before it, and one in a link's label
- * isn't in any change, since a swap leaves the label alone.
+ * Keeps the caret past a link someone else turned into a wikilink. A plain
+ * mapping leaves a caret that was at or in the link before the new markup, so
+ * the next thing typed lands in front of it, or inside a suggestion's markup.
+ *
+ * Only link swaps, recognised narrowly: any other edit by someone else is left
+ * to CodeMirror, whose mapping is right for ordinary co-editing (a caret in a
+ * sentence someone retypes stays where their typing began, not after it).
  */
 
-/** The end of the replacement a caret at `pos` was in, or null. */
-function endOfReplacement(tr: Transaction, pos: number): number | null {
+interface Change {
+  fromA: number;
+  toA: number;
+  toB: number;
+  inserted: string;
+}
+
+/** What a swap removes: some of a URL, or the `[` that opens a label. */
+const isLinkText = (text: string) => text.includes('http') || text === '[';
+const isWikilinkMarkup = (text: string) => text.includes('[[') || text.includes(']]');
+/** The closing half of a link wrapped as a suggestion: `--}{++meta@@[[…]]++}`. */
+const isSuggestedSwapEnd = (text: string) => text.startsWith('--}{++') && text.includes('[[');
+
+/** Where a caret at `pos` should go after a link swap in `tr`, or null. */
+function endOfSwap(tr: Transaction, changes: Change[], pos: number): number | null {
   let end: number | null = null;
-  tr.changes.iterChanges((fromA, toA, fromB, toB) => {
-    if (fromA < toA && fromB < toB && fromA < pos && pos <= toA) end = toB;
-  });
+  for (const change of changes) {
+    const { fromA, toA, toB, inserted } = change;
+    if (fromA < toA && inserted && fromA < pos && pos <= toA) {
+      // A swap in place: the link's text out, wikilink markup in
+      if (isLinkText(tr.startState.doc.sliceString(fromA, toA)) && isWikilinkMarkup(inserted)) end = toB;
+    } else if (fromA === toA && isSuggestedSwapEnd(inserted)) {
+      // A swap as a suggestion: `{--meta@@` went in at the link's start, this at its end
+      const opener = [...changes]
+        .reverse()
+        .find((other) => other.fromA === other.toA && other.fromA < fromA && other.inserted.startsWith('{--'));
+      if (opener && opener.fromA < pos && pos <= fromA) end = toB;
+    }
+  }
   return end;
 }
 
@@ -32,10 +56,16 @@ function cameFromY(tr: Transaction, ytext: Y.Text): boolean {
 export function remoteReplaceCaret(ytext: Y.Text): Extension {
   return EditorState.transactionFilter.of((tr) => {
     if (!tr.docChanged || tr.selection || tr.annotation(Transaction.userEvent)) return tr;
+    const changes: Change[] = [];
+    tr.changes.iterChanges((fromA, toA, _fromB, toB, inserted) =>
+      changes.push({ fromA, toA, toB, inserted: inserted.toString() }),
+    );
+    // Cheap first: no wikilink markup going in, no swap
+    if (!changes.some(({ inserted }) => isWikilinkMarkup(inserted))) return tr;
     const { ranges, mainIndex } = tr.startState.selection;
     let moved = false;
     const next = ranges.map((range) => {
-      const end = range.empty ? endOfReplacement(tr, range.head) : null;
+      const end = range.empty ? endOfSwap(tr, changes, range.head) : null;
       if (end === null) return range.map(tr.changes);
       moved = true;
       return EditorSelection.cursor(end);

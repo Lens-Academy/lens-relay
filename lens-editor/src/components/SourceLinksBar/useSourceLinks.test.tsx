@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { readLinkOffers, readSeenLinkOffers, dismissLinkOffers } from '../../lib/link-offers';
 import { FakeSourceServer } from './fake-source-server.test-helper';
@@ -674,16 +675,31 @@ describe('finishing', () => {
 });
 
 describe('Stop', () => {
-  it('cancels the running jobs and returns to the offer', async () => {
-    const { result } = await open(docWith(`See ${A} and ${B}`));
+  it('cancels the running jobs, and does not offer them again to this person', async () => {
+    const doc = docWith(`See ${A} and ${B}`);
+    const { result, unmount } = await open(doc);
     act(() => result.current.session?.accept([A, B]));
     await pass(0);
     await act(async () => {
       await result.current.session?.stopImports();
     });
     expect(server.cancels).toEqual([[`job:${A}`, `job:${B}`]]);
-    expect(result.current.model.kind).toBe('offer');
-    expect(result.current.model.text).toBe("2 sources on this page aren't in the library yet.");
+    expect(result.current.model.kind).toBe('hidden');
+    expect([...readSeenLinkOffers('relay-doc-1')]).toEqual([A, B]);
+    expect(readLinkOffers(doc).size).toBe(0);
+    unmount();
+    const again = await open(doc);
+    expect(again.result.current.model.kind).toBe('hidden');
+  });
+
+  it('still offers another source on the page after a Stop', async () => {
+    const { result } = await open(docWith(`See ${A} and ${B}`));
+    act(() => result.current.session?.accept([A]));
+    await pass(0);
+    await act(async () => {
+      await result.current.session?.stopImports();
+    });
+    expect(result.current.model.rows.map((row) => row.url)).toEqual([B]);
   });
 
   it('stops polling', async () => {
@@ -719,13 +735,14 @@ describe('Stop', () => {
     await act(async () => {
       await result.current.session?.stopImports();
     });
-    expect(result.current.model.kind).toBe('offer');
+    expect(result.current.model.kind).toBe('hidden');
 
     await act(async () => {
       server.release();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(result.current.model.kind).toBe('offer');
+    // The stale "importing" brings back neither Working nor the offer
+    expect(result.current.model.kind).toBe('hidden');
   });
 });
 
@@ -1083,9 +1100,10 @@ describe('the page and the job list', () => {
     await act(async () => {
       await result.current.session?.stopImports();
     });
-    expect(result.current.model.kind).toBe('offer');
+    expect(server.cancelPaths).toEqual(['Lens/Notes/page.md']);
+    expect(result.current.model.kind).toBe('hidden');
     await pass(POLL_MS * 2);
-    expect(result.current.model.kind).toBe('offer');
+    expect(result.current.model.kind).toBe('hidden');
   });
 });
 
@@ -1176,10 +1194,14 @@ describe('a bare URL the caret is on', () => {
     expect(server.requests).toBe(0);
   });
 
-  it('holds it with the caret inside or at its start', async () => {
+  it('holds it with the caret inside', async () => {
     await typed(`See ${A} more`, (doc) => held(doc) - 3);
-    await typed(`See ${A} more`, (doc) => held(doc) - A.length);
     expect(server.requests).toBe(0);
+  });
+
+  it('does not hold it with the caret at its start', async () => {
+    const { result } = await typed(`See ${A} more`, (doc) => held(doc) - A.length);
+    expect(result.current.model.kind).toBe('offer');
   });
 
   it('offers it once the caret has left, with no text change', async () => {
@@ -1217,11 +1239,22 @@ describe('a bare URL the caret is on', () => {
     expect(server.checks.length).toBe(before + 1);
   });
 
-  it('does not hold a link with a label, or an autolink: they are complete', async () => {
-    const inline = await typed(`See [a](${A})`, (doc) => doc.getText('contents').length);
-    expect(inline.result.current.model.kind).toBe('offer');
-    const autolink = await typed(`See <${B}>`, (doc) => doc.getText('contents').length);
-    expect(autolink.result.current.model.kind).toBe('offer');
+  it('holds a link with a label while its URL is typed, inside the ) closeBrackets added', async () => {
+    const inside = await typed(`See [a](${A})`, (doc) => doc.getText('contents').length - 1);
+    expect(inside.result.current.model.kind).toBe('hidden');
+    const after = await typed(`See [a](${A})`, (doc) => doc.getText('contents').length);
+    expect(after.result.current.model.kind).toBe('hidden');
+    expect(server.requests).toBe(0);
+    act(() => after.result.current.session?.setCaret(0));
+    await pass(0);
+    expect(after.result.current.model.kind).toBe('offer');
+  });
+
+  it('holds an autolink the same way, and not one the caret is in front of', async () => {
+    const at = await typed(`See <${B}>`, (doc) => doc.getText('contents').length);
+    expect(at.result.current.model.kind).toBe('hidden');
+    const before = await typed(`See <${B}>`, (doc) => doc.getText('contents').toString().indexOf('<'));
+    expect(before.result.current.model.kind).toBe('offer');
   });
 
   it('does not hold a URL that is finished elsewhere on the page', async () => {
@@ -1514,5 +1547,189 @@ describe('swapping in the open editor', () => {
     act(() => result.current.session?.accept([A]));
     expect(result.current.model.kind).toBe('hidden');
     expect(server.imports).toEqual([]);
+  });
+});
+
+describe('someone else\'s caret', () => {
+  /** Another person on the page: their state arrives in this awareness, as y-sweet delivers it. */
+  function onTheSamePage(text: string) {
+    const doc = docWith(text);
+    const awareness = new Awareness(doc);
+    const OTHER = awareness.clientID + 1;
+    const placeOther = (index: number | null) => {
+      if (index === null) awareness.states.delete(OTHER);
+      else {
+        const at = Y.createRelativePositionFromTypeIndex(doc.getText('contents'), index);
+        awareness.states.set(OTHER, { cursor: { anchor: at, head: at } });
+      }
+      awareness.emit('change', [{ added: [], updated: [OTHER], removed: [] }, 'remote']);
+    };
+    return { doc, awareness, placeOther };
+  }
+
+  async function withAwareness(doc: Y.Doc, awareness: Awareness) {
+    const hook = await open(doc);
+    act(() => hook.result.current.session?.setAwareness(awareness));
+    return hook;
+  }
+
+  it('holds a URL they are typing, with no request for it', async () => {
+    const text = `See ${A}`;
+    const { doc, awareness, placeOther } = onTheSamePage('');
+    const { result } = await withAwareness(doc, awareness);
+    act(() => {
+      doc.getText('contents').insert(0, text);
+      placeOther(text.length);
+    });
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.kind).toBe('hidden');
+    expect(server.requests).toBe(0);
+  });
+
+  it('offers it once their caret has left, with no text change here', async () => {
+    const text = `See ${A}`;
+    const { doc, awareness, placeOther } = onTheSamePage('');
+    const { result } = await withAwareness(doc, awareness);
+    act(() => {
+      doc.getText('contents').insert(0, text);
+      placeOther(text.length);
+    });
+    await pass(SCAN_DEBOUNCE_MS);
+    act(() => placeOther(0));
+    await pass(0);
+    expect(result.current.model.kind).toBe('offer');
+  });
+
+  it('lets go when they leave the page', async () => {
+    const text = `See ${A}`;
+    const { doc, awareness, placeOther } = onTheSamePage('');
+    const { result } = await withAwareness(doc, awareness);
+    act(() => {
+      doc.getText('contents').insert(0, text);
+      placeOther(text.length);
+    });
+    await pass(SCAN_DEBOUNCE_MS);
+    act(() => placeOther(null));
+    await pass(0);
+    expect(result.current.model.kind).toBe('offer');
+  });
+
+  it('ignores this person\'s own state in awareness: the editor reports that caret', async () => {
+    const text = `See ${A}`;
+    const { doc, awareness } = onTheSamePage(text);
+    const end = Y.createRelativePositionFromTypeIndex(doc.getText('contents'), text.length);
+    awareness.setLocalStateField('cursor', { anchor: end, head: end });
+    const { result } = await withAwareness(doc, awareness);
+    act(() => doc.getText('contents').insert(0, 'x'));
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.kind).toBe('offer');
+  });
+
+  it('does not scan for their caret moving about elsewhere', async () => {
+    const { doc, awareness, placeOther } = onTheSamePage(`See ${A} and more words`);
+    await withAwareness(doc, awareness);
+    const scan = vi.spyOn(doc.getText('contents'), 'toString');
+    act(() => placeOther(2));
+    act(() => placeOther(3));
+    expect(scan).not.toHaveBeenCalled();
+  });
+
+  it('copes with a state that has nothing in it', async () => {
+    const { doc, awareness } = onTheSamePage(`See ${A}`);
+    awareness.states.set(awareness.clientID + 2, null as unknown as Record<string, unknown>);
+    const { result } = await withAwareness(doc, awareness);
+    act(() => doc.getText('contents').insert(0, 'x'));
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.kind).toBe('offer');
+  });
+
+  it('stops listening when the page closes', async () => {
+    const { doc, awareness } = onTheSamePage(`See ${A}`);
+    const { unmount } = await withAwareness(doc, awareness);
+    const off = vi.spyOn(awareness, 'off');
+    unmount();
+    expect(off).toHaveBeenCalledWith('change', expect.any(Function));
+  });
+});
+
+describe('Hide', () => {
+  it('hides the bar for this visit, and marks what was on offer seen here', async () => {
+    const doc = docWith(`See ${A} and ${B}`);
+    const { result, unmount } = await open(doc);
+    act(() => result.current.session?.hide());
+    expect(result.current.model.kind).toBe('hidden');
+    expect([...readSeenLinkOffers('relay-doc-1')]).toEqual([A, B]);
+    expect(readLinkOffers(doc).size).toBe(0);
+    unmount();
+    const again = await open(doc);
+    expect(again.result.current.model.kind).toBe('hidden');
+  });
+
+  it('keeps a link added later this visit quiet, and offers it next visit', async () => {
+    const doc = docWith(`See ${A}`);
+    const { result, unmount } = await open(doc);
+    act(() => result.current.session?.hide());
+    act(() => doc.getText('contents').insert(0, `${B} `));
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.kind).toBe('hidden');
+    unmount();
+    const again = await open(doc);
+    expect(again.result.current.model.rows.map((row) => row.url)).toEqual([B]);
+  });
+
+  it('hides Working too, and comes back to report a failure', async () => {
+    const { result } = await open(docWith(`See ${A}`));
+    act(() => result.current.session?.accept([A]));
+    await pass(0);
+    act(() => result.current.session?.hide());
+    expect(result.current.model.kind).toBe('hidden');
+    server.set(A, { state: 'library', path: 'Lens/articles/a.md', link_state: 'linked' });
+    await pass(POLL_MS);
+    expect(result.current.model.kind).toBe('hidden'); // Done stays quiet
+
+    const other = await open(docWith(`See ${B}`), { docId: 'relay-doc-2' });
+    act(() => other.result.current.session?.accept([B]));
+    await pass(0);
+    act(() => other.result.current.session?.hide());
+    server.set(B, { state: 'failed', job_id: `job:${B}`, error: 'The page could not be read' });
+    await pass(POLL_MS);
+    expect(other.result.current.model.kind).toBe('failed');
+  });
+
+  it('does not bring back a failure it hid', async () => {
+    server.set(A, { state: 'failed', job_id: 'j1' });
+    const { result } = await open(docWith(`See ${A}`));
+    expect(result.current.model.kind).toBe('failed');
+    act(() => result.current.session?.hide());
+    expect(result.current.model.kind).toBe('hidden');
+    act(() => result.current.session?.dismiss([]));
+    expect(result.current.model.kind).toBe('hidden');
+  });
+
+  it('gives way to the right-click, which is asked for', async () => {
+    const { result } = await open(docWith(`See ${A}`));
+    act(() => result.current.session?.hide());
+    act(() => result.current.session?.importSource(A));
+    expect(result.current.model.kind).toBe('working');
+    await pass(0);
+  });
+});
+
+describe('a library copy', () => {
+  it('carries its path on the row, for Open', async () => {
+    server.set(A, { state: 'library', path: 'Lens Edu/articles/a.md', title: 'A' });
+    const { result } = await open(docWith(`See ${A} and ${B}`));
+    expect(result.current.model.rows.map((row) => row.libraryPath)).toEqual(['Lens Edu/articles/a.md', undefined]);
+  });
+
+  it('says linked, not imported, when the library had it all along', async () => {
+    const doc = docWith('');
+    const { result } = await open(doc);
+    act(() => doc.getText('contents').insert(0, A));
+    server.importRows.set(A, { status: 'suggested', path: 'Lens/articles/a.md' });
+    // Right-clicked before anyone asked what it was
+    act(() => result.current.session?.importSource(A));
+    await pass(0);
+    expect(result.current.model.text).toBe('1 source suggested.');
   });
 });

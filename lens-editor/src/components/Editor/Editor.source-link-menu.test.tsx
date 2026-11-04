@@ -86,6 +86,13 @@ describe('the right-click on a link in the main editor', () => {
     expect(target.editorChanged).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the caret as far down the page as the bar asks', () => {
+    const target = { canImport: () => true, importSource: vi.fn(), scrollMargin: () => 56 };
+    const view = mountEditor(target);
+    const margins = view.state.facet(EditorView.scrollMargins).map((margin) => margin(view));
+    expect(margins).toContainEqual({ top: 56 });
+  });
+
   it('adds nothing off a link', () => {
     const view = mountEditor({ canImport: () => true, importSource: vi.fn() });
     rightClickAt(view, 1);

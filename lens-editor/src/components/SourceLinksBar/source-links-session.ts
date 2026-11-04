@@ -1,4 +1,5 @@
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
 import { pageOffersSourceLinks, scanExternalLinks } from '../../../shared/external-links';
 import type {
   ImportResultRow,
@@ -91,12 +92,16 @@ export interface SourceLinksContext {
   swapInPage?: (hits: LibraryHit[]) => string[];
 }
 
-/** A bare URL the caret is at or in: it may still be being written. */
+/** A link a caret is in or just after: it may still be being written. */
 interface HeldLink {
   url: string;
   start: number;
   end: number;
 }
+
+/** A caret at the start of a link isn't writing it; one inside or at its end may be. */
+const writing = (link: { start: number; end: number }, carets: number[]) =>
+  carets.some((caret) => link.start < caret && caret <= link.end);
 
 function chunks<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -146,7 +151,12 @@ export class SourceLinksSession {
   private latest: string[] = [];
   /** Where the caret is, once the editor has said. */
   private caret: number | null = null;
-  private held: HeldLink | null = null;
+  /** Everyone else on the page, whose carets hold links too. */
+  private awareness: Awareness | null = null;
+  private held: HeldLink[] = [];
+  /** Hidden for this visit: only a new failure brings the bar back. */
+  private hidden = false;
+  private readonly hiddenFailures = new Set<string>();
   /** What this browser had been offered when the page opened. Fixed for the visit
    *  (bar what is set aside here), so an offer doesn't vanish while it is up. */
   private seen: Set<string> | null = null;
@@ -202,6 +212,7 @@ export class SourceLinksSession {
     this.seen ??= readSeenLinkOffers(this.docId);
     this.text.observe(this.onTextChange);
     this.stopObservingOffers = observeLinkOffers(this.doc, this.publish);
+    this.awareness?.on('change', this.onAwarenessChange);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     this.scan();
   }
@@ -211,6 +222,7 @@ export class SourceLinksSession {
     this.text.unobserve(this.onTextChange);
     this.stopObservingOffers?.();
     this.stopObservingOffers = null;
+    this.awareness?.off('change', this.onAwarenessChange);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     for (const timer of [this.scanTimer, this.pollTimer, this.holdTimer, this.doneTimer, this.seenTimer]) {
       if (timer !== null) clearTimeout(timer);
@@ -226,21 +238,41 @@ export class SourceLinksSession {
     this.scanTimer = setTimeout(this.scan, SCAN_DEBOUNCE_MS);
   };
 
-  /** The URLs of the links that can become wikilinks, and the one being written. */
-  private readPage(): { urls: string[]; held: HeldLink | null } {
+  /** The URLs of the links that can become wikilinks, and those being written. */
+  private readPage(): { urls: string[]; held: HeldLink[] } {
     const text = this.text.toString();
-    if (!pageOffersSourceLinks(this.context.path, text)) return { urls: [], held: null };
+    if (!pageOffersSourceLinks(this.context.path, text)) return { urls: [], held: [] };
     const links = scanExternalLinks(text).filter((link) => link.swappable);
-    const { caret } = this;
-    const written = caret === null
-      ? undefined
-      : links.find((link) => link.form === 'bare' && link.start <= caret && caret <= link.end);
+    const carets = this.carets();
+    const written = links.filter((link) => writing(link, carets));
     // A link and its copy elsewhere on the page: the copy is finished
-    const alone = written && links.every((link) => link === written || link.url !== written.url);
+    const held = written.filter((link) => links.every((other) => other.url !== link.url || writing(other, carets)));
     return {
       urls: [...new Set(links.map((link) => link.url))],
-      held: alone ? { url: written.url, start: written.start, end: written.end } : null,
+      held: held.map(({ url, start, end }) => ({ url, start, end })),
     };
+  }
+
+  /** Every caret on the page: this person's and everyone else's. */
+  private carets(): number[] {
+    const carets = this.caret === null ? [] : [this.caret];
+    const { awareness } = this;
+    if (!awareness) return carets;
+    for (const [clientId, state] of awareness.getStates()) {
+      const head = (state as { cursor?: { head?: unknown } } | null)?.cursor?.head;
+      if (clientId === awareness.clientID || head == null) continue;
+      try {
+        const at = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(head), this.doc);
+        if (at?.type === this.text) carets.push(at.index);
+      } catch {
+        // A cursor from a version this one can't read: no caret
+      }
+    }
+    return carets;
+  }
+
+  private isHeld(url: string): boolean {
+    return this.held.some((link) => link.url === url);
   }
 
   private readLatest() {
@@ -256,13 +288,27 @@ export class SourceLinksSession {
     void this.refresh();
   };
 
-  /** Where the caret is now. Only a held URL's release is worth a scan. */
+  /** Where the caret is now. Only a held link's release is worth a scan. */
   setCaret = (pos: number) => {
     this.caret = pos;
-    const { held } = this;
-    if (!held || this.scanTimer !== null || !this.running) return;
-    if (pos < held.start || pos > held.end) this.scan();
+    this.releaseHeld();
   };
+
+  /** Everyone else's carets, from the page's awareness. */
+  setAwareness(awareness: Awareness | null) {
+    if (awareness === this.awareness) return;
+    if (this.running) this.awareness?.off('change', this.onAwarenessChange);
+    this.awareness = awareness;
+    if (this.running) awareness?.on('change', this.onAwarenessChange);
+  }
+
+  private onAwarenessChange = () => this.releaseHeld();
+
+  private releaseHeld() {
+    if (this.held.length === 0 || this.scanTimer !== null || !this.running) return;
+    const carets = this.carets();
+    if (this.held.some((link) => !writing(link, carets))) this.scan();
+  }
 
   /** Asks about URLs the server has not seen, then shows the page as scanned. */
   private async refresh() {
@@ -273,7 +319,7 @@ export class SourceLinksSession {
     this.refreshing = true;
     do {
       this.refreshAgain = false;
-      const unseen = this.latest.filter((url) => !this.statuses.has(url) && url !== this.held?.url);
+      const unseen = this.latest.filter((url) => !this.statuses.has(url) && !this.isHeld(url));
       if (unseen.length > 0 && !this.blocked) await this.ask(unseen);
     } while (this.refreshAgain);
     this.refreshing = false;
@@ -461,7 +507,7 @@ export class SourceLinksSession {
     if (!status || dismissed) return null;
     if (status.state === 'failed') return 'failed';
     // While the index loads, `new` is unconfirmed: wait rather than offer
-    if (!this.ready || url === this.held?.url || this.seen?.has(url)) return null;
+    if (!this.ready || this.isHeld(url) || this.seen?.has(url)) return null;
     if (status.state === 'library') return 'library';
     return status.state === 'new' || status.state === 'stub' ? 'new' : null;
   }
@@ -489,6 +535,7 @@ export class SourceLinksSession {
         urls: [url],
         kind: status?.kind ?? 'article',
         label: status?.state === 'library' && status.title ? status.title : sourceLabel(url),
+        libraryPath: status?.state === 'library' ? status.path : undefined,
         state,
         step: tracked && stepOf(tracked, status),
         imported: tracked?.imported,
@@ -502,7 +549,7 @@ export class SourceLinksSession {
   }
 
   private publish = () => {
-    const next = barModel(this.rowsFor(this.page), this.queue);
+    const next = this.unlessHidden(barModel(this.rowsFor(this.page), this.queue));
     const json = JSON.stringify(next);
     if (json !== this.modelJson) {
       this.model = next;
@@ -516,6 +563,25 @@ export class SourceLinksSession {
       this.doneTimer = null;
     }
     this.watchOffers();
+  };
+
+  /** After Hide, the bar comes back for a failure it hasn't shown. */
+  private unlessHidden(model: BarModel): BarModel {
+    if (!this.hidden) return model;
+    const news = model.kind === 'failed' && model.rows.some((row) => row.state === 'failed' && !this.hiddenFailures.has(row.key));
+    return news ? model : HIDDEN_BAR;
+  }
+
+  /** Hides the bar for this visit. Only this person: what was on offer is seen. */
+  hide = () => {
+    const rows = this.rowsFor(this.page);
+    const offered = rows.filter((row) => row.state === 'new' || row.state === 'library').flatMap((row) => row.urls);
+    if (offered.length > 0) markLinkOffersSeen(this.docId, offered);
+    for (const row of rows) {
+      if (row.state === 'failed') this.hiddenFailures.add(row.key);
+    }
+    this.hidden = true;
+    this.publish();
   };
 
   /** Keeps time on the offers on screen. */
@@ -582,9 +648,10 @@ export class SourceLinksSession {
     this.publish();
   };
 
-  /** The right-click: whatever was decided about this link before. */
+  /** The right-click: whatever was decided about this link before, even Hide. */
   importSource = (url: string) => {
     undoLinkOfferDismissal(this.doc, url);
+    this.hidden = false;
     this.submit([url]);
   };
 
@@ -642,11 +709,19 @@ export class SourceLinksSession {
         // The next poll shows it still running
       }
     }
+    const stoppedUrls: string[] = [];
     for (const [url, { id }] of this.tracked) {
       if (!id || !stopped.has(id)) continue;
       this.tracked.delete(url);
       this.statuses.delete(url);
       this.changed.set(url, ++this.clock);
+      stoppedUrls.push(url);
+    }
+    // Stopped is an answer: not offered again straight away, to this person
+    if (stoppedUrls.length > 0) {
+      markLinkOffersSeen(this.docId, stoppedUrls);
+      this.seen ??= new Set();
+      for (const url of stoppedUrls) this.seen.add(url);
     }
     // What a stopped source is now is the server's to say
     await this.refresh();
@@ -742,7 +817,9 @@ export class SourceLinksSession {
     switch (row?.status) {
       case 'linked':
       case 'suggested':
+        // Swapped at once: the library had it, whatever was guessed before asking
         tracked.phase = 'done';
+        tracked.imported = false;
         tracked.suggested = row.status === 'suggested';
         remember({ state: 'library', path: row.path ?? before?.path, title: row.title ?? before?.title });
         break;
