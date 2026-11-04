@@ -92,10 +92,15 @@ fn handle_initialize(id: Value, params: Option<&Value>, access: &McpAccess) -> J
                 "name": "lens-relay",
                 "version": env!("CARGO_PKG_VERSION"),
                 "description": description
-            }
+            },
+            "instructions": SERVER_INSTRUCTIONS
         }),
     )
 }
+
+/// Sent to clients in the initialize result; MCP clients show it to the model
+/// as the server's instructions.
+const SERVER_INSTRUCTIONS: &str = "In Markdown, indent nested list items (bulleted or numbered) by four spaces per level, never two.";
 
 fn handle_ping(id: Value) -> JsonRpcResponse {
     success_response(id, json!({}))
@@ -190,6 +195,9 @@ mod tests {
         assert!(result["capabilities"]["tools"].is_object());
         assert_eq!(result["serverInfo"]["name"], "lens-relay");
         assert!(result["serverInfo"]["version"].is_string());
+        assert!(result["instructions"]
+            .as_str()
+            .is_some_and(|s| s.contains("four spaces")));
 
         // Initialize should NOT create any app session.
         // (App sessions are now allocated only by the create_session tool.)
