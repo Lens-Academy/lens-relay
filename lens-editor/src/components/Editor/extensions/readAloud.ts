@@ -15,7 +15,7 @@
 
 import { StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view';
-import { ReadAloudEngine, type ReadAloudHighlight } from '../../../lib/read-aloud/engine';
+import { PAGE_SOURCE, ReadAloudEngine, type ReadAloudHighlight } from '../../../lib/read-aloud/engine';
 import {
   buildMarkdownReading,
   docRangeOf,
@@ -135,7 +135,7 @@ export class ReadAloudController {
   playFrom(unit: number) {
     this.ensureReading();
     this.engine.setUnits(this.reading!.units);
-    this.engine.play(unit);
+    this.engine.playPage(unit);
     this.anchor = this.reading!.docRanges[unit]?.from ?? null;
   }
 
@@ -181,7 +181,8 @@ export class ReadAloudController {
 
   private highlight(h: ReadAloudHighlight | null) {
     const reading = this.reading;
-    if (!h || !reading) {
+    // Another source (a comment) is heard: nothing to mark in the document.
+    if (!h || !reading || h.source !== PAGE_SOURCE) {
       this.dispatch({ sentence: null, word: null, hover: null });
       return;
     }
@@ -227,7 +228,9 @@ export class ReadAloudController {
     if (this.engine.isPlaying) {
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY }, false);
       const target = pos == null ? null : unitAtPos(reading, pos);
-      const range = target == null || target === this.engine.getSnapshot().current ? null : reading.docRanges[target];
+      const snap = this.engine.getSnapshot();
+      const heardHere = snap.source === PAGE_SOURCE && target === snap.current;
+      const range = target == null || heardHere ? null : reading.docRanges[target];
       const prev = view.state.field(marksField).marks.hover;
       if (prev?.from !== range?.from) this.dispatch({ hover: range });
       view.contentDOM.classList.toggle('cm-read-aloud-over-text', target != null);

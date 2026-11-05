@@ -1991,6 +1991,11 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* Read-aloud (Comments/commentReadAloud.ts): while audio plays a click on
+   the text reads the comment; the heard sentence and word as on the page */
+.lens-comment-body.is-listenable { cursor: pointer; }
+.lens-comment-read-sentence { background-color: var(--lens-read-sentence); border-radius: 2px; }
+.lens-comment-read-word { background-color: var(--lens-read-word); border-radius: 2px; }
 /* Edit and Delete, while the pointer is over the message */
 /* Notion's message toolbar (CommentCard.tsx): react, resolve and •••, in a
    small bordered pill at the message's top right, while the pointer is over

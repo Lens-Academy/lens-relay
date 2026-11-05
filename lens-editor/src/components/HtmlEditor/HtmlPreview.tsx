@@ -17,7 +17,7 @@ import {
   type ThreadsResolvedPayload,
   type TtsUnit,
 } from './bridge/protocol';
-import type { ReadAloudEngine } from '../../lib/read-aloud/engine';
+import { PAGE_SOURCE, type ReadAloudEngine } from '../../lib/read-aloud/engine';
 import { applyReadAloudKey, isReadAloudKey } from '../../lib/read-aloud/keys';
 import { buildSrcDoc } from './runtime/page-runtime';
 import { readAnchor, type HtmlAnchor } from './anchoring/types';
@@ -813,9 +813,11 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
             if (!requested && !hasUserActivation()) return;
             pending.ttsStartAt = 0;
             engine.setUnits(units);
-            engine.play(play);
+            engine.playPage(play);
           } else {
-            const cur = engine.getSnapshot().current;
+            // `current` counts in the page's units only while the page is read.
+            const snap = engine.getSnapshot();
+            const cur = snap.source === PAGE_SOURCE ? snap.current : null;
             engine.setUnits(units, cur === null ? null : findUnit(units, previous[cur]?.text, cur));
           }
           break;
@@ -945,7 +947,9 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
     };
     postState();
     const unsubscribeHighlight = readAloud.onHighlight(h => {
-      lastHighlight = { unit: h?.unit ?? null, word: h?.word ?? null };
+      // Another source (a comment) is heard: nothing to mark in the page.
+      const onPage = h?.source === PAGE_SOURCE;
+      lastHighlight = { unit: onPage ? h.unit : null, word: onPage ? h.word : null };
       postToAllFrames({
         type: 'tts-highlight',
         payload: { ...lastHighlight, follow: !readAloud.getSnapshot().autoScrollPaused },

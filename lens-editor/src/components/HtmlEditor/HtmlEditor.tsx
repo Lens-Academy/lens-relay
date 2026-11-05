@@ -11,6 +11,7 @@ import { MobileCommentsSheet, type PendingCommentAction } from '../Mobile/Mobile
 import { HtmlSourceEditor } from './HtmlSourceEditor';
 import { HtmlPreview, type HtmlPreviewHandle } from './HtmlPreview';
 import { CommentsLayer, type CommentsLayerHandle, type DraftComment } from '../Comments/CommentsLayer';
+import { CommentReadAloudContext } from '../Comments/commentReadAloud';
 import { CommentCard } from '../Comments/CommentCard';
 import type { ThreadActions, ThreadView } from '../Comments/types';
 import { makeIframeScrollSource, effectiveY, type IframeScrollState } from './htmlCommentsAdapter';
@@ -583,6 +584,7 @@ export function HtmlEditor({
           </div>
         )}
         {mode !== 'source' && commentsVisible && !isMobile && (
+          <CommentReadAloudContext.Provider value={readAloudOn ? readAloud : null}>
           <div className="flex w-80 flex-shrink-0 flex-col border-l border-gray-200 bg-gray-50/50">
             <div className="relative min-h-0 flex-1 overflow-hidden">
             <CommentsLayer
@@ -637,10 +639,12 @@ export function HtmlEditor({
               </div>
             )}
           </div>
+          </CommentReadAloudContext.Provider>
         )}
       </div>
       {isMobile && (
         <MobileDrawer open={commentsSheetOpen} onClose={closeDrawer} side="bottom" label="Comments">
+          <CommentReadAloudContext.Provider value={readAloudOn ? readAloud : null}>
           <MobileCommentsSheet
             key={commentsSheetEpoch}
             threads={comments.views}
@@ -661,6 +665,7 @@ export function HtmlEditor({
               addTarget: describeAnchorTarget(draft.anchor),
             } : {})}
           />
+          </CommentReadAloudContext.Provider>
         </MobileDrawer>
       )}
     </div>
