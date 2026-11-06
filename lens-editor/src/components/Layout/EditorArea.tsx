@@ -10,6 +10,8 @@ import { sourceReadOnlyCompartment } from '../Editor/extensions/livePreview';
 import { createLinkedDoc } from '../../lib/wikilink-create';
 import { SourceSuggestionBanner } from '../SourceSuggestionBanner/SourceSuggestionBanner';
 import { SyncedFileBanner } from '../SyncedFileBanner/SyncedFileBanner';
+import { SourceLinksBar } from '../SourceLinksBar/SourceLinksBar';
+import type { SourceLinkMenuTarget } from '../SourceLinksBar/sourceLinkMenu';
 import { parseThreads } from '../../lib/criticmarkup-parser';
 import { SyncStatus } from '../SyncStatus/SyncStatus';
 import { Editor } from '../Editor/Editor';
@@ -66,6 +68,7 @@ import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
 import { getPromotionStatus, type PromotionStatusResponse } from '../../lib/promotion-api';
 import { editorPathToPromotionPath } from '../../lib/promotion-paths';
+import { workflowAccess } from '../../lib/app-routes';
 import { RELAY_ID, PANEL_CONFIG } from '../../App';
 import { EDU_FOLDER_ID } from '../../lib/constants';
 
@@ -225,6 +228,9 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const uuid = currentDocId.slice(RELAY_ID.length + 1);
     return findPathByUuid(uuid, metadata) ?? undefined;
   }, [currentDocId, metadata]);
+  const canImportSources = workflowAccess({ canEdit, canPromote, folderUuid, isAllFolders }).addSource;
+  // The bar holds the page's sources; the editor's right-click reaches them here
+  const sourceLinkTargetRef = useRef<SourceLinkMenuTarget | null>(null);
   const canUsePromotion = canPromote && (isAllFolders || folderUuid === EDU_FOLDER_ID);
   const promotionFilePath = useMemo(
     () => canUsePromotion ? editorPathToPromotionPath(currentFilePath) : null,
@@ -612,6 +618,22 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             <SourceSuggestionBanner />
           )}
           <div className="lens-page-area flex-1 min-h-0 relative">
+            {/* No height, so the bar floats over the page and never moves the
+                text. Inside the page area, where the paste prompt, menus and
+                tooltips can still go over it. */}
+            <div className="absolute inset-x-0 top-0 z-20 h-0">
+              <PanelErrorBoundary name="Sources" resetKey={currentDocId}>
+                <SourceLinksBar
+                  docId={currentDocId}
+                  path={currentFilePath}
+                  canImport={canImportSources}
+                  suggesting={isSuggestionMode}
+                  metadata={metadata}
+                  editorView={editorView}
+                  menuTargetRef={sourceLinkTargetRef}
+                />
+              </PanelErrorBoundary>
+            </div>
             <ReadAloudBar engine={readAloudEngine} />
             {/* Notion's table of contents: dashes at the page's right edge */}
             {!isMobile && <PageOutline view={editorView} stateVersion={stateVersion} docId={currentDocId} />}
@@ -630,6 +652,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               folderNames={folderNames}
               createLinkedDoc={createLinkedDocInFolder}
               initialSuggestionMode={isSuggestionMode}
+              sourceLinkTargetRef={sourceLinkTargetRef}
             />
           </div>
         </div>

@@ -141,6 +141,52 @@ describe("processArticle duplicate detection", () => {
     );
   });
 
+  // The dedup key folds an app's route, so this match is by URL alone and the
+  // document may be a neighbouring page. The queue needs what was stored to tell.
+  it("reports the stored URL a match by URL alone found", async () => {
+    relayMocks.checkRelayArticleUrls.mockImplementation(async (urls: string[]) => ({
+      found: Object.fromEntries(urls.map((url) => [url, url === "https://example.com/app" ? "/articles/app.md" : null])),
+      stubs: {},
+    }));
+    const now = new Date().toISOString();
+    const err = await processArticle({
+      id: "route",
+      url: "https://example.com/app#/b",
+      status: "processing",
+      importMode: "article",
+      created_at: now,
+      updated_at: now,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(DuplicateDocumentError);
+    expect((err as DuplicateDocumentError).storedUrl).toBe("https://example.com/app");
+  });
+
+  it("names a job that found a stub after that stub", async () => {
+    relayMocks.checkRelayArticleUrls.mockImplementation(
+      async (urls: string[]) => ({
+        found: Object.fromEntries(urls.map((url) => [url, "/articles/stub.md"])),
+        stubs: Object.fromEntries(urls.map((url) => [url, {
+          path: "/articles/stub.md",
+          content: '---\ntitle: "The stub"\ntags:\n  - "article-stub"\n---\n',
+        }])),
+      }),
+    );
+    const now = new Date().toISOString();
+    const job = {
+      id: "stub-duplicate",
+      url: "https://example.com/existing",
+      status: "processing" as const,
+      importMode: "stub" as const,
+      created_at: now,
+      updated_at: now,
+    };
+
+    const err = await processArticle(job).catch((e) => e);
+    expect(err).toBeInstanceOf(DuplicateDocumentError);
+    expect((err as DuplicateDocumentError).docPath).toBe("Lens Edu/articles/stub.md");
+    expect((job as { title?: string }).title).toBe("The stub");
+  });
+
   it("promotes an article-stub in place while preserving its discussion", async () => {
     const stub = `---
 title: "Old title"

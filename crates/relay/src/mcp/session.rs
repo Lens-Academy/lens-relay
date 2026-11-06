@@ -25,6 +25,7 @@
 //! LLM sees a plain `isError: true` tool result instead of an HTTP 4xx, and
 //! recovers by calling `create_session` again — no `/mcp reconnect` needed.
 
+use crate::mcp::tools::critic_markup;
 use dashmap::DashMap;
 use std::collections::HashSet;
 use std::time::Instant;
@@ -161,15 +162,9 @@ impl SessionManager {
         if self.sessions.len() >= CLEANUP_THRESHOLD {
             self.cleanup_stale(SESSION_TTL);
         }
-        // Strip chars that would break the JSON author field in CriticMarkup
+        // The name goes in CriticMarkup's author field
         // (format: {"author":"NAME","timestamp":...}@@)
-        let sanitized_name: Option<String> = human_name.map(|name| {
-            name.chars()
-                .filter(|c| *c != '"' && *c != '\\' && !c.is_control())
-                .collect::<String>()
-                .trim()
-                .to_string()
-        });
+        let sanitized_name: Option<String> = human_name.map(critic_markup::clean_author);
         let author_name = match sanitized_name.as_deref() {
             Some("") | None => "AI".to_string(),
             Some(trimmed) => format!("{}'s AI", trimmed),
@@ -214,7 +209,7 @@ impl SessionManager {
 
     /// Random clientID for a session's AI edits. Kept within u32 range for
     /// safe interop with JS clients (yjs clientIDs are JS numbers).
-    fn fresh_ai_client_id() -> u64 {
+    pub(crate) fn fresh_ai_client_id() -> u64 {
         use rand::Rng;
         rand::thread_rng().gen_range(1..=u32::MAX as u64)
     }

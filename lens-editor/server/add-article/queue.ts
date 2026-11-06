@@ -2,11 +2,21 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ArticleImportMode, ArticleJob } from "./types";
+import type { JobLinkBack } from "../../shared/source-links-contract";
 import { extractVideoInput } from "../add-video/video-url";
 import { VIDEO_JOB_TIMEOUT_MS } from "../add-video/pipeline";
 import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
 import { DuplicateDocumentError } from "./duplicate";
-import { editorOpenUrl } from "../add-video/relay-docs";
+import {
+  editorOpenUrl,
+  linkRelaySource,
+  RelayLinkError,
+  type LinkSourceRequest,
+  type LinkSourceResult,
+} from "../add-video/relay-docs";
+import { sharedLibraryIndex, type LibraryIndex } from "./library-index";
+import { swapOutcome } from "./source-links";
+import { sameSource } from "./url-normalize";
 import {
   createArticleReviewReporter,
   createMemoryArticleReviewReporter,
@@ -55,6 +65,11 @@ const CANCELLED = "Cancelled by user";
 /** A job running during this many restarts in a row is failed, not requeued:
  *  it may be what crashes the editor, and it would block the queue. */
 const MAX_RESTART_REQUEUES = 2;
+/** Waits between attempts at a link swap; one attempt more than entries. Nobody
+ *  is watching (agents are told not to poll, and the editor may be closed), so
+ *  this outlasts an outage: about 45 minutes, while the watchdog restarts a hung
+ *  relay within minutes. */
+const LINK_RETRY_DELAYS_MS = [5, 30, 120, 300, 600, 720, 900].map((seconds) => seconds * 1_000);
 
 interface QueueOptions {
   processJob: (job: ArticleJob, signal: AbortSignal, reporter: ArticleReviewReporter) => Promise<void>;
@@ -64,6 +79,11 @@ interface QueueOptions {
   /** JSON file the queue is saved to and restored from, so a restart or a
    *  deploy loses nothing. Default: ARTICLE_IMPORT_QUEUE_FILE; null = memory only. */
   stateFile?: string | null;
+  /** Swaps a page's links for a wikilink. Default: the relay. */
+  linkSource?: (request: LinkSourceRequest) => Promise<LinkSourceResult>;
+  linkRetryDelaysMs?: number[];
+  /** Told about finished imports. Default: the index the routes read. */
+  library?: Pick<LibraryIndex, "add" | "lookup">;
 }
 
 /** A job as the status API shows it: where it stands in the queue. */
@@ -128,9 +148,17 @@ export class ArticleJobQueue {
   private reporterFactory: NonNullable<QueueOptions["reporterFactory"]>;
   readonly workers: number;
   private stateFile: string | null;
+  private linkSource: NonNullable<QueueOptions["linkSource"]>;
+  private linkRetryDelaysMs: number[];
+  private library: NonNullable<QueueOptions["library"]>;
+  /** Link-backs being swapped right now. */
+  private swapping = new Set<JobLinkBack>();
 
   constructor(options: QueueOptions) {
     this.processJob = options.processJob;
+    this.linkSource = options.linkSource ?? linkRelaySource;
+    this.linkRetryDelaysMs = options.linkRetryDelaysMs ?? LINK_RETRY_DELAYS_MS;
+    this.library = options.library ?? sharedLibraryIndex();
     this.reporterFactory = options.reporterFactory ?? (process.env.NODE_ENV === "test"
       ? async (job) => createMemoryArticleReviewReporter(job)
       : createArticleReviewReporter);
@@ -142,6 +170,7 @@ export class ArticleJobQueue {
     if (this.stateFile) {
       this.restore();
       if (this.pending.length > 0) void Promise.resolve().then(() => this.drain());
+      void Promise.resolve().then(() => this.resumeLinkBacks());
     }
   }
 
@@ -149,7 +178,7 @@ export class ArticleJobQueue {
     url: string,
     importMode: ArticleImportMode,
     retryOf?: string,
-    options: { replaceExisting?: boolean } = {},
+    options: { replaceExisting?: boolean; linkBack?: JobLinkBack[]; startedBy?: string } = {},
   ): ArticleJob {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
@@ -165,6 +194,8 @@ export class ArticleJobQueue {
       report_persistence: "pending",
       retry_of: retryOf,
       ...(options.replaceExisting ? { replaceExisting: true } : {}),
+      ...(options.linkBack?.length ? { link_back: options.linkBack } : {}),
+      ...(options.startedBy ? { started_by: options.startedBy } : {}),
       created_at: now,
       updated_at: now,
     };
@@ -182,21 +213,88 @@ export class ArticleJobQueue {
   }
 
   /** An unfinished job for this URL, if any — used to reject double submits.
-   *  Matching is by normalized URL when a normalizer is provided by the caller. */
+   *  Matching is by normalized URL when a normalizer is provided by the caller,
+   *  narrowed by `accept` if given. A job being stopped no longer counts. */
   findActive(
     url: string,
     normalize: (u: string) => string = (u) => u,
+    accept: (job: ArticleJob) => boolean = () => true,
   ): ArticleJob | undefined {
     const key = normalize(url);
     for (const job of this.jobs.values()) {
       if (
         normalize(job.url) === key &&
-        (job.status === "queued" || job.status === "processing")
+        (job.status === "queued" || job.status === "processing") &&
+        !job.cancel_requested &&
+        accept(job)
       ) {
         return job;
       }
     }
     return undefined;
+  }
+
+  /** Have an unfinished job swap a page's links too. A page already waiting on
+   *  this job for the same actor and edit policy gains the new spellings. */
+  attachLinkBack(id: string, linkBack: JobLinkBack): void {
+    const job = this.jobs.get(id);
+    if (!job) return;
+    const same = job.link_back?.find(
+      (link) =>
+        link.doc_id === linkBack.doc_id &&
+        link.actor === linkBack.actor &&
+        link.protect_human === linkBack.protect_human &&
+        link.state === "waiting",
+    );
+    if (same) same.urls = [...new Set([...same.urls, ...linkBack.urls])];
+    else job.link_back = [...(job.link_back ?? []), linkBack];
+    job.updated_at = new Date().toISOString();
+    this.persist();
+  }
+
+  /**
+   * A page's Stop. The job is cancelled only when this page started it and no
+   * other page has joined; otherwise it carries on for whoever else wants it.
+   * Either way the page's own link-backs come off first, so a retry later (from
+   * the Add Source page, say) can't swap links the page asked to keep.
+   * "unchanged" when the job has ended or is closing its report, which the
+   * plain cancel answers for.
+   */
+  stopForPage(id: string, isPage: (link: Pick<JobLinkBack, "doc_id" | "doc_path">) => boolean):
+    "cancelled" | "detached" | "unchanged" {
+    const job = this.jobs.get(id);
+    if (!job || (job.status !== "queued" && job.status !== "processing") || this.finishing.has(id)) {
+      return "unchanged";
+    }
+    const links = job.link_back ?? [];
+    const others = links.filter((link) => !isPage(link));
+    // The starter's own link-back carries its path, for when the page's doc id
+    // couldn't be looked up.
+    const starter = job.started_by === undefined
+      ? undefined
+      : links.find((link) => link.doc_id === job.started_by) ?? { doc_id: job.started_by, doc_path: "" };
+    const startedHere = starter !== undefined && isPage(starter);
+    if (others.length !== links.length) {
+      if (others.length > 0) job.link_back = others;
+      else delete job.link_back;
+      job.updated_at = new Date().toISOString();
+    }
+    if (startedHere && others.length === 0 && this.cancel(id)) return "cancelled";
+    this.persist();
+    return "detached";
+  }
+
+  /** Move a job's unswapped link-backs out of it, for a retry to carry. */
+  takeLinkBacks(id: string): JobLinkBack[] {
+    const job = this.jobs.get(id);
+    const waiting = job?.link_back?.filter((link) => link.state === "waiting") ?? [];
+    if (job && waiting.length > 0) {
+      const rest = job.link_back!.filter((link) => link.state !== "waiting");
+      if (rest.length > 0) job.link_back = rest;
+      else delete job.link_back;
+      this.persist();
+    }
+    return waiting;
   }
 
   status(): ArticleJob[] {
@@ -325,11 +423,98 @@ export class ArticleJobQueue {
           this.durationsMs.push(Date.now() - Date.parse(job.started_at));
           if (this.durationsMs.length > DURATION_SAMPLE) this.durationsMs.shift();
         }
+        this.recordImport(job);
         this.persist();
+        if (job.link_back?.length) this.swapLinkBacks(job);
         this.drain();
       });
     }
     this.persist();
+  }
+
+  /** Show a finished import in the library index at once. */
+  private recordImport(job: ArticleJob): void {
+    if ((job.status !== "done" && job.status !== "skipped") || !job.relay_path) return;
+    // A skip found a document the index may already know better than the job
+    // does: a stub-mode skip can't tell a stub from a full article.
+    if (job.status === "skipped" && this.library.lookup(job.url)) return;
+    this.library.add({
+      url: job.url,
+      path: job.relay_path,
+      title: job.title,
+      stub: job.importMode === "stub",
+    });
+  }
+
+  /** Link-backs left waiting by a restart, on jobs that had already finished. */
+  private resumeLinkBacks(): void {
+    for (const job of this.jobs.values()) {
+      if (job.link_back?.length) this.swapLinkBacks(job);
+    }
+  }
+
+  /**
+   * Swap the links waiting on a finished job, each page on its own, so one page
+   * that keeps failing (a deleted page retries for about 45 minutes) holds up
+   * nobody else. This runs beside the queue, so a slow relay holds no worker,
+   * and it only ever writes to the link-backs: the job's own status is already
+   * settled. A failed or cancelled job swaps nothing, so its links stay as
+   * written and a retry can carry them.
+   */
+  private swapLinkBacks(job: ArticleJob): void {
+    if (job.status !== "done" && job.status !== "skipped") return;
+    for (const link of job.link_back ?? []) {
+      if (link.state !== "waiting" || this.swapping.has(link)) continue;
+      this.swapping.add(link);
+      void this.swapLinkBack(job, link)
+        // Nothing awaits this, and an unhandled rejection kills Node.
+        .catch((error) => console.error(`[add-article] job=${job.id} link-back for ${link.doc_path} stopped: ${error}`))
+        .finally(() => this.swapping.delete(link));
+    }
+  }
+
+  private async swapLinkBack(job: ArticleJob, link: JobLinkBack): Promise<void> {
+    const settle = (result: Pick<JobLinkBack, "state" | "error">) => {
+      link.state = result.state;
+      if (result.error) link.error = result.error;
+      else delete link.error;
+      job.updated_at = new Date().toISOString();
+      this.persist();
+    };
+    if (!job.relay_path) {
+      settle({ state: "failed", error: "The library has no copy of this exact page to link to" });
+      return;
+    }
+    const request: LinkSourceRequest = {
+      docId: link.doc_id,
+      urls: link.urls,
+      target: job.relay_path,
+      title: job.title ?? this.library.lookup(job.url)?.title,
+      actor: link.actor,
+      author: link.author,
+      protectHuman: link.protect_human,
+    };
+    for (;;) {
+      link.attempts = (link.attempts ?? 0) + 1;
+      try {
+        settle(swapOutcome(await this.linkSource(request)));
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // The relay finds pages and targets through a resolver that lags, so
+        // even "not found" may pass. Only this refusal is final.
+        const final = error instanceof RelayLinkError && error.code === "page_not_eligible";
+        const delay = this.linkRetryDelaysMs[link.attempts - 1];
+        if (final || delay === undefined) {
+          settle({ state: "failed", error: message });
+          console.error(`[add-article] job=${job.id} could not link ${link.doc_path}: ${message}`);
+          return;
+        }
+        link.error = message;
+        this.persist();
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
 
   /** Save the queue atomically (temp file + rename). A failure is logged and
@@ -484,6 +669,10 @@ export class ArticleJobQueue {
         job.status = "skipped";
         job.error = err.message;
         job.relay_url ??= editorOpenUrl(err.docPath);
+        // A match by URL alone may be a neighbouring page (a port, an app
+        // route). The job is still skipped, but this isn't its document: left
+        // unset, nothing is swapped to it or listed as this URL's copy.
+        if (!err.storedUrl || sameSource(job.url, err.storedUrl)) job.relay_path ??= err.docPath;
         // No import ran, but a report was opened -- close it out pointing at
         // the document that already holds this content, rather than leaving a
         // report stuck in "processing" forever.

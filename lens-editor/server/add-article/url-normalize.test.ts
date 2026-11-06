@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeUrlForDedup, dedupUrlVariants } from "./url-normalize";
+import { normalizeUrlForDedup, dedupUrlVariants, sameSource } from "./url-normalize";
 
 describe("normalizeUrlForDedup", () => {
   // Prevents: the same article queued twice via a utm-tagged share link.
@@ -80,5 +80,53 @@ describe("dedupUrlVariants — www-spelling coverage (reviewer M2)", () => {
     expect(v).toContain("https://lesswrong.com/posts/abc/slug");
     expect(v).toContain("https://www.lesswrong.com/posts/abc/slug");
     expect(v).toContain("https://greaterwrong.com/posts/abc/slug");
+  });
+});
+
+describe("sameSource", () => {
+  const base = "https://example.com/view";
+
+  it.each([
+    ["itself", base, base],
+    ["utm tags", `${base}?utm_source=x`, base],
+    ["a trailing slash, www and http", "http://www.example.com/view/", base],
+    ["an ordinary fragment", `${base}#section-2`, base],
+    ["the GreaterWrong mirror", "https://www.greaterwrong.com/posts/abc/t", "https://www.lesswrong.com/posts/abc/t"],
+    ["a ref only the link has", `${base}?ref=hn`, base],
+    ["a ref only the stored URL has", base, `${base}?ref=hn`],
+    ["the same ref", `${base}?ref=111`, `${base}?ref=111`],
+    ["the same port", "https://example.com:8443/view", "https://example.com:8443/view"],
+    ["the same route", `${base}#/a`, `${base}#/a`],
+    ["the same hashbang route", `${base}#!/a`, `${base}#!/a`],
+    ["a default port written out", "https://example.com:443/view", base],
+  ])("matches %s", (_name, url, stored) => {
+    expect(sameSource(url, stored)).toBe(true);
+  });
+
+  it.each([
+    ["different pages", `${base}/other`, base],
+    ["different ports", "https://example.com:8443/view", "https://example.com:9443/view"],
+    ["a port only one has", "https://example.com:8443/view", base],
+    ["different refs", `${base}?ref=111`, `${base}?ref=222`],
+    ["different routes", `${base}#/a`, `${base}#/b`],
+    ["different hashbang routes", `${base}#!a`, `${base}#!b`],
+    ["a route only the link has", `${base}#/a`, base],
+    ["a route only the stored URL has", base, `${base}#/a`],
+    ["a forum comment and its post", "https://www.lesswrong.com/posts/abc/t?commentId=c1", "https://www.lesswrong.com/posts/abc/t"],
+  ])("refuses %s", (_name, url, stored) => {
+    expect(sameSource(url, stored)).toBe(false);
+  });
+
+  it("leaves YouTube to the video id", () => {
+    const stored = "https://www.youtube.com/watch?v=abcdefghijk";
+    expect(sameSource("https://youtu.be/abcdefghijk?si=x", stored)).toBe(true);
+    expect(sameSource("https://www.youtube.com/watch?v=abcdefghijk&t=30#/x", stored)).toBe(true);
+    expect(sameSource("https://www.youtube.com/watch?v=abcdefghijk&ref=1", `${stored}&ref=2`)).toBe(true);
+    expect(sameSource("https://youtu.be/zzzzzzzzzzz", stored)).toBe(false);
+  });
+
+  it("compares text that isn't a URL as text", () => {
+    expect(sameSource("not a url", "not a url")).toBe(true);
+    expect(sameSource("not a url", "something else")).toBe(false);
   });
 });
