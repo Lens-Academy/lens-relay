@@ -43,12 +43,20 @@ export interface PromotionDiffResponse {
   diff: string;
 }
 
+/**
+ * What happened to a promotion's PR: `merged` into production at once,
+ * `auto-merge` queued because the branch still requires a check, or still
+ * `open` for a person to merge (the response's `warning` says why).
+ */
+export type PromotionMerge = 'merged' | 'auto-merge' | 'open';
+
 export interface PromotionPrResponse {
   branch: string;
   prNumber: number;
   prUrl: string;
   mainSha: string;
-  autoMergeEnabled: boolean;
+  merge: PromotionMerge;
+  /** Why the PR is still open, or why GitHub would not take auto-merge. */
   warning?: string;
 }
 

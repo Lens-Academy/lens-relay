@@ -90,7 +90,7 @@ describe('PromoteFileDialog', () => {
       prNumber: 42,
       prUrl: 'https://github.com/Lens-Academy/lens-relay/pull/42',
       mainSha: 'main-sha',
-      autoMergeEnabled: true,
+      merge: 'merged',
     });
 
     render(
@@ -123,7 +123,7 @@ describe('PromoteFileDialog', () => {
       prNumber: 42,
       prUrl: 'https://github.com/Lens-Academy/lens-relay/pull/42',
       mainSha: 'main-sha',
-      autoMergeEnabled: true,
+      merge: 'merged',
     });
 
     const { rerender } = render(
@@ -197,10 +197,12 @@ describe('PromoteFileDialog', () => {
       prNumber: 42,
       prUrl: 'https://github.com/Lens-Academy/lens-relay/pull/42',
       mainSha: 'main-sha',
-      autoMergeEnabled: true,
+      merge: 'merged',
     });
 
     expect(await screen.findByRole('link', { name: /pull request #42/i })).toBeInTheDocument();
+    expect(screen.getByText('Merged to production')).toBeInTheDocument();
+    expect(screen.getByText('Identical to production')).toBeInTheDocument();
     expect(screen.getByText(/promotion\/notes/)).toBeInTheDocument();
     expect(onPromoted).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: /promoting/i })).not.toBeInTheDocument();
