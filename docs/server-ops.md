@@ -707,7 +707,7 @@ PROMOTION_BRANCH_PREFIX=promote/lens-editor
 PROMOTION_MERGE_METHOD=SQUASH
 PROMOTION_GITHUB_OWNER=Lens-Academy
 PROMOTION_GITHUB_REPO=lens-edu-production
-GITHUB_TOKEN=github_pat_with_pull_request_and_automerge_permissions
+GITHUB_TOKEN=github_pat_that_can_open_and_merge_pull_requests
 ```
 
 `PROMOTION_ENABLED=false` disables the routes. With
@@ -747,13 +747,21 @@ keys. The Lens Editor image includes `git` and `openssh-client`; compose sets
 `GIT_SSH_COMMAND=ssh -F /data/lens-editor-promotion-ssh/config` for promotion
 Git operations.
 
-The GitHub token is for GitHub API operations: creating pull requests and
-enabling auto-merge. It is not used by `git clone`/`git push` while the remote
-uses SSH. The promotion service never pushes to the staging repository; it only
-pushes short-lived branches to the production repository whose names begin with
-`PROMOTION_BRANCH_PREFIX`. Keep GitHub branch protection or rulesets enabled for
-production `main` and staging `staging`; a write-enabled deploy key cannot
-enforce branch-prefix restrictions by itself.
+The GitHub token is for GitHub API operations: it opens each promotion's pull
+request, then merges it at once. When the production branch still requires
+something (a required check, a review), it asks for auto-merge instead, which
+needs "Allow auto-merge" in the repository settings. A fine-grained token needs
+"Contents" and "Pull requests" set to read and write. If the merge fails, the
+pull request stays open and the editor says why. The token is not used by
+`git clone`/`git push` while the remote uses SSH.
+
+The promotion service never pushes to the staging repository; it only pushes
+short-lived branches to the production repository whose names begin with
+`PROMOTION_BRANCH_PREFIX`. A write-enabled deploy key cannot enforce
+branch-prefix restrictions by itself, so protect production's `production`
+branch and staging's `staging` branch with branch protection or rulesets. A
+rule that requires a pull request with no approvals still lets promotions merge
+at once; a required check or approval makes them wait for auto-merge instead.
 
 Let the promotion service create the scratch clone on first use. It marks that
 checkout with local git config and rejects existing checkouts without that

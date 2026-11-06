@@ -366,6 +366,48 @@ describe('git promotion service', () => {
     });
   });
 
+  it('a read part-way through its fetch when the cache is forgotten does not store what it read', async () => {
+    // A promotion merges while an open tab's poll is fetching: the poll read
+    // production before the merge, and must not cache that as fresh.
+    const fixture = await createFixture();
+    const realGit = (await execFileAsync('sh', ['-c', 'command -v git'])).stdout.trim();
+    const shimDir = path.join(fixture.root, 'git-shim');
+    const [hold, waiting, release] = ['hold', 'waiting', 'release'].map(name => path.join(fixture.root, name));
+    await fs.mkdir(shimDir);
+    await fs.writeFile(
+      path.join(shimDir, 'git'),
+      `#!/bin/sh
+if [ "$1" = fetch ] && [ "$2" = staging ] && [ -f '${hold}' ]; then
+  rm -f '${hold}'; touch '${waiting}'
+  while [ ! -f '${release}' ]; do sleep 0.02; done
+fi
+exec '${realGit}' "$@"
+`,
+      { mode: 0o755 },
+    );
+    const exists = (file: string) => fs.access(file).then(() => true, () => false);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${shimDir}${path.delimiter}${originalPath}`;
+    try {
+      const service = createGitPromotionService({ ...fixture.config, fetchMinIntervalMs: 60_000 });
+      await fs.writeFile(hold, '');
+      const poll = service.getStatus('modified.md');
+      for (let tries = 0; !(await exists(waiting)); tries++) {
+        if (tries > 250) throw new Error('The poll never reached its staging fetch');
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+
+      await runGit(fixture.seedDir, ['push', '--force', 'origin', 'staging:main']);
+      service.forgetFetched();
+      await fs.writeFile(release, '');
+
+      await expect(poll).resolves.toMatchObject({ status: 'modified' });
+      await expect(service.getStatus('modified.md')).resolves.toMatchObject({ status: 'identical' });
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
   it('createPromotionBranch works from a fresh fetch despite a warm read cache', async () => {
     const fixture = await createFixture();
     const service = createGitPromotionService({ ...fixture.config, fetchMinIntervalMs: 60_000 });
