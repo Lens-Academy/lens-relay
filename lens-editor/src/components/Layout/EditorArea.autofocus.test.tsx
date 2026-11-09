@@ -120,15 +120,42 @@ describe('EditorArea — autofocus on open', () => {
   });
 
   it('does not take focus from a field the user is typing in', async () => {
-    const input = document.createElement('input');
-    input.setAttribute('data-test-input', '');
-    document.body.appendChild(input);
-    input.focus();
     const view = await renderEditorArea();
+    // A field inside the editor's own DOM, like the new page's title
+    const title = document.createElement('textarea');
+    view.dom.prepend(title);
+    title.focus();
     setContents('# Heading\nBody');
     await new Promise((r) => setTimeout(r, 300));
-    expect(view.contentDOM.contains(document.activeElement)).toBe(false);
-    expect(document.activeElement).toBe(input);
+    expect(document.activeElement).toBe(title);
+  });
+
+  it('does not take focus from the sidebar search', async () => {
+    const sidebar = document.createElement('aside');
+    sidebar.className = 'lens-sidebar-panel';
+    sidebar.setAttribute('data-test-input', '');
+    const search = document.createElement('input');
+    sidebar.appendChild(search);
+    document.body.appendChild(sidebar);
+    search.focus();
+    await renderEditorArea();
+    setContents('# Heading\nBody');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(document.activeElement).toBe(search);
+  });
+
+  it('takes focus from the sidebar entry that opened the page', async () => {
+    const sidebar = document.createElement('aside');
+    sidebar.className = 'lens-sidebar-panel';
+    sidebar.setAttribute('data-test-input', '');
+    const entry = document.createElement('div');
+    entry.tabIndex = 0;
+    sidebar.appendChild(entry);
+    document.body.appendChild(sidebar);
+    entry.focus();
+    const view = await renderEditorArea();
+    setContents('# Heading\nBody');
+    await waitFor(() => expect(view.contentDOM.contains(document.activeElement)).toBe(true));
   });
 
   it('leaves a page that is only frontmatter unfocused, so typing cannot break it', async () => {
