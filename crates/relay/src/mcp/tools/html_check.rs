@@ -10,13 +10,23 @@
 //!
 //! Mirrors `lens-editor/src/components/HtmlEditor/runtime/page-runtime.ts`
 //! (SCRIPT_HOSTS, STYLE_HOSTS, FONT_HOSTS, IMPORT_MAP keys); keep them in
-//! sync. The author guide is `Lens/AI Guide/HTML Pages.md`.
+//! sync. The author guide is `HTML Pages.md` in Lens's AI Guide folder
+//! ([`guide_path`]).
 
+use crate::server::Server;
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+/// The author guide's path when Lens has no AI Guide folder with it.
 pub const GUIDE_PATH: &str = "Lens/AI Guide/HTML Pages.md";
+
+/// The author guide's current path: `HTML Pages.md` in Lens's AI Guide folder,
+/// at the top level or one folder down (see `session_intro::ai_guide_doc`).
+pub fn guide_path(server: &Server) -> String {
+    super::session_intro::ai_guide_doc(server.doc_resolver(), "Lens", "HTML Pages.md")
+        .unwrap_or_else(|| GUIDE_PATH.to_string())
+}
 
 const SCRIPT_HOSTS: &[&str] = &[
     "esm.sh",
@@ -667,7 +677,7 @@ fn render(header: &str, notes: &[String]) -> String {
 }
 
 /// Suffix for a create result: always says whether the check found anything.
-pub fn result_suffix(source: &str) -> String {
+pub fn result_suffix(source: &str, guide: &str) -> String {
     let notes = check(source);
     if notes.is_empty() {
         return "\n\nPage check: nothing found that would break in the editor preview.".to_string();
@@ -677,7 +687,7 @@ pub fn result_suffix(source: &str) -> String {
             "Page check ({} note{} for the editor preview; the file was saved as written. Rules: read {}):",
             notes.len(),
             if notes.len() == 1 { "" } else { "s" },
-            GUIDE_PATH
+            guide
         ),
         &notes,
     )
@@ -685,7 +695,7 @@ pub fn result_suffix(source: &str) -> String {
 
 /// Suffix for an edit result: only notes the edit introduced, so repeated
 /// edits don't repeat the same list.
-pub fn edit_suffix(before: &str, after: &str) -> String {
+pub fn edit_suffix(before: &str, after: &str, guide: &str) -> String {
     let old: HashSet<String> = check(before).into_iter().collect();
     let now = check(after);
     let new: Vec<String> = now.iter().filter(|n| !old.contains(*n)).cloned().collect();
@@ -713,7 +723,7 @@ pub fn edit_suffix(before: &str, after: &str) -> String {
             } else {
                 String::new()
             },
-            GUIDE_PATH
+            guide
         ),
         &new,
     )
@@ -956,12 +966,31 @@ const t = `<h1>x</h1><!--lens-comment {"id":"c1"}-->`;</script></body></html>"#,
     #[test]
     fn result_suffix_always_reports_and_names_the_guide() {
         assert_eq!(
-            result_suffix(&page("<h1>Hi</h1>")),
+            result_suffix(&page("<h1>Hi</h1>"), GUIDE_PATH),
             "\n\nPage check: nothing found that would break in the editor preview."
         );
-        let suffix = result_suffix(&page(r#"<script src="https://example.com/a.js"></script>"#));
+        let suffix = result_suffix(
+            &page(r#"<script src="https://example.com/a.js"></script>"#),
+            "Lens/11-AI/AI Guide/HTML Pages.md",
+        );
         assert!(suffix.starts_with("\n\nPage check (1 note for the editor preview"));
-        assert!(suffix.contains("Lens/AI Guide/HTML Pages.md"));
+        assert!(suffix.contains("Rules: read Lens/11-AI/AI Guide/HTML Pages.md"));
+    }
+
+    // Prevents: page checks sending agents to the guide's old place after the
+    // AI Guide folder moves under a numbered folder
+    #[tokio::test]
+    async fn guide_path_follows_the_ai_guide_folder() {
+        use crate::mcp::tools::test_helpers::build_test_server;
+        let moved = build_test_server(&[(
+            "/11-AI/AI Guide/HTML Pages.md",
+            "cccc0000-0000-0000-0000-000000000001",
+            "# HTML Pages",
+        )])
+        .await;
+        assert_eq!(guide_path(&moved), "Lens/11-AI/AI Guide/HTML Pages.md");
+        let missing = build_test_server(&[]).await;
+        assert_eq!(guide_path(&missing), GUIDE_PATH);
     }
 
     #[test]
@@ -969,11 +998,11 @@ const t = `<h1>x</h1><!--lens-comment {"id":"c1"}-->`;</script></body></html>"#,
         let before = page(r#"<script src="https://example.com/a.js"></script>"#);
         let same = before.replace("<body>", "<body><p>more</p>");
         assert_eq!(
-            edit_suffix(&before, &same),
+            edit_suffix(&before, &same, GUIDE_PATH),
             "\n\nPage check: this edit added no problems (1 earlier note still applies)."
         );
         let worse = same.replace("<p>more</p>", "<p>more</p><script>alert(1)</script>");
-        let suffix = edit_suffix(&before, &worse);
+        let suffix = edit_suffix(&before, &worse, GUIDE_PATH);
         assert!(suffix.contains("1 new note from this edit, 1 earlier still apply"));
         assert!(suffix.contains("alert() does nothing"));
         assert!(!suffix.contains("example.com/a.js"));
@@ -986,7 +1015,7 @@ const t = `<h1>x</h1><!--lens-comment {"id":"c1"}-->`;</script></body></html>"#,
             .collect();
         let page = page(&body);
         assert_eq!(check(&page).len(), 30);
-        let suffix = result_suffix(&page);
+        let suffix = result_suffix(&page, GUIDE_PATH);
         assert!(suffix.contains("Page check (30 notes"), "{suffix}");
         assert_eq!(suffix.matches("\n- ").count(), MAX_SHOWN + 1);
         assert!(suffix.ends_with("…and 5 more; they show once these are fixed."));
