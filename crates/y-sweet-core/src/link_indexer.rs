@@ -514,6 +514,31 @@ pub fn compute_relative_wikilink(source_virtual_path: &str, target_virtual_path:
     parts.join("/")
 }
 
+/// `new_name` (from [`compute_relative_wikilink`], which leaves the extension
+/// out) with the `.md` or `.html` that `link_name` was written with, while the
+/// file it points at has that extension. A move changes where a link points,
+/// not how it is written: [[a/x.html]] becomes [[b/x.html]] and [[a/x]]
+/// becomes [[b/x]]. [[x.md]] loses its `.md` when x.md becomes x.html, as
+/// [[x.md]] never finds an HTML page.
+fn with_written_extension(new_name: String, link_name: &str, target_virtual_path: &str) -> String {
+    let stem_len = if has_terminal_html(link_name) {
+        link_name.len() - 5
+    } else {
+        without_terminal_md(link_name).len()
+    };
+    let written = &link_name[stem_len..];
+    let target_extension = if has_terminal_html(target_virtual_path) {
+        ".html"
+    } else {
+        ".md"
+    };
+    if !written.is_empty() && written.eq_ignore_ascii_case(target_extension) {
+        new_name + written
+    } else {
+        new_name
+    }
+}
+
 /// Snapshot a single folder doc's filemeta into VirtualEntry list.
 ///
 /// Used by `index_document` to read folder metadata under a short-lived lock
@@ -1106,6 +1131,10 @@ pub fn move_document(
             }
         }
     }
+    // The links below are resolved through an index of the tree, not by a
+    // pass over every entry each: a backlinker such as a MOC can hold
+    // hundreds, and a folder move rewrites it once per document it links to.
+    let tree = VirtualTreeIndex::new(&entries);
 
     // 5. Read backlinks for the moved UUID from all folder docs
     let mut all_backlinker_uuids: Vec<String> = Vec::new();
@@ -1147,7 +1176,7 @@ pub fn move_document(
                     svp,
                     &old_virtual_path,
                     &new_virtual_path,
-                    &entries,
+                    &tree,
                 ) {
                     Ok(count) => total_rewritten += count,
                     Err(e) => {
@@ -1169,7 +1198,7 @@ pub fn move_document(
             content_doc,
             &old_virtual_path,
             &new_virtual_path,
-            &entries,
+            &tree,
         ) {
             Ok(count) => total_rewritten += count,
             Err(e) => tracing::error!("Failed to rewrite outgoing links: {:?}", e),
@@ -1329,13 +1358,14 @@ pub fn update_wikilinks_in_doc_resolved(
 ///
 /// For each wikilink that resolves to `old_target_virtual_path` (in the pre-move
 /// virtual tree), computes the new relative path from the source to the target's
-/// new location and replaces the entire page-name portion.
+/// new location and replaces the entire page-name portion, keeping the extension
+/// the link was written with (see `with_written_extension`).
 fn rewrite_wikilinks_for_move(
     content_doc: &Doc,
     source_virtual_path: &str,
     old_target_virtual_path: &str,
     new_target_virtual_path: &str,
-    entries: &[VirtualEntry],
+    tree: &VirtualTreeIndex<'_>,
 ) -> anyhow::Result<usize> {
     let plain_text = {
         let txn = content_doc.transact();
@@ -1351,11 +1381,11 @@ fn rewrite_wikilinks_for_move(
     let edits = compute_wikilink_move_edits(
         &plain_text,
         |link_name| {
-            resolve_in_virtual_tree(link_name, Some(source_virtual_path), entries)
+            tree.resolve(link_name, Some(source_virtual_path))
                 .map(|e| e.virtual_path.to_lowercase() == old_target_lower)
                 .unwrap_or(false)
         },
-        |_| new_name.clone(),
+        |link_name| with_written_extension(new_name.clone(), link_name, new_target_virtual_path),
     );
 
     if edits.is_empty() {
@@ -1382,7 +1412,7 @@ fn rewrite_outgoing_links_for_move(
     content_doc: &Doc,
     old_source_virtual_path: &str,
     new_source_virtual_path: &str,
-    entries: &[VirtualEntry],
+    tree: &VirtualTreeIndex<'_>,
 ) -> anyhow::Result<usize> {
     let plain_text = {
         let txn = content_doc.transact();
@@ -1396,10 +1426,14 @@ fn rewrite_outgoing_links_for_move(
         &plain_text,
         |link_name| {
             // Resolve from OLD location — does this link find a target?
-            let target = resolve_in_virtual_tree(link_name, Some(old_source_virtual_path), entries);
+            let target = tree.resolve(link_name, Some(old_source_virtual_path));
             if let Some(t) = target {
                 // Compute what the link text should be from the NEW location
-                let new_link = compute_relative_wikilink(new_source_virtual_path, &t.virtual_path);
+                let new_link = with_written_extension(
+                    compute_relative_wikilink(new_source_virtual_path, &t.virtual_path),
+                    link_name,
+                    &t.virtual_path,
+                );
                 // Only edit if the link text would actually change
                 new_link != link_name
             } else {
@@ -1408,9 +1442,14 @@ fn rewrite_outgoing_links_for_move(
         },
         |link_name| {
             // Resolve from OLD location to find the target
-            let target = resolve_in_virtual_tree(link_name, Some(old_source_virtual_path), entries)
+            let target = tree
+                .resolve(link_name, Some(old_source_virtual_path))
                 .expect("should_edit already confirmed resolution");
-            compute_relative_wikilink(new_source_virtual_path, &target.virtual_path)
+            with_written_extension(
+                compute_relative_wikilink(new_source_virtual_path, &target.virtual_path),
+                link_name,
+                &target.virtual_path,
+            )
         },
     );
 
@@ -6296,6 +6335,115 @@ mod tests {
                 read_contents(&gs_doc),
                 "See [[Archive/Welcome]] for details",
                 "incoming backlink should be updated"
+            );
+        }
+
+        // A move changes where a link points, not how it is written: a link
+        // written with ".md" keeps it, one without stays without.
+        #[test]
+        fn move_keeps_the_extension_a_link_is_written_with() {
+            let folder =
+                create_folder_doc(&[("/notes/Old.md", "uuid-old"), ("/Index.md", "uuid-index")]);
+            set_folder_name(&folder, "Lens");
+            let f0id = folder0_id();
+            let index = create_content_doc("[[notes/Old]], [[notes/Old.md|Old]], [[notes/Old.MD]]");
+            index_content_into_folder("uuid-index", &index, &folder).unwrap();
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-index".to_string(), &index as &Doc);
+
+            let result = move_document(
+                "uuid-old",
+                "/archive/New.md",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens"],
+                &resolver,
+                &content_docs,
+            )
+            .expect("move should succeed");
+
+            assert_eq!(result.links_rewritten, 3);
+            assert_eq!(
+                read_contents(&index),
+                "[[archive/New]], [[archive/New.md|Old]], [[archive/New.MD]]"
+            );
+        }
+
+        // [[x.md]] never finds an HTML page, so turning x.md into x.html
+        // drops the ".md" a link was written with.
+        #[test]
+        fn move_md_to_html_drops_a_written_md_extension() {
+            let folder = create_folder_doc(&[
+                ("/widgets/rings.md", "uuid-rings"),
+                ("/lenses/Intro.md", "uuid-intro"),
+            ]);
+            set_folder_name(&folder, "Lens Edu");
+            let f0id = folder0_id();
+            let lens = create_content_doc("source:: [[../widgets/rings.md]]");
+            index_content_into_folder("uuid-intro", &lens, &folder).unwrap();
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-intro".to_string(), &lens as &Doc);
+
+            let result = move_document(
+                "uuid-rings",
+                "/widgets/rings.html",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens Edu"],
+                &resolver,
+                &content_docs,
+            )
+            .expect("move should succeed");
+
+            assert_eq!(result.links_rewritten, 1);
+            assert_eq!(read_contents(&lens), "source:: [[../widgets/rings]]");
+        }
+
+        // A moved document's own links keep their ".html" too, and a rename
+        // that leaves them pointing at the same place leaves them alone.
+        #[test]
+        fn move_keeps_html_extension_in_outgoing_links() {
+            let folder = create_folder_doc_with_html(&[
+                ("/lenses/Intro.md", "uuid-intro"),
+                ("/widgets/rings.html", "uuid-rings"),
+            ]);
+            set_folder_name(&folder, "Lens Edu");
+            let f0id = folder0_id();
+            let text = "[[../widgets/rings.html]] and [[../widgets/rings|Rings]]";
+            let lens = create_content_doc(text);
+            index_content_into_folder("uuid-intro", &lens, &folder).unwrap();
+            assert_eq!(read_backlinks(&folder, "uuid-rings"), vec!["uuid-intro"]);
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-intro".to_string(), &lens as &Doc);
+            let move_lens = |new_path: &str| {
+                move_document(
+                    "uuid-intro",
+                    new_path,
+                    &folder,
+                    &folder,
+                    &[&folder],
+                    &["Lens Edu"],
+                    &resolver,
+                    &content_docs,
+                )
+                .expect("move should succeed")
+            };
+
+            assert_eq!(move_lens("/lenses/Renamed.md").links_rewritten, 0);
+            assert_eq!(read_contents(&lens), text);
+
+            assert_eq!(move_lens("/lenses/sub/Renamed.md").links_rewritten, 2);
+            assert_eq!(
+                read_contents(&lens),
+                "[[../../widgets/rings.html]] and [[../../widgets/rings|Rings]]"
             );
         }
     }
