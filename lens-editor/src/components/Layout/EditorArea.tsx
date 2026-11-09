@@ -59,7 +59,7 @@ import { MobileCommentsSheet, type PendingCommentAction } from '../Mobile/Mobile
 import { MobileEditToolbar } from '../Mobile/MobileEditToolbar';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { persistentHighlightLine } from '../Editor/extensions/headingFlash';
-import { revealFrontmatterPos } from '../Editor/extensions/frontmatter';
+import { frontmatterField, revealFrontmatterPos } from '../Editor/extensions/frontmatter';
 import { utf8ByteToUtf16Offset } from '../../lib/text-offsets';
 import { resolveAnchorYFromView, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import { findPathByUuid } from '../../lib/uuid-to-path';
@@ -479,6 +479,37 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const hash = lineMatch ? '' : window.location.hash;
     history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + hash);
   }, [synced, editorView, routerLocation]);
+
+  // Put the cursor in the page once it has synced, so typing works without a
+  // click first: at the start of the text, below any frontmatter. Leaves a
+  // cursor a URL target already placed, and never takes focus from a field
+  // the user is typing in (search, quick switcher). Not on touch screens,
+  // where focus would pop up the keyboard.
+  useEffect(() => {
+    if (!synced || !editorView || !canWrite || isMobile) return;
+    if (window.matchMedia('(pointer: coarse)').matches) return;
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const place = () => {
+      // Content can land shortly after the synced event: wait for it a little
+      if (editorView.state.doc.length === 0 && tries++ < 10) {
+        timer = setTimeout(place, 100);
+        return;
+      }
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== document.body && !editorView.dom.contains(active)
+          && (active.isContentEditable || active.matches('input, textarea, select'))) return;
+      const { state } = editorView;
+      if (state.selection.main.head === 0) {
+        const fm = state.field(frontmatterField, false)?.range;
+        const pos = fm && fm.to < state.doc.length ? state.doc.lineAt(fm.to + 1).from : 0;
+        if (pos > 0) editorView.dispatch({ selection: { anchor: pos } });
+      }
+      editorView.focus();
+    };
+    place();
+    return () => clearTimeout(timer);
+  }, [synced, editorView, canWrite, isMobile]);
 
   // Portal targets in the global header
   const breadcrumbTarget = document.getElementById('header-breadcrumb');

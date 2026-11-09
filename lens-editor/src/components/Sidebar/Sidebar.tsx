@@ -92,10 +92,13 @@ export function Sidebar() {
     }));
   }, [searchResults, docIdToPath]);
 
-  // Ctrl+K / Cmd+K keyboard shortcut to focus search input
+  // Ctrl+K / Cmd+K keyboard shortcut to focus search input. Not with Shift or
+  // Alt (Cmd+Shift+K deletes a line, and Mac reports e.key 'k' for it), and not
+  // when the editor already handled the key.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if (e.defaultPrevented || e.shiftKey || e.altKey) return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         searchInputRef.current?.focus();
       }

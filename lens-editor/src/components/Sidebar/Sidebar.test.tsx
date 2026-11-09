@@ -425,3 +425,50 @@ describe('Sidebar with multi-folder metadata', () => {
     expect(screen.queryByText('Delete Folder')).not.toBeInTheDocument();
   });
 });
+
+describe('Sidebar search shortcut', () => {
+  function renderSidebar() {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NavigationContext.Provider
+          value={{
+            metadata: {},
+            folderDocs: new Map<string, Y.Doc>(),
+            folderNames: [],
+            errors: new Map<string, Error>(),
+            onNavigate: vi.fn(),
+            justCreatedRef: { current: false },
+          }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+    return screen.getByPlaceholderText('Search');
+  }
+
+  it('focuses search on Cmd+K and Ctrl+K', () => {
+    const search = renderSidebar();
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    expect(search).toHaveFocus();
+    search.blur();
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
+    expect(search).toHaveFocus();
+  });
+
+  it('leaves Cmd+Shift+K (delete line) to the editor', () => {
+    const search = renderSidebar();
+    // Mac reports e.key 'k' for Cmd+Shift+K
+    fireEvent.keyDown(document, { key: 'k', metaKey: true, shiftKey: true });
+    fireEvent.keyDown(document, { key: 'K', ctrlKey: true, shiftKey: true });
+    expect(search).not.toHaveFocus();
+  });
+
+  it('ignores a key the editor already handled', () => {
+    const search = renderSidebar();
+    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true });
+    event.preventDefault();
+    document.dispatchEvent(event);
+    expect(search).not.toHaveFocus();
+  });
+});
