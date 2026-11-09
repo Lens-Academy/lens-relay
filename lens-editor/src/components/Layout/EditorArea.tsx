@@ -511,14 +511,15 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       const mayTakeFocus = !active || active === document.body || active === editorView.contentDOM
         || (!!active.closest('.lens-sidebar-panel') && !typingField);
       if (!mayTakeFocus) return;
-      if (!urlTargetPlacedRef.current) {
-        const { state } = editorView;
-        const fm = state.field(frontmatterField, false)?.range;
-        if (fm) {
-          // Nothing below the frontmatter: no place to type without breaking it
-          if (fm.to >= state.doc.length) return;
-          editorView.dispatch({ selection: { anchor: state.doc.lineAt(fm.to + 1).from } });
-        }
+      const { state } = editorView;
+      const fm = state.field(frontmatterField, false);
+      const head = state.selection.main.head;
+      // A URL target keeps its cursor unless it landed in frontmatter that is
+      // collapsed (text that arrived after the jump), where typing is invisible
+      if (fm?.range && (!urlTargetPlacedRef.current || (fm.collapsed && head <= fm.range.to))) {
+        // Nothing below the frontmatter: no place to type without breaking it
+        if (fm.range.to >= state.doc.length) return;
+        editorView.dispatch({ selection: { anchor: state.doc.lineAt(fm.range.to + 1).from } });
       }
       editorView.focus();
     };
