@@ -37,11 +37,34 @@ function messageIdFor(range: CriticMarkupRange): string {
   return a && t ? `${a}|${t}` : `pos:${range.from}`;
 }
 
+/**
+ * Every comment's id, by offset: author|timestamp, and #2, #3... for later exact
+ * copies in document order. A pasted block repeats a comment's metadata, and cards
+ * are React-keyed by this id: two cards with one key piled up stale copies of
+ * themselves on every render (Nov 10 Weekly Review, 2026-11-10).
+ */
+function idsByOffset(ranges: readonly CriticMarkupRange[]): (range: CriticMarkupRange) => string {
+  const seen = new Map<string, number>();
+  const ids = new Map<number, string>();
+  for (const r of ranges) {
+    if (r.type !== 'comment') continue;
+    const base = messageIdFor(r);
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    ids.set(r.from, n === 1 ? base : `${base}#${n}`);
+  }
+  return (range) => ids.get(range.from) ?? messageIdFor(range);
+}
+
 /** The thread a message is in, as the Y.Text is now (its offsets may have moved since the render) */
-function liveThread(ytext: Y.Text, messageId: string): { ranges: CriticMarkupRange[]; thread: CommentThread } | null {
+function liveThread(
+  ytext: Y.Text,
+  messageId: string,
+): { ranges: CriticMarkupRange[]; thread: CommentThread; idOf: (range: CriticMarkupRange) => string } | null {
   const ranges = parse(ytext.toString());
-  const thread = parseThreads(ranges).find((t) => t.comments.some((c) => messageIdFor(c) === messageId));
-  return thread ? { ranges, thread } : null;
+  const idOf = idsByOffset(ranges);
+  const thread = parseThreads(ranges).find((t) => t.comments.some((c) => idOf(c) === messageId));
+  return thread ? { ranges, thread, idOf } : null;
 }
 
 function useYTextString(yText: Y.Text): string {
@@ -113,9 +136,10 @@ export function useThreadsFromYText(
   return useMemo<AdapterResult>(() => {
     const rangeByMessageId = new Map<string, CriticMarkupRange>();
     const threadByKey = new Map<ThreadKey, CommentThread>();
+    const idOf = idsByOffset(text ? parse(text) : []);
 
     const projectMessage = (range: CriticMarkupRange): MessageView => {
-      const id = messageIdFor(range);
+      const id = idOf(range);
       rangeByMessageId.set(id, range);
       const isOwn = range.metadata?.author === currentUserName;
       // Reactions grouped by emoji, in the order they were first given
@@ -152,7 +176,7 @@ export function useThreadsFromYText(
       onReply(thread, body) {
         // By offset, else by root comment: the offset may have moved since the card rendered.
         const live = threadByKey.get(thread.key)
-          ?? rawThreads.find((t) => messageIdFor(t.comments[0]) === thread.root.id);
+          ?? rawThreads.find((t) => idOf(t.comments[0]) === thread.root.id);
         if (!live) return;
         replyInYText(yText, body, live.to);
       },
@@ -167,7 +191,7 @@ export function useThreadsFromYText(
           removeThreadInYText(yText, live.ranges, live.thread.comments);
           return;
         }
-        const range = live?.thread.comments.find((c) => messageIdFor(c) === message.id) ?? rangeByMessageId.get(message.id);
+        const range = live?.thread.comments.find((c) => live.idOf(c) === message.id) ?? rangeByMessageId.get(message.id);
         if (!range) return;
         deleteRangeInYText(yText, range);
       },
@@ -177,7 +201,7 @@ export function useThreadsFromYText(
       },
       onReact(message, emoji) {
         const live = liveThread(yText, message.id);
-        const range = live?.thread.comments.find((c) => messageIdFor(c) === message.id);
+        const range = live?.thread.comments.find((c) => live.idOf(c) === message.id);
         if (range) toggleReactionInYText(yText, range, emoji, currentUserName);
       },
       onAddComment(key, body) {
@@ -188,5 +212,5 @@ export function useThreadsFromYText(
     };
 
     return { threads, callbacks };
-  }, [rawThreads, yText, currentUserName, canDeleteAny]);
+  }, [rawThreads, text, yText, currentUserName, canDeleteAny]);
 }
