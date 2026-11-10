@@ -256,14 +256,17 @@ export class ReadAloudController {
     }
     const scroller = this.view.scrollDOM.getBoundingClientRect();
     const content = this.view.contentDOM.getBoundingClientRect();
-    // In the margin, 10px left of the text (line box + 6px; the line box
-    // starts at the content's padding edge), level with its first line
+    // In the margin, level with the line's first row, in a column of its own
+    // 48px left of the text (line box + 6px; the line box starts at the
+    // content's padding edge): from the text out, the authorship strips
+    // (6-25px), a heading's or block's fold arrow (24-44px, sharedFolds.ts,
+    // index.css), then this, 4px clear of the arrow, on every line alike
     const padLeft = parseFloat(getComputedStyle(this.view.contentDOM).paddingLeft) || 0;
     const size = 22;
     const lineMid = (coords.top + coords.bottom) / 2;
     this.button.style.display = '';
     this.button.style.top = `${Math.round(lineMid - size / 2 - scroller.top + this.view.scrollDOM.scrollTop)}px`;
-    this.button.style.left = `${Math.max(0, Math.round(content.left + padLeft + 6 - 10 - size - scroller.left + this.view.scrollDOM.scrollLeft))}px`;
+    this.button.style.left = `${Math.max(0, Math.round(content.left + padLeft + 6 - 48 - size - scroller.left + this.view.scrollDOM.scrollLeft))}px`;
   }
 
   private onMouseDown = (e: MouseEvent) => {

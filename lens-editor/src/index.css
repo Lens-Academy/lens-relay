@@ -1132,7 +1132,8 @@
    with more-indented lines under it, as in Obsidian: shown on hover and
    always while folded. The anchor is zero-width and one line tall, so the
    arrow sits in the margin, centred on the line's first row, left of the
-   authorship bar. */
+   authorship bar. The read-aloud button has its own column left of it
+   (readAloud.ts), so the two sit side by side. */
 .cm-fold-toggle-anchor {
   position: relative;
   display: inline-block;
