@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StateEffect } from '@codemirror/state';
 import { createTestEditor } from '../../test/codemirror-helpers';
 import { revealFrontmatterPos } from '../Editor/extensions/frontmatter';
@@ -39,5 +39,37 @@ describe('Concepts panel host widget', () => {
     const { view, host } = editorWithPanel(content);
     view.dispatch({ effects: setPanelHost.of(null) });
     expect(view.contentDOM.contains(host)).toBe(false);
+  });
+
+  it('has the editor measure the header again when it changes size, keeping its element', () => {
+    // The title is drawn into the host after the editor first measured it;
+    // on a short page nothing else makes the editor measure it again.
+    // CodeMirror observes its own elements too: keep only the host's observers
+    const observed: { target: Element; cb: ResizeObserverCallback }[] = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(readonly cb: ResizeObserverCallback) {}
+      observe(target: Element) { observed.push({ target, cb: this.cb }); }
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 0; });
+    try {
+      const { view, host } = editorWithPanel(content);
+      const callbacks = () => observed.filter(o => o.target === host).map(o => o.cb);
+      expect(callbacks()).toHaveLength(1);
+      const before = view.state.field(panelHostField);
+      const resize = (height: number) => callbacks()[0]([{ contentRect: { height } } as ResizeObserverEntry], {} as ResizeObserver);
+      resize(161);
+      const after = view.state.field(panelHostField);
+      expect(after).not.toBe(before);
+      expect(view.contentDOM.contains(host)).toBe(true);
+      // The same element, reused: no second observer
+      expect(callbacks()).toHaveLength(1);
+      // Same size again: nothing to do
+      resize(161);
+      expect(view.state.field(panelHostField)).toBe(after);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
