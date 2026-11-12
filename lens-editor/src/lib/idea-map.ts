@@ -690,6 +690,65 @@ export function mergePicks(live: Picks, before: Picks, after: Picks): Picks {
   return { requires, helpful: merge('helpful').filter((n) => !required.has(ideaKey(n))) };
 }
 
+/** A row of the list under a requirements box: an idea of the map, or the
+ *  typed name as an idea that has no file yet. */
+export type PickOption =
+  | { kind: 'idea'; key: string; name: string; written: boolean }
+  | { kind: 'new'; name: string };
+
+export interface PickChoices {
+  /** Best match first; a `new` row is always the last one. */
+  options: PickOption[];
+  /** Why the typed text itself cannot be added, to show under the box; null
+   *  when it can, or when nothing is typed. */
+  problem: string | null;
+}
+
+/** How well a name matches typed text: the whole name, its start, the start
+ *  of one of its words, anywhere; -1 when it does not. */
+function matchRank(key: string, wanted: string): number {
+  if (key === wanted) return 0;
+  const at = key.indexOf(wanted);
+  if (at < 0) return -1;
+  if (at === 0) return 1;
+  for (let i = at; i >= 0; i = key.indexOf(wanted, i + 1)) {
+    if (/[^\p{L}\p{N}]/u.test(key[i - 1])) return 2;
+  }
+  return 3;
+}
+
+/**
+ * What a requirements box offers for `typed`: the ideas of the map whose name
+ * holds it (not the idea itself, `ownNames`: the name of its file and the one
+ * typed for it, and not what is in one of the two lists already), best match first, and, when no idea has exactly this name,
+ * the name itself as a new idea: a link to it makes a "not written yet" idea
+ * on the map. The name follows the rules of a file name (ideaNameProblem).
+ * With nothing typed: every idea that can still be picked.
+ */
+export function pickChoices(typed: string, nodes: readonly IdeaNode[], picks: Picks, ownNames: readonly string[], limit = 50): PickChoices {
+  const wanted = ideaKey(typed);
+  const own = new Set(ownNames.map(ideaKey).filter(Boolean));
+  const inList = (list: keyof Picks, key: string) => picks[list].some((name) => ideaKey(name) === key);
+  const free = nodes.filter((node) => !own.has(node.key) && !inList('requires', node.key) && !inList('helpful', node.key));
+  const option = (node: IdeaNode): PickOption => ({ kind: 'idea', key: node.key, name: node.name, written: node.written });
+  if (!wanted) return { options: free.slice(0, limit).map(option), problem: null };
+
+  const options = free
+    .map((node) => ({ node, rank: matchRank(node.key, wanted) }))
+    .filter((found) => found.rank >= 0)
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, limit)
+    .map((found) => option(found.node));
+  if (own.has(wanted)) return { options, problem: 'A concept cannot be its own requirement.' };
+  if (inList('requires', wanted)) return { options, problem: 'This concept is under Requires already.' };
+  if (inList('helpful', wanted)) return { options, problem: 'This concept is under Helpful first already.' };
+  if (nodes.some((node) => node.key === wanted)) return { options, problem: null };
+  // A link to a file that exists is fine, so no name counts as taken here
+  const problem = ideaNameProblem(typed, []);
+  if (problem) return { options, problem };
+  return { options: [...options, { kind: 'new', name: typed.trim() }], problem: null };
+}
+
 /**
  * The circle that giving the idea `name` the requirements `requires` would
  * make, as names from the idea back to itself, or null: a requirement that

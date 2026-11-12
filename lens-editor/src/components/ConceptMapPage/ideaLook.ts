@@ -1,4 +1,4 @@
-import type { IdeaNode, Priority } from '../../lib/idea-map';
+import type { IdeaNode, Picks, Priority } from '../../lib/idea-map';
 
 /** The three priority colours, shared by the map, the steps and the legend. */
 export const PRIORITY_LOOK: Record<Priority, string> = {
@@ -47,3 +47,7 @@ export function pickWord(marks: PickMarks | null, key: string): string | null {
 
 export const BUTTON = 'px-2 py-1 rounded border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed';
 export const PRIMARY_BUTTON = 'px-3 py-1 rounded bg-blue-600 text-sm text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed';
+
+/** The small grey word above a field of a form. */
+export const FIELD_LABEL = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400';
+export const LIST_LABEL: Record<keyof Picks, string> = { requires: 'Requires', helpful: 'Helpful first' };

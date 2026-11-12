@@ -15,6 +15,7 @@ import {
   mergePicks,
   newQuestionProblem,
   parseIdea,
+  pickChoices,
   questionAsNew,
   questionChanges,
   questionDeleteChanges,
@@ -434,6 +435,57 @@ describe('togglePick', () => {
     const picks = togglePick({ requires: ['A', 'B'], helpful: [] }, 'a', 'helpful');
     expect(picks).toEqual({ requires: ['B'], helpful: ['a'] });
     expect(togglePick(picks, 'A', 'requires')).toEqual({ requires: ['B', 'A'], helpful: [] });
+  });
+});
+
+describe('pickChoices', () => {
+  // "Old idea" has no file: Power-seeking names it
+  const g = buildIdeaGraph(ideas({ 'Power-seeking': ['Instrumental convergence', 'Old idea'], 'Instrumental convergence': [], 'Seeking power early': [], Corrigibility: [] }));
+  const none = { requires: [], helpful: [] };
+  const rows = (typed: string, picks = none, own: string[] = []) =>
+    pickChoices(typed, g.nodes, picks, own).options.map((o) => (o.kind === 'new' ? `+${o.name}` : o.name));
+
+  it('offers the ideas whose name holds the typed text, whatever its case, best match first', () => {
+    // start of the name, start of a word, anywhere
+    expect(rows('seek')).toEqual(['Seeking power early', 'Power-seeking', '+seek']);
+    expect(rows('  POWER ')).toEqual(['Power-seeking', 'Seeking power early', '+POWER']);
+    expect(rows('gib')).toEqual(['Corrigibility', '+gib']);
+  });
+
+  it('ends with the typed name as a new idea when no idea has exactly that name', () => {
+    expect(pickChoices(' Mesa optimisation ', g.nodes, none, [])).toEqual({ options: [{ kind: 'new', name: 'Mesa optimisation' }], problem: null });
+    expect(rows('corrigibility')).toEqual(['Corrigibility']);
+    // An idea without a file is an idea of the map: it is offered as it is
+    expect(pickChoices('old idea', g.nodes, none, []).options).toEqual([{ kind: 'idea', key: 'old idea', name: 'Old idea', written: false }]);
+  });
+
+  it('never offers the idea itself, as a match or as a new idea', () => {
+    expect(rows('power', none, ['Power-seeking'])).toEqual(['Seeking power early', '+power']);
+    expect(pickChoices('power-seeking', g.nodes, none, ['Power-seeking'])).toEqual({ options: [], problem: 'A concept cannot be its own requirement.' });
+    // The name typed into "Add concept", which no file has yet
+    expect(pickChoices('brand new', g.nodes, none, ['Old name', ' Brand new '])).toEqual({ options: [], problem: 'A concept cannot be its own requirement.' });
+  });
+
+  it('leaves out what is in one of the two lists, and says so for its exact name', () => {
+    const picks = { requires: ['Corrigibility', 'Not there yet'], helpful: ['Power-seeking'] };
+    expect(rows('', picks)).toEqual(['Instrumental convergence', 'Old idea', 'Seeking power early']);
+    expect(pickChoices('corrigibility', g.nodes, picks, [])).toEqual({ options: [], problem: 'This concept is under Requires already.' });
+    expect(pickChoices('not there yet', g.nodes, picks, [])).toEqual({ options: [], problem: 'This concept is under Requires already.' });
+    expect(pickChoices('Power-seeking', g.nodes, picks, []).problem).toBe('This concept is under Helpful first already.');
+  });
+
+  it('checks a new name like a file name, and adds nothing when it fails', () => {
+    expect(pickChoices('Goals/values', g.nodes, none, [])).toEqual({ options: [], problem: 'A name cannot contain /' });
+    expect(pickChoices('_hidden', g.nodes, none, []).problem).toBe('A name cannot start with _ or a dot.');
+    expect(pickChoices('Mesa.md', g.nodes, none, []).problem).toBe('Leave out ".md": the name becomes the file name.');
+    // Matches are still offered next to the problem
+    expect(pickChoices('power[', g.nodes, none, [])).toEqual({ options: [], problem: 'A name cannot contain [' });
+  });
+
+  it('offers every idea that can still be picked when nothing is typed, up to the limit', () => {
+    expect(rows('')).toEqual(['Corrigibility', 'Instrumental convergence', 'Old idea', 'Power-seeking', 'Seeking power early']);
+    expect(pickChoices('', g.nodes, none, ['Corrigibility', ''], 2).options.map((o) => o.name)).toEqual(['Instrumental convergence', 'Old idea']);
+    expect(pickChoices('   ', g.nodes, none, []).problem).toBeNull();
   });
 });
 

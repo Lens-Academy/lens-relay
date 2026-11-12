@@ -1,19 +1,18 @@
-import { useId, useMemo, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import {
   IDEA_COURSE_LINK,
   PRIORITIES,
   ideaEditProblem,
-  ideaKey,
   ideaNameProblem,
   requirementCircle,
   togglePick,
   type IdeaEdit,
   type IdeaGraph,
-  type IdeaNode,
   type Picks,
   type Priority,
 } from '../../lib/idea-map';
-import { BUTTON, PRIMARY_BUTTON, PRIORITY_LABEL } from './ideaLook';
+import { BUTTON, FIELD_LABEL, LIST_LABEL, PRIMARY_BUTTON, PRIORITY_LABEL } from './ideaLook';
+import { PickList } from './PickList';
 
 /** What the form is for: a new idea, every part of an existing one, or only
  *  the requirements of an existing one. */
@@ -33,70 +32,7 @@ export interface IdeaFields {
 
 const TITLE: Record<FormMode['kind'], string> = { add: 'Add concept', edit: 'Edit concept', requirements: 'Edit requirements' };
 
-const LABEL = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400';
-const LIST_LABEL: Record<keyof Picks, string> = { requires: 'Requires', helpful: 'Helpful first' };
-
-/** One list of picked ideas: its names as chips, and a box to add by typing. */
-function PickList({ list, names, candidates, onToggle }: {
-  list: keyof Picks;
-  names: string[];
-  /** Ideas that can still be picked for this list. */
-  candidates: IdeaNode[];
-  onToggle: (name: string) => void;
-}) {
-  const id = useId();
-  const [typed, setTyped] = useState('');
-  const found = useMemo(() => {
-    const wanted = typed.trim().toLowerCase();
-    return wanted ? candidates.filter((node) => node.key.includes(wanted)).slice(0, 8) : [];
-  }, [typed, candidates]);
-  const add = (name: string) => {
-    onToggle(name);
-    setTyped('');
-  };
-  return (
-    <div className="mt-4" data-list={list}>
-      <label htmlFor={id} className={LABEL}>{LIST_LABEL[list]}</label>
-      {names.length > 0 && (
-        <ul className="mb-1.5 flex flex-wrap gap-1">
-          {names.map((name) => (
-            <li key={name} className="flex max-w-full items-center gap-1 rounded border border-indigo-200 bg-indigo-50 py-0.5 pl-2 pr-1 text-xs text-indigo-900">
-              <span className="truncate">{name}</span>
-              <button type="button" className="rounded px-1 text-indigo-700 hover:bg-indigo-100" onClick={() => onToggle(name)} aria-label={`Remove ${name} from ${LIST_LABEL[list]}`}>×</button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <input
-        id={id}
-        className="lens-input w-full"
-        placeholder="Type a name, or click a concept"
-        autoComplete="off"
-        value={typed}
-        onChange={(e) => setTyped(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key !== 'Enter') return;
-          // Enter picks the first match; it never sends the form
-          e.preventDefault();
-          if (found[0]) add(found[0].name);
-        }}
-      />
-      {typed.trim() !== '' && (
-        <ul className="mt-1 max-h-48 overflow-y-auto rounded border border-gray-200 bg-white text-sm">
-          {found.map((node) => (
-            <li key={node.key}>
-              <button type="button" className="block w-full truncate px-2 py-1 text-left text-gray-700 hover:bg-gray-50" onClick={() => add(node.name)}>
-                {node.name}
-                {!node.written && <span className="ml-1.5 text-xs text-gray-400">Not written yet</span>}
-              </button>
-            </li>
-          ))}
-          {found.length === 0 && <li className="px-2 py-1 text-gray-400">No concept with this name</li>}
-        </ul>
-      )}
-    </div>
-  );
-}
+const LABEL = FIELD_LABEL;
 
 /**
  * The creator's form, in the side panel so the map stays in view: "Add
@@ -146,9 +82,8 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clic
     courses: courses.split('\n').map((line) => line.trim()).filter(Boolean),
     learn,
   });
-  const picked = new Set([...picks.requires, ...picks.helpful].map(ideaKey));
-  const ownKey = self?.key ?? ideaKey(name);
-  const candidates = graph.nodes.filter((node) => node.key !== ownKey && !picked.has(node.key));
+  // Never offered as its own requirement: the name of its file, and the one typed for it
+  const ownNames = [ownName, name];
   const circle = requirementCircle(graph, self?.name ?? name, picks.requires);
 
   const submit = async (e: FormEvent) => {
@@ -224,8 +159,9 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clic
           </>
         )}
 
-        <PickList list="requires" names={picks.requires} candidates={candidates} onToggle={(n) => onPicks(togglePick(picks, n, 'requires'))} />
-        <PickList list="helpful" names={picks.helpful} candidates={candidates} onToggle={(n) => onPicks(togglePick(picks, n, 'helpful'))} />
+        {(['requires', 'helpful'] as const).map((list) => (
+          <PickList key={list} list={list} picks={picks} graph={graph} ownNames={ownNames} onToggle={(n) => onPicks(togglePick(picks, n, list))} />
+        ))}
 
         {mode.kind !== 'requirements' && (
           <>

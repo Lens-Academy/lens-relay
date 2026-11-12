@@ -48,7 +48,12 @@ function renderPage(role: UserRole = 'edit', url = '/concept-map') {
 }
 
 const box = (name: string) => screen.getByTestId('idea-map').querySelector<HTMLElement>(`[data-idea="${name}"]`)!;
-const names = (list: string) => [...screen.getByTestId('idea-form').querySelectorAll(`[data-list="${list}"] li span`)].map((el) => el.textContent);
+const names = (list: string) => [...screen.getByTestId('idea-form').querySelectorAll(`[data-list="${list}"] [data-chip] > span`)].map((el) => el.textContent);
+/** The rows of the list under a requirements box; the highlighted one in [ ]. */
+const offered = (label: string) => {
+  const rows = document.getElementById(screen.getByLabelText(label).getAttribute('aria-controls')!);
+  return rows ? [...rows.querySelectorAll('[role="option"]')].map((row) => (row.getAttribute('aria-selected') === 'true' ? `[${row.textContent}]` : row.textContent)) : null;
+};
 
 beforeEach(() => {
   onNavigate.mockReset();
@@ -277,16 +282,120 @@ describe('ConceptMapPage', () => {
       expect(box('Goal-directedness').getAttribute('aria-pressed')).toBe('true');
     });
 
-    it('picks requirements by typing', async () => {
+    it('picks requirements by typing: the list opens, arrows move the highlight, Enter picks it', async () => {
       renderPage();
       await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
-      await userEvent.type(screen.getByLabelText('Requires'), 'corr{Enter}');
+      const requires = screen.getByLabelText('Requires');
+      expect(requires.getAttribute('role')).toBe('combobox');
+      expect(requires.getAttribute('aria-expanded')).toBe('false');
+      expect(offered('Requires')).toBeNull();
+
+      await userEvent.type(requires, 'co');
+      expect(requires.getAttribute('aria-expanded')).toBe('true');
+      // start of a name before the start of a word; the typed text as a new concept comes last
+      expect(offered('Requires')).toEqual(['[Corrigibility]', 'Instrumental convergence', 'Add "co" as a new concept']);
+      const active = () => document.getElementById(requires.getAttribute('aria-activedescendant')!)!.textContent;
+      expect(active()).toBe('Corrigibility');
+      await userEvent.keyboard('{ArrowDown}');
+      expect(active()).toBe('Instrumental convergence');
+      await userEvent.keyboard('{ArrowDown}{ArrowDown}');
+      expect(active()).toBe('Corrigibility');
+      await userEvent.keyboard('{ArrowUp}');
+      expect(active()).toBe('Add "co" as a new concept');
+      await userEvent.keyboard('{ArrowUp}{Enter}');
+      expect(names('requires')).toEqual(['Instrumental convergence']);
+      // ready for the next one: the box is empty, has the focus, and the list is closed
+      expect((requires as HTMLInputElement).value).toBe('');
+      expect(document.activeElement).toBe(requires);
+      expect(offered('Requires')).toBeNull();
+
+      await userEvent.keyboard('corr{Enter}');
+      expect(names('requires')).toEqual(['Instrumental convergence', 'Corrigibility']);
+      expect(map.createIdea).not.toHaveBeenCalled();
+
       await userEvent.type(screen.getByLabelText('Helpful first'), 'thesis');
-      await userEvent.click(screen.getByRole('button', { name: /Orthogonality thesis.*Not written yet/ }));
-      expect(names('requires')).toEqual(['Corrigibility']);
+      await userEvent.click(screen.getByRole('option', { name: /Orthogonality thesis.*Not written yet/ }));
       expect(names('helpful')).toEqual(['Orthogonality thesis']);
+      expect(document.activeElement).toBe(screen.getByLabelText('Helpful first'));
       await userEvent.click(screen.getByRole('button', { name: 'Remove Corrigibility from Requires' }));
-      expect(names('requires')).toEqual([]);
+      expect(names('requires')).toEqual(['Instrumental convergence']);
+    });
+
+    it('opens the list with an arrow key, closes it with Escape, and Backspace takes the last pick out', async () => {
+      renderPage();
+      await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+      const requires = screen.getByLabelText('Requires');
+      await userEvent.click(requires);
+      await userEvent.keyboard('{ArrowDown}');
+      expect(offered('Requires')).toEqual(['[Corrigibility]', 'Instrumental convergence', 'Orthogonality thesisNot written yet', 'Power-seeking']);
+      await userEvent.keyboard('{ArrowUp}');
+      expect(offered('Requires')![3]).toBe('[Power-seeking]');
+      await userEvent.hover(screen.getByRole('option', { name: 'Instrumental convergence' }));
+      expect(offered('Requires')![1]).toBe('[Instrumental convergence]');
+      await userEvent.keyboard('{Escape}');
+      expect(offered('Requires')).toBeNull();
+      // Escape closed the list only: the form is still there, the focus in the box
+      expect(screen.getByTestId('idea-form')).toBeTruthy();
+      expect(document.activeElement).toBe(requires);
+
+      await userEvent.keyboard('pow{Enter}cor{Enter}');
+      expect(names('requires')).toEqual(['Power-seeking', 'Corrigibility']);
+      await userEvent.keyboard('{Backspace}');
+      expect(names('requires')).toEqual(['Power-seeking']);
+      // With text in the box Backspace only edits the text
+      await userEvent.keyboard('ab{Backspace}{Backspace}');
+      expect(names('requires')).toEqual(['Power-seeking']);
+    });
+
+    it('links to a concept that does not exist yet: offered last, highlighted when nothing else matches', async () => {
+      renderPage();
+      await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+      await userEvent.type(screen.getByLabelText('Name'), 'Deception');
+      const requires = screen.getByLabelText('Requires');
+      await userEvent.type(requires, 'Mesa optimisation');
+      expect(offered('Requires')).toEqual(['[Add "Mesa optimisation" as a new concept]']);
+      await userEvent.keyboard('{Enter}');
+      expect(names('requires')).toEqual(['Mesa optimisation']);
+      expect(screen.getByTestId('idea-form').querySelector('[data-list="requires"] [data-chip]')!.getAttribute('data-chip')).toBe('unwritten');
+
+      // A name a file cannot have: said under the box, nothing added
+      await userEvent.type(requires, 'Goals/values{Enter}');
+      expect(screen.getByText('A name cannot contain /')).toBeTruthy();
+      expect(requires.getAttribute('aria-invalid')).toBe('true');
+      expect(names('requires')).toEqual(['Mesa optimisation']);
+      await userEvent.clear(requires);
+      // Never the concept itself, never what is picked already
+      await userEvent.type(requires, 'deception{Enter}');
+      expect(screen.getByText('A concept cannot be its own requirement.')).toBeTruthy();
+      await userEvent.clear(requires);
+      await userEvent.type(screen.getByLabelText('Helpful first'), 'mesa OPTIMISATION{Enter}');
+      expect(screen.getByText('This concept is under Requires already.')).toBeTruthy();
+      expect(names('helpful')).toEqual([]);
+      await userEvent.clear(screen.getByLabelText('Helpful first'));
+      // An exact name of the map is not offered as new
+      await userEvent.type(screen.getByLabelText('Helpful first'), 'corrigibility');
+      expect(offered('Helpful first')).toEqual(['[Corrigibility]']);
+      await userEvent.keyboard('{Enter}');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create concept' }));
+      await waitFor(() => expect(map.createIdea).toHaveBeenCalledWith(expect.objectContaining({ name: 'Deception', requires: ['Mesa optimisation'], helpful: ['Corrigibility'] })));
+    });
+
+    it('links to a new concept from "Edit requirements" too', async () => {
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      await userEvent.click(screen.getByRole('button', { name: 'Edit requirements' }));
+      await userEvent.type(screen.getByLabelText('Requires'), 'power-seeking');
+      expect(offered('Requires')).toBeNull();
+      expect(screen.getByText('A concept cannot be its own requirement.')).toBeTruthy();
+      await userEvent.clear(screen.getByLabelText('Requires'));
+      await userEvent.type(screen.getByLabelText('Requires'), 'Goal-directedness{Enter}');
+      await userEvent.click(screen.getByRole('button', { name: 'Save requirements' }));
+      await waitFor(() => expect(map.saveRequirements).toHaveBeenCalledWith(
+        'power-seeking',
+        { requires: ['Instrumental convergence'], helpful: [] },
+        { requires: ['Instrumental convergence', 'Goal-directedness'], helpful: [] },
+      ));
     });
 
     it('refuses a name that exists or that a file cannot have, and creates nothing', async () => {
