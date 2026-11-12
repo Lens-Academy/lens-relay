@@ -37,12 +37,12 @@ describe('IdeaMapDrawing with long names', () => {
 
   it('gives a box the room its name is guessed to need until it is measured', () => {
     render(<IdeaMapDrawing {...views} />);
-    // The first column, top to bottom, each 8 below the one before
-    const column = [...document.querySelectorAll<HTMLElement>('[data-idea]')].filter((el) => el.style.left === box(LONG).style.left);
-    const tops = column.map((el) => [el.dataset.idea, parseFloat(el.style.top)] as const).sort((a, b) => a[1] - b[1]);
-    // 3 lines of 14 + 10, 2 lines: the least height of 36
-    const guessed: Record<string, number> = { [LONG]: 52, [PATH]: 36, Short: 36 };
-    tops.slice(1).forEach(([, top], i) => expect(top).toBe(tops[i][1] + guessed[tops[i][0]!] + 8));
+    // The ideas without a link stand in a row below the linked ones, 40 under the tallest of them
+    const top = (name: string) => parseFloat(box(name).style.top);
+    // 3 lines of 14 + 10
+    expect(top(PATH)).toBe(top(LONG) + 52 + 40);
+    expect(top('Short')).toBe(top(PATH));
+    expect(box('After').style.left).not.toBe(box(LONG).style.left);
   });
 
   it('lays the map out with the heights the boxes really have', () => {
@@ -59,10 +59,8 @@ describe('IdeaMapDrawing with long names', () => {
     });
     render(<IdeaMapDrawing {...views} />);
     act(() => observers.forEach((seen) => seen()));
-    const column = [...document.querySelectorAll<HTMLElement>('[data-idea]')].filter((el) => el.style.left === box(LONG).style.left);
-    expect(column).toHaveLength(3);
-    const tops = column.map((el) => [el.dataset.idea!, parseFloat(el.style.top)] as const).sort((a, b) => a[1] - b[1]);
-    tops.slice(1).forEach(([, top], i) => expect(top).toBe(tops[i][1] + heights[tops[i][0]] + 8));
+    // The row below starts under the tall box as it really is
+    expect(parseFloat(box(PATH).style.top)).toBe(parseFloat(box(LONG).style.top) + heights[LONG] + 40);
     // The arrow leaves the tall box at half its real height
     const start = /^M[\d.]+,([\d.]+)/.exec(document.querySelector('path[data-edge="requires"]')!.getAttribute('d')!)![1];
     expect(Number(start)).toBe(parseFloat(box(LONG).style.top) + 40);

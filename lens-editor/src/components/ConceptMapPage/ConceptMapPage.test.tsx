@@ -849,7 +849,8 @@ describe('ConceptMapPage', () => {
       fireEvent.click(box('Power-seeking'), { ctrlKey: true });
       fireEvent.click(box('Corrigibility'), { metaKey: true });
       fireEvent.click(box('Orthogonality thesis'), { shiftKey: true });
-      expect(chosen()).toEqual(['Instrumental convergence', 'Orthogonality thesis', 'Power-seeking', 'Corrigibility'].filter((name) => name !== 'Instrumental convergence'));
+      // The boxes are drawn in the layout's order, which is not the order of the clicks
+      expect(chosen().sort()).toEqual(['Corrigibility', 'Orthogonality thesis', 'Power-seeking']);
       expect(count()).toBe('3 selected');
       expect(screen.queryByTestId('idea-panel')).toBeNull();
       expect(box('Power-seeking').getAttribute('aria-pressed')).toBe('true');

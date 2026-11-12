@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { mapColumns } from '../../lib/idea-map';
-import { layoutMap, wrappedLines, type MapEdge, type MapSizes } from '../../lib/idea-map-layout';
+import { wrappedLines, type MapEdge, type MapSizes } from '../../lib/idea-map-layout';
+import { layoutLayered } from '../../lib/idea-map-layered';
 import { ChosenTick } from './ChosenTick';
 import { BUTTON, CHOSEN_LOOK, PRIORITY_LABEL, PRIORITY_LOOK, UNWRITTEN_LOOK, ideaLook, ideaTitle, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
 
@@ -12,7 +12,7 @@ const NODE_W = 176;
 /** The least height of a box: a name of two lines. */
 const NODE_H = 36;
 const LINE_H = 14;
-const SIZES: MapSizes = { nodeWidth: NODE_W, gapX: 56, gapY: 8, margin: 16 };
+const SIZES: MapSizes = { nodeWidth: NODE_W, gapX: 40, gapY: 12, margin: 16 };
 const MIN_ZOOM = 0.15;
 const MAX_ZOOM = 2;
 /** The zoom below which names are too small to read. */
@@ -66,7 +66,6 @@ function centred(view: View, el: HTMLElement, width: number, height: number): Vi
  * move, wheel or the buttons to zoom.
  */
 export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick }: IdeaViewProps) {
-  const columns = useMemo(() => mapColumns(graph), [graph]);
   const edges = useMemo<MapEdge[]>(() => graph.nodes.flatMap((node) => [
     ...node.requires.map((from) => ({ from, to: node.key, helpful: false })),
     ...node.helpful.map((from) => ({ from, to: node.key, helpful: true })),
@@ -74,8 +73,8 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
   /** The heights the boxes really have (by key), once they are drawn. */
   const [measured, setMeasured] = useState<ReadonlyMap<string, number>>(new Map());
   const { boxes, lines, width, height } = useMemo(
-    () => layoutMap(columns, edges, (key) => measured.get(key) ?? guessedHeight(graph.byKey.get(key)?.name ?? ''), SIZES),
-    [columns, edges, measured, graph],
+    () => layoutLayered(graph.nodes.map((node) => node.key), edges, (key) => measured.get(key) ?? guessedHeight(graph.byKey.get(key)?.name ?? ''), SIZES),
+    [edges, measured, graph],
   );
   const placed = useMemo(() => boxes.map((box) => ({ ...box, node: graph.byKey.get(box.key)! })), [boxes, graph]);
   const frame = useRef<HTMLDivElement>(null);
@@ -211,6 +210,8 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
     return node ? new Set([node.key, ...node.requires, ...node.helpful, ...node.neededFor, ...node.helpfulFor]) : null;
   }, [graph, selected]);
   const dimmed = (key: string) => (matches ? !matches.has(key) : near ? !near.has(key) : false);
+  /** Key of the idea under the pointer: its lines stand out, so each can be followed in a full map. */
+  const [hovered, setHovered] = useState<string | null>(null);
 
   return (
     <div
@@ -242,14 +243,14 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
             </marker>
           </defs>
           {lines.map((line) => {
-            const touches = selected !== null && !matches && (line.from === selected || line.to === selected);
-            const faint = matches ? !(matches.has(line.from) && matches.has(line.to)) : near !== null && !touches;
+            const touches = !matches && [selected, hovered].some((key) => key !== null && (line.from === key || line.to === key));
+            const faint = matches ? !(matches.has(line.from) && matches.has(line.to)) : (near !== null || hovered !== null) && !touches;
             return (
               <path
                 key={`${line.from}>${line.to}>${line.helpful}`}
                 d={line.d}
                 data-edge={line.helpful ? 'helpful' : 'requires'}
-                className={`fill-none ${touches ? 'stroke-indigo-500' : 'stroke-gray-400'} ${faint ? 'opacity-20' : ''}`}
+                className={`fill-none ${touches ? 'stroke-indigo-500' : 'stroke-gray-400'} ${faint ? 'opacity-20' : line.helpful && !touches ? 'opacity-60' : ''}`}
                 strokeWidth={touches ? 1.75 : 1.25}
                 strokeDasharray={line.helpful ? '5 4' : undefined}
                 markerEnd={`url(#idea-map-arrow${touches ? '-near' : ''})`}
@@ -272,6 +273,8 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
               aria-pressed={marks ? word !== null : inSet || node.key === selected}
               title={ideaTitle(node)}
               onClick={(e) => onPick(node.key, pickKeys(e))}
+              onPointerEnter={() => setHovered(node.key)}
+              onPointerLeave={() => setHovered(null)}
               className={`absolute flex items-center rounded border px-2 py-1 text-left text-xs leading-[14px] hover:brightness-95 ${ideaLook(node)} ${ring} ${inSet ? CHOSEN_LOOK : ''} ${dimmed(node.key) && !inSet ? 'opacity-30' : ''}`}
               // As tall as the name needs; the layout is made with the height it then has
               style={{ left: x, top: y, width: NODE_W, minHeight: NODE_H }}
