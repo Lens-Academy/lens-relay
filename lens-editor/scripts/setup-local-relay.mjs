@@ -908,7 +908,7 @@ content::
 #### Article
 source:: [[]]
 
-#### Question
+#### Question: Open
 id::
 content:: \`<question for the student>\`
 `,
