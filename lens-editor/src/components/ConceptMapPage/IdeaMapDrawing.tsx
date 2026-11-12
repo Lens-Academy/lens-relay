@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { wrappedLines, type MapEdge, type MapSizes } from '../../lib/idea-map-layout';
-import { layoutLayered } from '../../lib/idea-map-layered';
+import { layoutFor } from '../../lib/idea-map-layouts';
 import { ChosenTick } from './ChosenTick';
+import { MapFrames, MapLayoutSwitch } from './MapLayoutSwitch';
+import { useMapLayoutChoice } from './useMapLayoutChoice';
 import { BUTTON, CHOSEN_LOOK, PRIORITY_LABEL, PRIORITY_LOOK, UNWRITTEN_LOOK, ideaLook, ideaTitle, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
 
 // Every box is as wide as the others and as tall as its name needs: a long
@@ -72,9 +74,14 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
   ]), [graph]);
   /** The heights the boxes really have (by key), once they are drawn. */
   const [measured, setMeasured] = useState<ReadonlyMap<string, number>>(new Map());
-  const { boxes, lines, width, height } = useMemo(
-    () => layoutLayered(graph.nodes.map((node) => node.key), edges, (key) => measured.get(key) ?? guessedHeight(graph.byKey.get(key)?.name ?? ''), SIZES),
-    [edges, measured, graph],
+  const [choice, setChoice] = useMapLayoutChoice();
+  // "Around one concept" is drawn around the one selected last
+  const [focus, setFocus] = useState(selected);
+  if (selected !== null && selected !== focus) setFocus(selected);
+  const around = choice.layout === 'focus' ? focus : null;
+  const { boxes, lines, frames, width, height } = useMemo(
+    () => layoutFor(choice, { graph, edges, heightOf: (key) => measured.get(key) ?? guessedHeight(graph.byKey.get(key)?.name ?? ''), sizes: SIZES, focus: around }),
+    [edges, measured, graph, choice, around],
   );
   const placed = useMemo(() => boxes.map((box) => ({ ...box, node: graph.byKey.get(box.key)! })), [boxes, graph]);
   const frame = useRef<HTMLDivElement>(null);
@@ -120,6 +127,15 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
     if (whole >= READABLE_ZOOM) fit();
     else setView({ k: READABLE_ZOOM, x: 0, y: (el.clientHeight - height * READABLE_ZOOM) / 2 });
   }, [fit, width, height]);
+
+  // Drawn another way, the map is somewhere else: show all of it
+  const drawnAs = `${choice.layout} ${choice.groupBy} ${around}`;
+  const fitted = useRef(drawnAs);
+  useLayoutEffect(() => {
+    if (fitted.current === drawnAs) return;
+    fitted.current = drawnAs;
+    fit();
+  }, [drawnAs, fit]);
 
   const zoomAt = useCallback((cx: number, cy: number, factor: number) => {
     setView((v) => {
@@ -206,9 +222,10 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
   };
 
   const near = useMemo(() => {
-    const node = selected ? graph.byKey.get(selected) : undefined;
+    // Drawn around the selected one, the map is its neighbourhood already: nothing is dimmed
+    const node = selected && around === null ? graph.byKey.get(selected) : undefined;
     return node ? new Set([node.key, ...node.requires, ...node.helpful, ...node.neededFor, ...node.helpfulFor]) : null;
-  }, [graph, selected]);
+  }, [graph, selected, around]);
   const dimmed = (key: string) => (matches ? !matches.has(key) : near ? !near.has(key) : false);
   /** Key of the idea under the pointer: its lines stand out, so each can be followed in a full map. */
   const [hovered, setHovered] = useState<string | null>(null);
@@ -233,6 +250,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
         className="absolute left-0 top-0 origin-top-left"
         style={{ width, height, transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}
       >
+        <MapFrames frames={frames} zoom={view.k} />
         <svg className="absolute inset-0 overflow-visible" width={width} height={height} aria-hidden="true">
           <defs>
             <marker id="idea-map-arrow" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
@@ -245,6 +263,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
           {lines.map((line) => {
             const touches = !matches && [selected, hovered].some((key) => key !== null && (line.from === key || line.to === key));
             const faint = matches ? !(matches.has(line.from) && matches.has(line.to)) : (near !== null || hovered !== null) && !touches;
+            if (line.quiet && !touches) return null;
             return (
               <path
                 key={`${line.from}>${line.to}>${line.helpful}`}
@@ -290,6 +309,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
       </div>
       <Legend />
       <div className="absolute right-3 top-3 flex items-center gap-1" data-map-control>
+        <MapLayoutSwitch choice={choice} onChoose={setChoice} />
         <button type="button" className={`${BUTTON} bg-white`} onClick={() => zoomButton(1 / 1.3)} aria-label="Zoom out" title="Zoom out">−</button>
         <button type="button" className={`${BUTTON} bg-white`} onClick={() => zoomButton(1.3)} aria-label="Zoom in" title="Zoom in">+</button>
         <button type="button" className={`${BUTTON} bg-white`} onClick={fit} title="Show the whole map">Fit</button>
