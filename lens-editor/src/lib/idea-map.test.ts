@@ -7,6 +7,8 @@ import {
   QUESTION_MOVED_ERROR,
   applyChanges,
   buildIdeaGraph,
+  deletePlan,
+  deletePlanChanges,
   ideaAsEdit,
   ideaEditChanges,
   ideaEditProblem,
@@ -16,11 +18,13 @@ import {
   newQuestionProblem,
   parseIdea,
   pickChoices,
+  profileNameProblem,
   questionAsNew,
   questionChanges,
   questionDeleteChanges,
   questionEditChanges,
   removeLinkChanges,
+  removeLinksChanges,
   renameLinkChanges,
   renderIdeaFile,
   renderQuestion,
@@ -1578,5 +1582,110 @@ describe('removeLinkChanges', () => {
 
   it('gives a file the map reads without it', () => {
     expect(parseIdea(removed(FILE) as string)).toMatchObject({ requires: ['Other'], helpful: ['Kept'] });
+  });
+});
+
+describe('removeLinksChanges', () => {
+  const FILE = '## Requires\n- [[A]]\n- [[B]]\n- [[C]]\n\n## Helpful first\n- [[D]] and [[a|shown]]\n- [[B]]\n';
+
+  it('takes several ideas out of one file in one set of changes', () => {
+    const result = removeLinksChanges(FILE, ['a', 'B', 'Not there']);
+    if ('error' in result) throw new Error(result.error);
+    expect(applyChanges(FILE, result.changes)).toBe('## Requires\n- [[C]]\n\n## Helpful first\n- [[D]] and \n');
+  });
+
+  it('has no changes when none is linked, and refuses beside a pending suggestion', () => {
+    expect(removeLinksChanges(FILE, ['X', 'Y'])).toEqual({ changes: [] });
+    expect(removeLinksChanges(FILE, [])).toEqual({ changes: [] });
+    expect(removeLinksChanges('## Requires\n- [[A]]\n{++- [[B]]++}\n', ['Z', 'A'])).toEqual({ error: PENDING_REQUIREMENTS_ERROR });
+  });
+});
+
+describe('deletePlan', () => {
+  const QUESTION = '#### Question: Open\nid:: 11111111-1111-4111-8111-111111111111\ncontent:: Why?\n';
+  // Base <- Middle <- Top; Side requires Base and the unwritten "Draft"; Top finds "Draft" helpful; Middle requires the unwritten "Only Middle"
+  const graph = buildIdeaGraph(files({
+    Base: `Explain.\n\n## Questions\n${QUESTION}${QUESTION}`,
+    Middle: `Explain.\n\n## Requires\n- [[Base]]\n- [[Only Middle]]\n\n## Questions\n${QUESTION}`,
+    Top: 'Explain.\n\n## Requires\n- [[Middle]]\n- [[Base]]\n\n## Helpful first\n- [[Draft]]\n',
+    Side: 'Explain.\n\n## Requires\n- [[Base]]\n- [[Draft]]\n',
+  }));
+  const names = (nodes: Array<{ name: string }>) => nodes.map((node) => node.name);
+  const losing = (keys: string[]) => deletePlan(graph, keys).losing.map(({ node, names: lost }) => [node.name, lost]);
+
+  it('lists the files that go, their questions, and the links the other files lose', () => {
+    const plan = deletePlan(graph, ['base']);
+    expect(names(plan.files)).toEqual(['Base']);
+    expect(plan.unwritten).toEqual([]);
+    expect(plan.questions).toBe(2);
+    expect(losing(['base'])).toEqual([['Middle', ['Base']], ['Side', ['Base']], ['Top', ['Base']]]);
+    expect(plan.orphaned).toEqual([]);
+  });
+
+  it('leaves a link between two deleted ideas alone: the file that holds it goes', () => {
+    const plan = deletePlan(graph, ['Base', ' MIDDLE ', 'no such idea']);
+    expect(names(plan.files)).toEqual(['Base', 'Middle']);
+    expect(plan.questions).toBe(3);
+    // Top loses both in one go; Middle itself is not edited
+    expect(losing(['base', 'middle'])).toEqual([['Side', ['Base']], ['Top', ['Middle', 'Base']]]);
+    // "Only Middle" was named by Middle alone: it leaves the map with it
+    expect(names(plan.orphaned)).toEqual(['Only Middle']);
+  });
+
+  it('only takes the links out for an idea that is not written yet', () => {
+    const plan = deletePlan(graph, ['draft']);
+    expect(plan.files).toEqual([]);
+    expect(names(plan.unwritten)).toEqual(['Draft']);
+    expect(plan.questions).toBe(0);
+    expect(losing(['draft'])).toEqual([['Side', ['Draft']], ['Top', ['Draft']]]);
+    // With every file that names it deleted too, nothing is left to change
+    expect(losing(['draft', 'side', 'top'])).toEqual([]);
+    expect(deletePlan(graph, ['side', 'top']).orphaned.map((node) => node.name)).toEqual(['Draft']);
+  });
+
+  it('has nothing for keys the map does not have', () => {
+    expect(deletePlan(graph, ['gone'])).toEqual({ files: [], unwritten: [], losing: [], questions: 0, orphaned: [] });
+  });
+
+  describe('deletePlanChanges', () => {
+    const textOf = (texts: Record<string, string | null>) => (node: { name: string }) => texts[node.name];
+
+    it('works out the changes of every file that stays, from its text', () => {
+      const plan = deletePlan(graph, ['base', 'draft']);
+      const top = 'Explain.\n\n## Requires\n- [[Middle]]\n- [[Base]]\n\n## Helpful first\n- [[Draft]]\n';
+      const result = deletePlanChanges(plan, textOf({ Top: top, Middle: 'Explain.\n\n## Requires\n- [[Base]]\n- [[Only Middle]]\n', Side: null }));
+      if ('error' in result) throw new Error(result.error);
+      // Side has no text at hand: left out here, checked when it is written
+      expect(result.edits.map((edit) => edit.node.name)).toEqual(['Middle', 'Top']);
+      expect(applyChanges(top, result.edits[1].changes)).toBe('Explain.\n\n## Requires\n- [[Middle]]\n\n## Helpful first\n');
+    });
+
+    it('names the file that cannot be changed safely', () => {
+      const plan = deletePlan(graph, ['base']);
+      expect(deletePlanChanges(plan, textOf({ Middle: '## Requires\n- [[Base]]\n', Side: '## Requires\n- [[Base]]\n{++- [[New]]++}\n', Top: '' })))
+        .toEqual({ error: `In "Side": ${PENDING_REQUIREMENTS_ERROR}` });
+    });
+  });
+});
+
+describe('profileNameProblem', () => {
+  it('accepts a name of 1 to 60 characters that no other profile has', () => {
+    expect(profileNameProblem('Draft 2', ['Main'])).toBeNull();
+    expect(profileNameProblem('  x  ', [])).toBeNull();
+    expect(profileNameProblem('a'.repeat(60), [])).toBeNull();
+    expect(profileNameProblem("Elias's ideas (v2) #1", [])).toBeNull();
+  });
+
+  it('says what is wrong with a name', () => {
+    expect(profileNameProblem('   ', [])).toBe('Give the profile a name.');
+    expect(profileNameProblem('a'.repeat(61), [])).toBe('A name can be 60 characters at most.');
+    for (const bad of ['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
+      expect(profileNameProblem(`a${bad}b`, [])).toBe(`A name cannot contain ${bad}`);
+    }
+    expect(profileNameProblem('a\tb', [])).toBe('A name cannot contain control characters.');
+    expect(profileNameProblem('a\u007fb', [])).toBe('A name cannot contain control characters.');
+    expect(profileNameProblem('.hidden', [])).toBe('A name cannot start with _ or a dot.');
+    expect(profileNameProblem('_trash', [])).toBe('A name cannot start with _ or a dot.');
+    expect(profileNameProblem(' MAIN ', ['Draft', 'Main'])).toBe('A profile with this name already exists.');
   });
 });

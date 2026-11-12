@@ -15,7 +15,7 @@ const graph = buildIdeaGraph([
   { name: 'After', docId: 'd', text: `Explain it.\n\n## Requires\n- [[${LONG}]]\n` },
 ]);
 
-const views = { graph, selected: null, marks: null, matches: null, onPick: () => {} };
+const views = { graph, selected: null, chosen: new Set<string>(), marks: null, matches: null, onPick: () => {} };
 const box = (name: string) => document.querySelector<HTMLElement>(`[data-idea="${name}"]`)!;
 
 afterEach(() => {

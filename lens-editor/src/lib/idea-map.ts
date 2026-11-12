@@ -1584,16 +1584,110 @@ export function renameLinkChanges(text: string, oldName: string, newName: string
 }
 
 /**
- * The changes that take every link to the idea `name` out of the
+ * The changes that take every link to the ideas `names` out of the
  * `## Requires` and `## Helpful first` of `text` (another idea's file, as
- * stored), for when that idea is deleted: its line goes, or just the link on
+ * stored), for when those ideas are deleted: a line goes, or just the link on
  * a line that says more. No link, no changes. Refuses while one of the two
  * sections it changes holds a pending suggestion.
  */
-export function removeLinkChanges(text: string, name: string): Changes {
+export function removeLinksChanges(text: string, names: readonly string[]): Changes {
   const scan = scanFile(text);
-  if (requirementLinks(scan, name).length === 0) return { changes: [] };
+  if (!names.some((name) => requirementLinks(scan, name).length > 0)) return { changes: [] };
+  const gone = new Set(names.map(ideaKey));
   const live = parseIdea(text);
-  const others = (names: readonly string[]) => names.filter((other) => ideaKey(other) !== ideaKey(name));
+  const others = (list: readonly string[]) => list.filter((other) => !gone.has(ideaKey(other)));
   return requirementChanges(text, others(live.requires), others(live.helpful));
+}
+
+/** `removeLinksChanges` for one idea. */
+export function removeLinkChanges(text: string, name: string): Changes {
+  return removeLinksChanges(text, [name]);
+}
+
+/** What deleting a set of ideas does to the map. */
+export interface DeletePlan {
+  /** The ideas of the set that have a file: their files go. */
+  files: IdeaNode[];
+  /** The ideas of the set that are "not written yet": only the links to them go. */
+  unwritten: IdeaNode[];
+  /**
+   * The files that stay and lose links: every idea outside the set that
+   * names one of the set under Requires or Helpful first, with the names it
+   * loses. A link between two ideas of the set needs no change: the file
+   * that holds it goes.
+   */
+  losing: Array<{ node: IdeaNode; names: string[] }>;
+  /** How many questions the files that go hold. */
+  questions: number;
+  /** "Not written yet" ideas outside the set that only files of the set
+   *  name: they leave the map with them. */
+  orphaned: IdeaNode[];
+}
+
+/** What deleting the ideas `keys` does (keys the graph does not have are left out). */
+export function deletePlan(graph: IdeaGraph, keys: readonly string[]): DeletePlan {
+  const set = new Set(keys.map(ideaKey).filter((key) => graph.byKey.has(key)));
+  const chosen = graph.nodes.filter((node) => set.has(node.key));
+  const files = chosen.filter((node) => node.docId !== null);
+  const going = new Set(files.map((node) => node.key));
+  const losing = graph.nodes
+    .filter((node) => node.docId !== null && !set.has(node.key))
+    .map((node) => ({ node, names: [...new Set([...node.requires, ...node.helpful])].filter((key) => set.has(key)).map((key) => graph.byKey.get(key)!.name) }))
+    .filter((entry) => entry.names.length > 0);
+  const orphaned = graph.nodes.filter((node) => {
+    if (node.docId !== null || set.has(node.key)) return false;
+    const namedBy = [...node.neededFor, ...node.helpfulFor];
+    return namedBy.length > 0 && namedBy.every((key) => going.has(key));
+  });
+  return {
+    files,
+    unwritten: chosen.filter((node) => node.docId === null),
+    losing,
+    questions: files.reduce((sum, node) => sum + (node.idea?.questionList.length ?? 0), 0),
+    orphaned,
+  };
+}
+
+/**
+ * The changes a `DeletePlan` makes to the files that stay, worked out from
+ * their texts (`textOf`; a file with no text at hand is left out and checked
+ * when it is written). An error names the file that cannot be changed
+ * safely: then nothing should be deleted.
+ */
+export function deletePlanChanges(
+  plan: DeletePlan,
+  textOf: (node: IdeaNode) => string | null | undefined,
+): { edits: Array<{ node: IdeaNode; changes: TextChange[] }> } | { error: string } {
+  const edits: Array<{ node: IdeaNode; changes: TextChange[] }> = [];
+  for (const { node, names } of plan.losing) {
+    const text = textOf(node);
+    if (text == null) continue;
+    const result = removeLinksChanges(text, names);
+    if ('error' in result) return { error: `In "${node.name}": ${result.error}` };
+    if (result.changes.length > 0) edits.push({ node, changes: result.changes });
+  }
+  return { edits };
+}
+
+const PROFILE_FORBIDDEN = /[\\/:*?"<>|]/;
+const MAX_PROFILE_NAME = 60;
+
+/**
+ * Why `name` cannot be the name of a profile (a separate set of concepts),
+ * or null. `existing` are the names of the other profiles.
+ */
+export function profileNameProblem(name: string, existing: Iterable<string>): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return 'Give the profile a name.';
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) return 'A name cannot contain control characters.';
+  const forbidden = PROFILE_FORBIDDEN.exec(trimmed);
+  if (forbidden) return `A name cannot contain ${forbidden[0]}`;
+  if (/^[_.]/.test(trimmed)) return 'A name cannot start with _ or a dot.';
+  if (trimmed.length > MAX_PROFILE_NAME) return `A name can be ${MAX_PROFILE_NAME} characters at most.`;
+  const key = trimmed.toLowerCase();
+  for (const other of existing) {
+    if (other.trim().toLowerCase() === key) return 'A profile with this name already exists.';
+  }
+  return null;
 }

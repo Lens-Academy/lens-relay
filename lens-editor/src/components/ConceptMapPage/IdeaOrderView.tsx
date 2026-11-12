@@ -1,17 +1,11 @@
-import type { IdeaGraph } from '../../lib/idea-map';
-import { ideaLook, ideaTitle, pickWord, type PickMarks } from './ideaLook';
+import { ChosenTick } from './ChosenTick';
+import { CHOSEN_LOOK, ideaLook, ideaTitle, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
 
 /**
  * The ideas as steps, a row per step: step 1 needs nothing first, each later
  * step needs only ideas from the steps before it.
  */
-export function IdeaOrderView({ graph, selected, marks, matches, onPick }: {
-  graph: IdeaGraph;
-  selected: string | null;
-  marks: PickMarks | null;
-  matches: ReadonlySet<string> | null;
-  onPick: (key: string, shift: boolean) => void;
-}) {
+export function IdeaOrderView({ graph, selected, chosen, marks, matches, onPick }: IdeaViewProps) {
   return (
     <div className="h-full overflow-y-auto px-6 py-4" data-testid="idea-order">
       <p className="mb-3 text-xs text-gray-500">
@@ -29,16 +23,19 @@ export function IdeaOrderView({ graph, selected, marks, matches, onPick }: {
               {shown.map((node) => {
                 const word = pickWord(marks, node.key);
                 const ring = word ? 'ring-2 ring-indigo-500' : node.key === selected ? 'ring-2 ring-blue-600' : '';
+                const inSet = chosen.has(node.key);
                 return (
                   <button
                     key={node.key}
                     type="button"
                     data-idea={node.name}
-                    aria-pressed={marks ? word !== null : node.key === selected}
+                    data-chosen={inSet || undefined}
+                    aria-pressed={marks ? word !== null : inSet || node.key === selected}
                     title={ideaTitle(node)}
-                    onClick={(e) => onPick(node.key, e.shiftKey)}
-                    className={`flex max-w-full items-center gap-1.5 rounded border px-2 py-1 text-left text-xs hover:brightness-95 ${ideaLook(node)} ${ring}`}
+                    onClick={(e) => onPick(node.key, pickKeys(e))}
+                    className={`relative flex max-w-full items-center gap-1.5 rounded border px-2 py-1 text-left text-xs hover:brightness-95 ${ideaLook(node)} ${ring} ${inSet ? CHOSEN_LOOK : ''}`}
                   >
+                    {inSet && <ChosenTick className="absolute -left-2 -top-2" />}
                     <span className="min-w-0 break-words">{node.name}</span>
                     {word && <span className="shrink-0 rounded bg-indigo-600 px-1 py-px text-[9px] font-medium leading-none text-white">{word}</span>}
                   </button>

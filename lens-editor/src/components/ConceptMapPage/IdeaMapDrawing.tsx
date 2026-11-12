@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { mapColumns, type IdeaGraph } from '../../lib/idea-map';
+import { mapColumns } from '../../lib/idea-map';
 import { layoutMap, wrappedLines, type MapEdge, type MapSizes } from '../../lib/idea-map-layout';
-import { BUTTON, PRIORITY_LABEL, PRIORITY_LOOK, UNWRITTEN_LOOK, ideaLook, ideaTitle, pickWord, type PickMarks } from './ideaLook';
+import { ChosenTick } from './ChosenTick';
+import { BUTTON, CHOSEN_LOOK, PRIORITY_LABEL, PRIORITY_LOOK, UNWRITTEN_LOOK, ideaLook, ideaTitle, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
 
 // Every box is as wide as the others and as tall as its name needs: a long
 // name wraps onto more lines. Columns stand close enough that 150 ideas
@@ -64,16 +65,7 @@ function centred(view: View, el: HTMLElement, width: number, height: number): Vi
  * solid arrow for "requires" and a dashed one for "helpful first". Drag to
  * move, wheel or the buttons to zoom.
  */
-export function IdeaMapDrawing({ graph, selected, marks, matches, onPick }: {
-  graph: IdeaGraph;
-  /** Key of the selected idea: it and what it touches stand out. */
-  selected: string | null;
-  /** Set while a form is open: clicks pick requirements. */
-  marks: PickMarks | null;
-  /** Ideas the find box matches, or null when it is empty. */
-  matches: ReadonlySet<string> | null;
-  onPick: (key: string, shift: boolean) => void;
-}) {
+export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick }: IdeaViewProps) {
   const columns = useMemo(() => mapColumns(graph), [graph]);
   const edges = useMemo<MapEdge[]>(() => graph.nodes.flatMap((node) => [
     ...node.requires.map((from) => ({ from, to: node.key, helpful: false })),
@@ -268,6 +260,7 @@ export function IdeaMapDrawing({ graph, selected, marks, matches, onPick }: {
         {placed.map(({ node, x, y }) => {
           const word = pickWord(marks, node.key);
           const ring = word ? 'ring-2 ring-indigo-500' : node.key === selected ? 'ring-2 ring-blue-600' : '';
+          const inSet = chosen.has(node.key);
           return (
             <button
               key={node.key}
@@ -275,10 +268,11 @@ export function IdeaMapDrawing({ graph, selected, marks, matches, onPick }: {
               data-idea={node.name}
               data-key={node.key}
               data-written={node.written}
-              aria-pressed={marks ? word !== null : node.key === selected}
+              data-chosen={inSet || undefined}
+              aria-pressed={marks ? word !== null : inSet || node.key === selected}
               title={ideaTitle(node)}
-              onClick={(e) => onPick(node.key, e.shiftKey)}
-              className={`absolute flex items-center rounded border px-2 py-1 text-left text-xs leading-[14px] hover:brightness-95 ${ideaLook(node)} ${ring} ${dimmed(node.key) ? 'opacity-30' : ''}`}
+              onClick={(e) => onPick(node.key, pickKeys(e))}
+              className={`absolute flex items-center rounded border px-2 py-1 text-left text-xs leading-[14px] hover:brightness-95 ${ideaLook(node)} ${ring} ${inSet ? CHOSEN_LOOK : ''} ${dimmed(node.key) && !inSet ? 'opacity-30' : ''}`}
               // As tall as the name needs; the layout is made with the height it then has
               style={{ left: x, top: y, width: NODE_W, minHeight: NODE_H }}
             >
@@ -286,6 +280,7 @@ export function IdeaMapDrawing({ graph, selected, marks, matches, onPick }: {
               {word && (
                 <span className="absolute -top-2 right-1 rounded bg-indigo-600 px-1 py-px text-[9px] font-medium leading-none text-white">{word}</span>
               )}
+              {inSet && <ChosenTick className="absolute -left-2 -top-2" />}
             </button>
           );
         })}

@@ -496,6 +496,118 @@ describe('useIdeaMap', () => {
     });
   });
 
+  describe('deleteIdeas', () => {
+    const liveDocs = (overrides: Record<string, string> = {}) => {
+      const docs = new Map<string, DocConnection>();
+      __embedDocsTesting.setConnector(async (fullId) => {
+        const id = fullId.slice(RELAY_ID.length + 1);
+        if (!docs.has(id)) docs.set(id, connection(overrides[id] ?? texts[id]));
+        return docs.get(id)!;
+      });
+      return (id: string) => docs.get(id)?.doc.getText('contents').toString();
+    };
+    const IC = 'Lens Edu/Context Accelerator LOs/Instrumental convergence.md';
+    const PS = 'Lens Edu/Context Accelerator LOs/Power-seeking.md';
+    const trashed = {} as Awaited<ReturnType<typeof trashPath>>;
+    const run = async (result: { current: ReturnType<typeof useIdeaMap> }, keys: string[]) => {
+      let failed: string | null = 'not run';
+      await act(async () => {
+        failed = await result.current.deleteIdeas(keys);
+      });
+      return failed as string | null;
+    };
+
+    it('deletes several files; a link between two of them needs no edit', async () => {
+      const text = liveDocs();
+      vi.mocked(trashPath).mockResolvedValue(trashed);
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await run(result, ['power-seeking', 'Instrumental convergence'])).toBeNull();
+      expect(vi.mocked(trashPath).mock.calls).toEqual([[IC], [PS]]);
+      // No file was opened for editing
+      expect(text('ic')).toBeUndefined();
+      expect(text('ps')).toBeUndefined();
+    });
+
+    it('takes the links out of the files that stay first, then deletes; forces only past those files', async () => {
+      const text = liveDocs();
+      vi.mocked(trashPath)
+        .mockRejectedValueOnce(new TrashRefusedError('linked', [{ path: PS, count: 1 }]))
+        .mockResolvedValue(trashed);
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await run(result, ['instrumental convergence'])).toBeNull();
+      expect(text('ps')).toBe(POWER.replace('- [[Instrumental convergence]]\n', ''));
+      expect(vi.mocked(trashPath).mock.calls).toEqual([[IC], [IC, true]]);
+    });
+
+    it('for a concept that is not written yet takes out every link to it, and deletes no file', async () => {
+      const text = liveDocs();
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await run(result, ['orthogonality thesis'])).toBeNull();
+      expect(text('ic')).toBe(texts.ic.replace('- [[Orthogonality thesis]]\n', ''));
+      expect(trashPath).not.toHaveBeenCalled();
+      await waitFor(() => expect(result.current.graph.byKey.has('orthogonality thesis')).toBe(false));
+    });
+
+    it('changes nothing when a file outside the map links to one of them', async () => {
+      const text = liveDocs();
+      const { result, folderDoc } = renderMap();
+      // The relay's index of links: the lens and Power-seeking link to Instrumental convergence
+      folderDoc.getMap('backlinks_v0').set('ic', ['ps', 'lens']);
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await run(result, ['instrumental convergence', 'orthogonality thesis']))
+        .toBe('Nothing was deleted: Lens Edu/Lenses/A lens.md links to "Instrumental convergence". Take that link out first, or delete the file in the file tree.');
+      expect(trashPath).not.toHaveBeenCalled();
+      expect(text('ps')).toBeUndefined();
+      expect(text('ic')).toBeUndefined();
+    });
+
+    it('changes nothing when a link sits beside a pending suggestion', async () => {
+      const suggested = POWER.replace('- [[Instrumental convergence]]\n', '- [[Instrumental convergence]]\n{++- [[Suggested]]\n++}');
+      texts.ps = suggested;
+      try {
+        const text = liveDocs();
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        expect(await run(result, ['instrumental convergence'])).toBe(`Nothing was deleted. In "Power-seeking": ${PENDING_REQUIREMENTS_ERROR}`);
+        expect(trashPath).not.toHaveBeenCalled();
+        expect(text('ps')).toBeUndefined();
+      } finally {
+        texts.ps = POWER;
+      }
+    });
+
+    it('says exactly which were deleted when it stops half way', async () => {
+      liveDocs();
+      vi.mocked(trashPath)
+        .mockResolvedValueOnce(trashed)
+        .mockRejectedValue(new RelayApiError('forbidden', 403));
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await run(result, ['instrumental convergence', 'power-seeking']))
+        .toBe('Deleted: Instrumental convergence. Not deleted: Power-seeking. "Power-seeking": Your access level cannot delete files.');
+    });
+
+    it('stops at a file something else links to after all, and says the links are out already', async () => {
+      const text = liveDocs();
+      vi.mocked(trashPath).mockRejectedValue(new TrashRefusedError('linked', [{ path: PS, count: 1 }, { path: 'Lens Edu/courses/A course.md', count: 2 }]));
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await run(result, ['instrumental convergence']))
+        .toBe('Not deleted: Instrumental convergence. "Instrumental convergence": Lens Edu/courses/A course.md links to it. The links to all of them are already taken out of the other concepts.');
+      expect(text('ps')).toBe(POWER.replace('- [[Instrumental convergence]]\n', ''));
+      expect(trashPath).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses names the map does not have', async () => {
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await run(result, ['nothing like it'])).toBe('These concepts are not on the map any more.');
+    });
+  });
+
   describe('createIdea', () => {
     const idea = { name: ' Goal-directedness ', priority: 'low' as const, outcome: 'Say what a goal is.', why: '', requires: ['Power-seeking'], helpful: [] };
 

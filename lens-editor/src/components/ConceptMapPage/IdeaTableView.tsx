@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
-import { sortIdeas, type IdeaGraph, type IdeaSortColumn } from '../../lib/idea-map';
-import { PRIORITY_LABEL, PRIORITY_LOOK, pickWord, type PickMarks } from './ideaLook';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { sortIdeas, type IdeaSortColumn } from '../../lib/idea-map';
+import { PRIORITY_LABEL, PRIORITY_LOOK, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
 
 const COLUMNS: Array<{ id: IdeaSortColumn; label: string; title?: string; number?: boolean }> = [
   { id: 'name', label: 'Name' },
@@ -14,18 +14,19 @@ const COLUMNS: Array<{ id: IdeaSortColumn; label: string; title?: string; number
 ];
 
 /** The "what is still missing" view: one row per idea, sortable. */
-export function IdeaTableView({ graph, selected, marks, matches, onPick }: {
-  graph: IdeaGraph;
-  selected: string | null;
-  marks: PickMarks | null;
-  matches: ReadonlySet<string> | null;
-  onPick: (key: string, shift: boolean) => void;
-}) {
+export function IdeaTableView({ graph, selected, chosen, marks, matches, onPick, onChoose }: IdeaViewProps) {
   const [sort, setSort] = useState<{ column: IdeaSortColumn; descending: boolean }>({ column: 'name', descending: false });
   const rows = useMemo(() => {
     const sorted = sortIdeas(graph.nodes, sort.column, sort.descending);
     return matches ? sorted.filter((node) => matches.has(node.key)) : sorted;
   }, [graph, sort, matches]);
+
+  // The box in the header: every row shown, some of them, or none
+  const shownChosen = rows.filter((node) => chosen.has(node.key)).length;
+  const all = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (all.current) all.current.indeterminate = shownChosen > 0 && shownChosen < rows.length;
+  }, [shownChosen, rows.length]);
 
   /** "2 · A, B": the count, then the names, each selecting its idea. */
   const names = (keys: string[]) => (
@@ -44,12 +45,12 @@ export function IdeaTableView({ graph, selected, marks, matches, onPick }: {
               tabIndex={0}
               className={`cursor-pointer hover:underline ${other.written ? 'text-blue-600' : 'text-gray-500 italic'}`}
               title={other.written ? undefined : 'Not written yet'}
-              onClick={(e) => { e.stopPropagation(); onPick(key, e.shiftKey); }}
+              onClick={(e) => { e.stopPropagation(); onPick(key, pickKeys(e)); }}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' && e.key !== ' ') return;
                 e.preventDefault();
                 e.stopPropagation();
-                onPick(key, e.shiftKey);
+                onPick(key, pickKeys(e));
               }}
             >
               {other.name}
@@ -65,6 +66,19 @@ export function IdeaTableView({ graph, selected, marks, matches, onPick }: {
       <table className="w-full border-collapse text-sm">
         <thead className="sticky top-0 z-10 bg-white text-left text-xs text-gray-500 shadow-[0_1px_0_var(--color-gray-200)]">
           <tr>
+            {onChoose && (
+              <th scope="col" className="w-8 py-2 pl-3 pr-0">
+                <input
+                  ref={all}
+                  type="checkbox"
+                  aria-label={matches ? 'Select every concept shown' : 'Select every concept'}
+                  title={matches ? 'Select every concept shown' : 'Select every concept'}
+                  checked={rows.length > 0 && shownChosen === rows.length}
+                  disabled={rows.length === 0}
+                  onChange={(e) => onChoose(rows.map((node) => node.key), e.target.checked)}
+                />
+              </th>
+            )}
             {COLUMNS.map((column) => {
               const active = sort.column === column.id;
               return (
@@ -91,15 +105,29 @@ export function IdeaTableView({ graph, selected, marks, matches, onPick }: {
         <tbody>
           {rows.map((node) => {
             const word = pickWord(marks, node.key);
-            const chosen = marks ? word !== null : node.key === selected;
+            const inSet = chosen.has(node.key);
+            const lit = marks ? word !== null : inSet || node.key === selected;
             return (
               <tr
                 key={node.key}
                 data-idea={node.name}
-                aria-selected={chosen}
-                onClick={(e) => onPick(node.key, e.shiftKey)}
-                className={`cursor-pointer border-t border-gray-100 align-top ${chosen ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                data-chosen={inSet || undefined}
+                aria-selected={lit}
+                onClick={(e) => onPick(node.key, pickKeys(e))}
+                className={`cursor-pointer border-t border-gray-100 align-top ${lit ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
               >
+                {onChoose && (
+                  // The whole cell takes the click, so a near miss does not open the panel instead
+                  <td className="w-8 py-1.5 pl-3 pr-0" onClick={(e) => { e.stopPropagation(); onChoose([node.key], !inSet); }}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${node.name}`}
+                      checked={inSet}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => onChoose([node.key], e.target.checked)}
+                    />
+                  </td>
+                )}
                 <td className="max-w-72 px-3 py-1.5">
                   <button type="button" className={`text-left font-medium ${node.written ? 'text-gray-800' : 'text-gray-500 italic'}`}>
                     {node.name}

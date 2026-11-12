@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { RELAY_ID } from '../../App';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { backlinkSources } from '../../lib/backlinks';
 import { resolvePageName } from '../../lib/document-resolver';
 import { refreshSnapshot, setSnapshot, withLiveDoc } from '../../lib/embed-docs';
 import {
   IDEAS_FOLDER,
   IDEAS_SHARED_FOLDER,
   buildIdeaGraph,
+  deletePlan,
+  deletePlanChanges,
   ideaEditChanges,
   ideaKey,
   ideaNameProblem,
@@ -18,6 +21,7 @@ import {
   questionDeleteChanges,
   questionEditChanges,
   removeLinkChanges,
+  removeLinksChanges,
   renameLinkChanges,
   renderIdeaFile,
   renderQuestion,
@@ -42,6 +46,29 @@ import {
   trashPath,
 } from '../../lib/relay-api';
 import { useSnapshots } from '../ConceptRowsPanel/useConceptRows';
+
+/**
+ * Profiles: separate sets of concepts to switch between. Optional: a hook
+ * that has none leaves `IdeaMap.profiles` out, and the page shows nothing of
+ * it (the editor's own hook does so; the standalone map provides them).
+ */
+export interface IdeaProfiles {
+  current: string;
+  /** Every profile, the current one included. */
+  names: string[];
+  /** Switch to another profile; the hook reloads the graph. */
+  open: (name: string) => void;
+  /** A new profile, empty or as a copy of `copyFrom`. The hook opens it on
+   *  success unless `open` is false. Resolves to an error to show, or null. */
+  create: (name: string, copyFrom?: string, open?: boolean) => Promise<string | null>;
+  rename: (name: string, to: string) => Promise<string | null>;
+  /** Not offered for the last profile left. */
+  remove: (name: string) => Promise<string | null>;
+  /** Copy these concepts (whole files, questions included) from the current
+   *  profile into another. `keys` are keys of written concepts; `copied` and
+   *  `skipped` (already there, `replace` false) are their names. */
+  copyTo: (keys: string[], target: string, replace: boolean) => Promise<{ error: string } | { copied: string[]; skipped: string[] }>;
+}
 
 export interface IdeaMap {
   /** The folder shown, as a path in the tree ("/Lens Edu/Context Accelerator LOs"). */
@@ -87,8 +114,20 @@ export interface IdeaMap {
    * Resolves to an error to show, or null.
    */
   deleteIdea: (key: string) => Promise<string | null>;
+  /**
+   * Delete several ideas at once (`deletePlan`): the files of the written
+   * ones go to the trash, and every link to any of them, written or not,
+   * leaves the Requires / Helpful first of the ideas that stay. Everything
+   * is checked before anything is written. The links are taken out first,
+   * then the files go one after another; when it stops half way the error
+   * says exactly which were deleted and which were not. Resolves to an error
+   * to show, or null.
+   */
+  deleteIdeas: (keys: string[]) => Promise<string | null>;
   /** What becomes of a deleted idea's file, said before it is deleted. */
   deleteNote?: string;
+  /** Separate sets of concepts to switch between, where there are any. */
+  profiles?: IdeaProfiles;
   /**
    * Save the "Edit question" form for the `index`-th question of an idea
    * (place in `idea.questionList`): `before` is the question the form was
@@ -316,6 +355,69 @@ export function useIdeaMap(folder: string = IDEAS_FOLDER): IdeaMap {
     return null;
   }, [graph, texts, editFile, relayPath, linkersOf]);
 
+  const deleteIdeas = useCallback<IdeaMap['deleteIdeas']>(async (keys) => {
+    const plan = deletePlan(graph, keys);
+    if (plan.files.length + plan.unwritten.length === 0) return 'These concepts are not on the map any more.';
+    // Before anything is written: can every link be taken out?
+    const check = deletePlanChanges(plan, (node) => (node.docId ? texts.get(node.docId) : undefined));
+    if ('error' in check) return `Nothing was deleted. ${check.error}`;
+    // … and does a file outside the map link to one of them? (the relay's index of links)
+    const going = new Set(plan.files.map((node) => node.docId));
+    const pathOf = (docId: string) => Object.entries(metadata).find(([, meta]) => meta.id === docId)?.[0].slice(1) ?? 'another file';
+    const outside = plan.files.flatMap((node) => {
+      const known = new Set(linkersOf(node).map((linker) => linker.docId));
+      return backlinkSources(node.docId!, folderDocs.values())
+        .filter((source) => !known.has(source) && !going.has(source))
+        .map((source) => `${pathOf(source)} links to "${node.name}"`);
+    });
+    if (outside.length > 0) {
+      return `Nothing was deleted: ${outside.join('; ')}. Take ${outside.length === 1 ? 'that link' : 'those links'} out first, or delete the ${plan.files.length === 1 ? 'file' : 'files'} in the file tree.`;
+    }
+
+    // The links first: until a file goes, nothing is lost
+    const edited: string[] = [];
+    for (const { node, names } of plan.losing) {
+      const failed = await editFile(node.key, (text) => removeLinksChanges(text, names));
+      if (failed) {
+        return `No concept was deleted. In "${node.name}": ${failed}${edited.length > 0 ? ` The links are already taken out of ${edited.join(', ')}.` : ''}`;
+      }
+      edited.push(node.name);
+    }
+
+    // What may still link to a file that goes: the others that go, and the
+    // files just changed (the relay's index of links can be a moment behind)
+    const expected = new Set([...plan.files, ...plan.losing.map((entry) => entry.node)].map((node) => relayPath(node.name).toLowerCase()));
+    const deleted: string[] = [];
+    for (const [index, node] of plan.files.entries()) {
+      let failed: string | null = null;
+      try {
+        await trashPath(relayPath(node.name));
+      } catch (error) {
+        if (!(error instanceof TrashRefusedError)) {
+          failed = deleteErrorMessage(error);
+        } else {
+          const others = error.referencing.map((doc) => doc.path).filter((path) => !expected.has(path.toLowerCase()));
+          if (others.length > 0) {
+            failed = `${others.join(', ')} ${others.length === 1 ? 'links' : 'link'} to it`;
+          } else {
+            try {
+              await trashPath(relayPath(node.name), true);
+            } catch (forced) {
+              failed = deleteErrorMessage(forced);
+            }
+          }
+        }
+      }
+      if (failed) {
+        const left = plan.files.slice(index).map((other) => other.name);
+        return `${deleted.length > 0 ? `Deleted: ${deleted.join(', ')}. ` : ''}Not deleted: ${left.join(', ')}. "${node.name}": ${failed}.`
+          + (plan.losing.length > 0 ? ' The links to all of them are already taken out of the other concepts.' : '');
+      }
+      deleted.push(node.name);
+    }
+    return null;
+  }, [graph, texts, metadata, folderDocs, editFile, relayPath, linkersOf]);
+
   return {
     folderPath,
     folders,
@@ -331,6 +433,7 @@ export function useIdeaMap(folder: string = IDEAS_FOLDER): IdeaMap {
     addQuestion,
     editIdea,
     deleteIdea,
+    deleteIdeas,
     deleteNote: `The file moves to the trash (${IDEAS_SHARED_FOLDER}/_trash). It can be moved back from there until the relay empties the trash (after 10 days, unless it is set otherwise).`,
     editQuestion,
     deleteQuestion,

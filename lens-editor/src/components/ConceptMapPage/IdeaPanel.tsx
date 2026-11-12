@@ -1,37 +1,10 @@
 import { useState, type ReactNode } from 'react';
 import { questionAsNew, type IdeaGraph, type IdeaNode } from '../../lib/idea-map';
 import { DocLink } from '../DocLink';
-import { BUTTON, PRIMARY_BUTTON, PRIORITY_LABEL, PRIORITY_LOOK } from './ideaLook';
+import { Confirm } from './Confirm';
+import { BUTTON, PRIMARY_BUTTON, PRIORITY_LABEL, PRIORITY_LOOK, listed } from './ideaLook';
 
-const DANGER_BUTTON = 'px-3 py-1 rounded bg-red-600 text-sm text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed';
 const ROW_ACTION = 'text-xs text-blue-600 hover:underline';
-
-/** "A", "A and B", "A, B and C". */
-function listed(names: string[]): string {
-  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
-}
-
-/** The step before something is deleted: what goes, and the two buttons. */
-function Confirm({ label, action, busy, error, onCancel, onConfirm, children }: {
-  label: string;
-  action: string;
-  busy: boolean;
-  error: string | null;
-  onCancel: () => void;
-  onConfirm: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-gray-800" role="group" aria-label={label} data-testid="idea-confirm">
-      {children}
-      {error && <p className="mt-2 text-xs text-red-700" role="alert">{error}</p>}
-      <div className="mt-2 flex justify-end gap-2">
-        <button type="button" className={`${BUTTON} bg-white`} onClick={onCancel} disabled={busy}>Cancel</button>
-        <button type="button" className={DANGER_BUTTON} onClick={onConfirm} disabled={busy}>{busy ? 'Deleting…' : action}</button>
-      </div>
-    </div>
-  );
-}
 
 function Part({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -64,7 +37,8 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
   onCreate: () => void;
   /** Open the form with every part of the idea. */
   onEdit: () => void;
-  /** Delete the idea, once confirmed here; resolves to an error to show, or null. */
+  /** Delete the idea (for one that is not written yet: take every link to it
+   *  out), once confirmed here; resolves to an error to show, or null. */
   onDelete: () => Promise<string | null>;
   onEditRequirements: () => void;
   onAddQuestion: () => void;
@@ -142,9 +116,18 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
             {canEdit && idea && <button type="button" className={BUTTON} onClick={onEditRequirements}>Edit requirements</button>}
             {canEdit && node.docId && <button type="button" className={BUTTON} onClick={() => ask('idea')}>Delete</button>}
             {canEdit && !node.written && <button type="button" className={PRIMARY_BUTTON} onClick={onCreate}>Create this concept</button>}
+            {canEdit && !node.written && <button type="button" className={BUTTON} onClick={() => ask('idea')}>Remove links</button>}
           </div>
         )}
-        {confirm === 'idea' && (
+        {confirm === 'idea' && !node.written && (
+          <Confirm label="Remove links" action="Remove links" busyLabel="Removing…" busy={busy} error={error} onCancel={() => ask(null)} onConfirm={() => run(onDelete)}>
+            <p>Take every link to "{node.name}" out?</p>
+            <p className="mt-1">
+              {listed(namesOf([...new Set([...node.neededFor, ...node.helpfulFor])]))} {node.neededFor.length + node.helpfulFor.length === 1 ? 'names' : 'name'} it. It has no file, so it leaves the map with its last link.
+            </p>
+          </Confirm>
+        )}
+        {confirm === 'idea' && node.written && (
           <Confirm label="Delete concept" action="Delete concept" busy={busy} error={error} onCancel={() => ask(null)} onConfirm={() => run(onDelete)}>
             <p>Delete the concept "{node.name}"?</p>
             {node.neededFor.length > 0 && (

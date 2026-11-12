@@ -1,4 +1,4 @@
-import type { IdeaNode, Picks, Priority } from '../../lib/idea-map';
+import type { IdeaGraph, IdeaNode, Picks, Priority } from '../../lib/idea-map';
 
 /** The three priority colours, shared by the map, the steps and the legend. */
 export const PRIORITY_LOOK: Record<Priority, string> = {
@@ -45,8 +45,45 @@ export function pickWord(marks: PickMarks | null, key: string): string | null {
   return null;
 }
 
+/** How a click on an idea was made. */
+export interface PickKeys {
+  /** Shift was held: "helpful first" while a form picks requirements. */
+  shift: boolean;
+  /** Ctrl, Cmd or Shift was held: add it to, or take it out of, the selection of several. */
+  toggle: boolean;
+}
+
+export const pickKeys = (e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): PickKeys => ({
+  shift: e.shiftKey,
+  toggle: e.shiftKey || e.ctrlKey || e.metaKey,
+});
+
+/** What each of the three views gets from the page. */
+export interface IdeaViewProps {
+  graph: IdeaGraph;
+  /** The idea the side panel shows. */
+  selected: string | null;
+  /** The ideas selected to act on together (the bar above the views). */
+  chosen: ReadonlySet<string>;
+  marks: PickMarks | null;
+  matches: ReadonlySet<string> | null;
+  onPick: (key: string, keys: PickKeys) => void;
+  /** Put these ideas into the selection of several, or take them out; left
+   *  out where nothing can be selected (a link that cannot edit, an open form). */
+  onChoose?: (keys: string[], on: boolean) => void;
+}
+
+/** An idea that is in the selection of several. */
+export const CHOSEN_LOOK = 'outline outline-2 outline-offset-1 outline-blue-600';
+
+/** "A", "A and B", "A, B and C". */
+export function listed(names: readonly string[]): string {
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
 export const BUTTON = 'px-2 py-1 rounded border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed';
 export const PRIMARY_BUTTON = 'px-3 py-1 rounded bg-blue-600 text-sm text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed';
+export const DANGER_BUTTON = 'px-3 py-1 rounded bg-red-600 text-sm text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed';
 
 /** The small grey word above a field of a form. */
 export const FIELD_LABEL = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400';

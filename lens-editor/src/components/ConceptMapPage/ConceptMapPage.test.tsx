@@ -7,7 +7,7 @@ import { NavigationContext } from '../../contexts/NavigationContext';
 import { buildIdeaGraph, ideaAsEdit } from '../../lib/idea-map';
 import type { UserRole } from '../../../shared/types';
 import { ConceptMapPage } from './ConceptMapPage';
-import { useIdeaMap, type IdeaMap } from './useIdeaMap';
+import { useIdeaMap, type IdeaMap, type IdeaProfiles } from './useIdeaMap';
 
 vi.mock('./useIdeaMap', () => ({ useIdeaMap: vi.fn() }));
 
@@ -29,7 +29,11 @@ let map: IdeaMap;
 const onNavigate = vi.fn();
 
 function renderPage(role: UserRole = 'edit', url = '/concept-map') {
-  return render(
+  return render(page(role, url));
+}
+
+function page(role: UserRole = 'edit', url = '/concept-map') {
+  return (
     <AuthProvider role={role} folderUuid={null} isAllFolders>
       <NavigationContext.Provider value={{
         metadata: { '/Lens Edu/Lenses/A lens.md': { id: 'lens', type: 'markdown', version: 0 } },
@@ -43,7 +47,7 @@ function renderPage(role: UserRole = 'edit', url = '/concept-map') {
           <ConceptMapPage />
         </MemoryRouter>
       </NavigationContext.Provider>
-    </AuthProvider>,
+    </AuthProvider>
   );
 }
 
@@ -72,6 +76,7 @@ beforeEach(() => {
     addQuestion: vi.fn(async () => null),
     editIdea: vi.fn(async () => null),
     deleteIdea: vi.fn(async () => null),
+    deleteIdeas: vi.fn(async () => null),
     deleteNote: 'The file moves to the trash.',
     editQuestion: vi.fn(async () => null),
     deleteQuestion: vi.fn(async () => null),
@@ -105,8 +110,8 @@ describe('ConceptMapPage', () => {
       renderPage('edit', '/concept-map?view=table');
       const rows = () => [...screen.getByTestId('idea-table').querySelectorAll('tbody tr')];
       expect(rows().map((row) => row.getAttribute('data-idea'))).toEqual(['Corrigibility', 'Instrumental convergence', 'Orthogonality thesis', 'Power-seeking']);
-      const cells = [...rows()[1].querySelectorAll('td')].map((td) => td.textContent);
-      // name, priority, step, requires, needed for, lenses, questions, problems
+      const cells = [...rows()[1].querySelectorAll('td')].slice(1).map((td) => td.textContent);
+      // (the box to select it,) name, priority, step, requires, needed for, lenses, questions, problems
       expect(cells).toEqual(['Instrumental convergence', 'High', '1', '0', '1 · Power-seeking', '2', '2', 'Lens not found: Not there']);
       expect(rows()[0].querySelector('td:last-child')!.textContent).toBe('No outcomeNo questionsNo lens under Learn');
       expect(rows()[2].querySelector('td:last-child')!.textContent).toBe('Not written yet');
@@ -831,6 +836,322 @@ describe('ConceptMapPage', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Delete question' }));
       await waitFor(() => expect(screen.queryByTestId('idea-confirm')).toBeNull());
       expect(map.deleteQuestion).toHaveBeenLastCalledWith('goals', 1, before);
+    });
+  });
+
+  describe('selecting several', () => {
+    const chosen = () => [...document.querySelectorAll<HTMLElement>('[data-chosen]')].map((el) => el.dataset.idea);
+    const count = () => screen.queryByTestId('idea-selection-count')?.textContent ?? null;
+
+    it('adds and removes with Ctrl, Cmd or Shift and a click; a plain click still opens the panel', async () => {
+      renderPage();
+      expect(count()).toBeNull();
+      fireEvent.click(box('Power-seeking'), { ctrlKey: true });
+      fireEvent.click(box('Corrigibility'), { metaKey: true });
+      fireEvent.click(box('Orthogonality thesis'), { shiftKey: true });
+      expect(chosen()).toEqual(['Instrumental convergence', 'Orthogonality thesis', 'Power-seeking', 'Corrigibility'].filter((name) => name !== 'Instrumental convergence'));
+      expect(count()).toBe('3 selected');
+      expect(screen.queryByTestId('idea-panel')).toBeNull();
+      expect(box('Power-seeking').getAttribute('aria-pressed')).toBe('true');
+      expect(box('Power-seeking').querySelector('[data-testid="idea-chosen-tick"]')).toBeTruthy();
+
+      fireEvent.click(box('Corrigibility'), { ctrlKey: true });
+      expect(count()).toBe('2 selected');
+      // A plain click opens the panel and leaves the selection alone
+      await userEvent.click(box('Instrumental convergence'));
+      expect(screen.getByTestId('idea-panel')).toBeTruthy();
+      expect(count()).toBe('2 selected');
+    });
+
+    it('clears with Escape or "Clear": first the selection, then the panel', async () => {
+      renderPage();
+      await userEvent.click(box('Instrumental convergence'));
+      fireEvent.click(box('Power-seeking'), { ctrlKey: true });
+      await userEvent.keyboard('{Escape}');
+      expect(count()).toBeNull();
+      expect(screen.getByTestId('idea-panel')).toBeTruthy();
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByTestId('idea-panel')).toBeNull();
+
+      fireEvent.click(box('Power-seeking'), { ctrlKey: true });
+      await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      expect(chosen()).toEqual([]);
+    });
+
+    it('has a box per row in the Table view and one for every row shown', async () => {
+      renderPage('edit', '/concept-map?view=table');
+      const table = within(screen.getByTestId('idea-table'));
+      await userEvent.click(table.getByRole('checkbox', { name: 'Select Power-seeking' }));
+      expect(count()).toBe('1 selected');
+      // The box does not open the panel
+      expect(screen.queryByTestId('idea-panel')).toBeNull();
+      const all = table.getByRole('checkbox', { name: 'Select every concept' }) as HTMLInputElement;
+      expect(all.checked).toBe(false);
+      expect(all.indeterminate).toBe(true);
+      await userEvent.click(all);
+      expect(count()).toBe('4 selected');
+      expect(all.checked).toBe(true);
+      await userEvent.click(all);
+      expect(count()).toBeNull();
+
+      // With the find box: only the rows shown
+      await userEvent.type(screen.getByLabelText('Find a concept'), 'co');
+      await userEvent.click(table.getByRole('checkbox', { name: 'Select every concept shown' }));
+      expect(chosen()).toEqual(['Corrigibility', 'Instrumental convergence']);
+      // Ctrl and a click on a row does the same as its box
+      fireEvent.click(document.querySelector('tr[data-idea="Corrigibility"]')!, { ctrlKey: true });
+      expect(chosen()).toEqual(['Instrumental convergence']);
+    });
+
+    it('selects by Ctrl and a click in the Order view too', async () => {
+      renderPage('edit', '/concept-map?view=order');
+      const order = screen.getByTestId('idea-order');
+      fireEvent.click(order.querySelector('[data-idea="Corrigibility"]')!, { ctrlKey: true });
+      expect(count()).toBe('1 selected');
+      expect(order.querySelector('[data-idea="Corrigibility"]')!.getAttribute('data-chosen')).toBe('true');
+    });
+
+    it('asks once before deleting them all, with what goes and which concepts lose a link', async () => {
+      map.deleteIdeas = vi.fn(async () => (vi.mocked(map.deleteIdeas).mock.calls.length === 1 ? 'Deleted: Instrumental convergence. Not deleted: Power-seeking.' : null));
+      renderPage();
+      fireEvent.click(box('Instrumental convergence'), { ctrlKey: true });
+      fireEvent.click(box('Power-seeking'), { ctrlKey: true });
+      fireEvent.click(box('Orthogonality thesis'), { ctrlKey: true });
+      const bar = within(screen.getByTestId('idea-selection'));
+      await userEvent.click(bar.getByRole('button', { name: 'Delete' }));
+      const confirm = within(screen.getByRole('group', { name: 'Delete the selected concepts' }));
+      expect(confirm.getByText('Delete these 2 concepts?')).toBeTruthy();
+      expect([...screen.getByTestId('idea-delete-list').children].map((li) => li.textContent)).toEqual(['Instrumental convergence', 'Power-seeking']);
+      expect(screen.getByTestId('idea-delete-unwritten').textContent).toBe('Orthogonality thesis is not written yet and has no file: deleting it takes every link to it out.');
+      expect([...screen.getByTestId('idea-delete-losing').children].map((li) => li.textContent)).toEqual(['Corrigibility (to Power-seeking)']);
+      expect(confirm.getByText('2 questions go with them.')).toBeTruthy();
+      expect(confirm.getByText('The file moves to the trash.')).toBeTruthy();
+      // Enter confirms: the focus is on the button that deletes
+      expect(document.activeElement).toBe(confirm.getByRole('button', { name: 'Delete 2 concepts' }));
+
+      await userEvent.click(confirm.getByRole('button', { name: 'Cancel' }));
+      expect(map.deleteIdeas).not.toHaveBeenCalled();
+      expect(count()).toBe('3 selected');
+
+      await userEvent.click(bar.getByRole('button', { name: 'Delete' }));
+      await userEvent.keyboard('{Enter}');
+      expect((await screen.findByRole('alert')).textContent).toBe('Deleted: Instrumental convergence. Not deleted: Power-seeking.');
+      expect(map.deleteIdeas).toHaveBeenLastCalledWith(['instrumental convergence', 'power-seeking', 'orthogonality thesis']);
+      expect(count()).toBe('3 selected');
+      await userEvent.click(screen.getByRole('button', { name: 'Delete 2 concepts' }));
+      await waitFor(() => expect(count()).toBeNull());
+    });
+
+    it('says that only links go when nothing selected has a file', async () => {
+      renderPage();
+      fireEvent.click(box('Orthogonality thesis'), { ctrlKey: true });
+      await userEvent.click(within(screen.getByTestId('idea-selection')).getByRole('button', { name: 'Delete' }));
+      expect(screen.queryByTestId('idea-delete-list')).toBeNull();
+      expect([...screen.getByTestId('idea-delete-losing').children].map((li) => li.textContent)).toEqual(['Instrumental convergence (to Orthogonality thesis)']);
+      await userEvent.click(screen.getByRole('button', { name: 'Remove the links' }));
+      await waitFor(() => expect(map.deleteIdeas).toHaveBeenCalledWith(['orthogonality thesis']));
+    });
+
+    it('takes the links to a concept that is not written yet out from its panel', async () => {
+      renderPage();
+      await userEvent.click(box('Orthogonality thesis'));
+      await userEvent.click(screen.getByRole('button', { name: 'Remove links' }));
+      const confirm = within(screen.getByRole('group', { name: 'Remove links' }));
+      expect(confirm.getByText('Take every link to "Orthogonality thesis" out?')).toBeTruthy();
+      expect(confirm.getByText(/^Instrumental convergence names it\./)).toBeTruthy();
+      await userEvent.click(confirm.getByRole('button', { name: 'Remove links' }));
+      await waitFor(() => expect(screen.queryByTestId('idea-panel')).toBeNull());
+      expect(map.deleteIdeas).toHaveBeenCalledWith(['orthogonality thesis']);
+      expect(map.deleteIdea).not.toHaveBeenCalled();
+    });
+
+    it('keeps picking requirements while a form is open, and selects nothing for a link that cannot edit', async () => {
+      const { unmount } = renderPage();
+      fireEvent.click(box('Corrigibility'), { ctrlKey: true });
+      await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+      // The form is open: no bar, and Shift with a click picks "helpful first"
+      expect(count()).toBeNull();
+      expect(chosen()).toEqual([]);
+      fireEvent.click(box('Power-seeking'), { shiftKey: true });
+      expect(names('helpful')).toEqual(['Power-seeking']);
+      await userEvent.click(within(screen.getByTestId('idea-form')).getByRole('button', { name: 'Cancel' }));
+      expect(count()).toBe('1 selected');
+      unmount();
+
+      renderPage('view', '/concept-map?view=table');
+      expect(screen.queryByRole('checkbox')).toBeNull();
+      fireEvent.click(document.querySelector('tr[data-idea="Corrigibility"]')!, { ctrlKey: true });
+      expect(count()).toBeNull();
+      expect(screen.getByTestId('idea-panel')).toBeTruthy();
+    });
+  });
+
+  describe('profiles', () => {
+    let profiles: IdeaProfiles;
+    beforeEach(() => {
+      profiles = {
+        current: 'Main',
+        names: ['Main', 'Draft', 'Talk in Berlin'],
+        open: vi.fn(),
+        create: vi.fn(async () => null),
+        rename: vi.fn(async () => null),
+        remove: vi.fn(async () => null),
+        copyTo: vi.fn(async () => ({ copied: ['Power-seeking'], skipped: ['Corrigibility'] })),
+      };
+      map.profiles = profiles;
+    });
+    const switcher = () => screen.getByRole('button', { name: 'Profile: Main' });
+    const items = () => [...screen.getByRole('menu').querySelectorAll('[role^="menuitem"]')].map((el) => el.textContent);
+
+    it('shows no switcher and no "Copy to…" where the hook has no profiles', () => {
+      map.profiles = undefined;
+      renderPage();
+      expect(screen.queryByTestId('profile-switcher')).toBeNull();
+      fireEvent.click(box('Power-seeking'), { ctrlKey: true });
+      expect(screen.queryByRole('button', { name: 'Copy to…' })).toBeNull();
+      expect(screen.getByText('Context Accelerator')).toBeTruthy();
+    });
+
+    it('switches profile from the menu next to the title, by mouse or by keyboard', async () => {
+      renderPage();
+      await userEvent.click(switcher());
+      expect(items()).toEqual(['✓Main', 'Draft', 'Talk in Berlin', 'New profile…', 'Rename…', 'Delete profile…']);
+      await userEvent.click(screen.getByRole('menuitemradio', { name: 'Draft' }));
+      expect(profiles.open).toHaveBeenLastCalledWith('Draft');
+      expect(screen.queryByRole('menu')).toBeNull();
+
+      switcher().focus();
+      await userEvent.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}{Enter}');
+      expect(profiles.open).toHaveBeenLastCalledWith('Talk in Berlin');
+      // Escape closes only the menu, and the focus is back on the button
+      await userEvent.keyboard('{Enter}');
+      expect(screen.getByRole('menu')).toBeTruthy();
+      await userEvent.keyboard('{End}');
+      expect(document.activeElement!.textContent).toBe('Delete profile…');
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(document.activeElement).toBe(switcher());
+    });
+
+    it('makes a new profile, empty or as a copy, once the name is one that can be used', async () => {
+      renderPage();
+      await userEvent.click(switcher());
+      await userEvent.click(screen.getByRole('menuitem', { name: 'New profile…' }));
+      const form = within(screen.getByTestId('profile-form'));
+      const name = form.getByLabelText('Profile name');
+      expect(document.activeElement).toBe(name);
+      expect((form.getByLabelText('Start empty') as HTMLInputElement).checked).toBe(true);
+      await userEvent.keyboard('{Enter}');
+      expect(form.getByRole('alert').textContent).toBe('Give the profile a name.');
+      await userEvent.type(name, 'draft');
+      expect(form.getByRole('alert').textContent).toBe('A profile with this name already exists.');
+      expect(profiles.create).not.toHaveBeenCalled();
+      await userEvent.clear(name);
+      await userEvent.type(name, ' Second try {Enter}');
+      await waitFor(() => expect(screen.queryByTestId('profile-form')).toBeNull());
+      expect(profiles.create).toHaveBeenLastCalledWith('Second try', undefined);
+
+      await userEvent.click(switcher());
+      await userEvent.click(screen.getByRole('menuitem', { name: 'New profile…' }));
+      await userEvent.type(screen.getByLabelText('Profile name'), 'A copy');
+      await userEvent.click(screen.getByLabelText('Copy everything from Main'));
+      vi.mocked(profiles.create).mockResolvedValueOnce('The disk is full.');
+      await userEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+      expect((await screen.findByRole('alert')).textContent).toBe('The disk is full.');
+      expect(profiles.create).toHaveBeenLastCalledWith('A copy', 'Main');
+      // Escape closes the small form
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByTestId('profile-form')).toBeNull();
+    });
+
+    it('renames the profile, and deletes it after a confirm step with its number of concepts', async () => {
+      renderPage();
+      await userEvent.click(switcher());
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Rename…' }));
+      const name = screen.getByLabelText('Profile name') as HTMLInputElement;
+      expect(name.value).toBe('Main');
+      await userEvent.clear(name);
+      await userEvent.type(name, 'Mainline{Enter}');
+      await waitFor(() => expect(screen.queryByTestId('profile-form')).toBeNull());
+      expect(profiles.rename).toHaveBeenCalledWith('Main', 'Mainline');
+
+      await userEvent.click(switcher());
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Delete profile…' }));
+      const confirm = within(screen.getByRole('group', { name: 'Delete profile' }));
+      expect(confirm.getByText('Delete the profile "Main"?')).toBeTruthy();
+      expect(confirm.getByText('Its 3 concepts are deleted with it.')).toBeTruthy();
+      await userEvent.click(confirm.getByRole('button', { name: 'Delete profile' }));
+      await waitFor(() => expect(screen.queryByTestId('idea-confirm')).toBeNull());
+      expect(profiles.remove).toHaveBeenCalledWith('Main');
+      // The first of the others opens
+      expect(profiles.open).toHaveBeenCalledWith('Draft');
+    });
+
+    it('does not offer to delete the last profile left', async () => {
+      profiles.names = ['Main'];
+      renderPage();
+      await userEvent.click(switcher());
+      expect(items()).toEqual(['✓Main', 'New profile…', 'Rename…']);
+    });
+
+    it('copies the selected concepts into another profile and says what happened', async () => {
+      renderPage();
+      fireEvent.click(box('Power-seeking'), { ctrlKey: true });
+      fireEvent.click(box('Corrigibility'), { ctrlKey: true });
+      fireEvent.click(box('Orthogonality thesis'), { ctrlKey: true });
+      const bar = within(screen.getByTestId('idea-selection'));
+      await userEvent.click(bar.getByRole('button', { name: 'Copy to…' }));
+      expect(items()).toEqual(['Draft', 'Talk in Berlin', 'New profile…']);
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Draft' }));
+      // Only the written ones are copied
+      expect(profiles.copyTo).toHaveBeenLastCalledWith(['corrigibility', 'power-seeking'], 'Draft', false);
+      expect((await bar.findByRole('status')).textContent).toBe('1 copied to Draft; 1 was already there and was skipped. 1 not written yet was left out.');
+      // The selection stays
+      expect(screen.getByTestId('idea-selection-count').textContent).toBe('3 selected');
+
+      vi.mocked(profiles.copyTo).mockResolvedValueOnce({ copied: ['Corrigibility'], skipped: [] });
+      await userEvent.click(bar.getByRole('button', { name: 'Replace it' }));
+      expect(profiles.copyTo).toHaveBeenLastCalledWith(['corrigibility'], 'Draft', true);
+      expect((await bar.findByRole('status')).textContent).toBe('1 replaced in Draft.');
+      expect(bar.queryByRole('button', { name: /Replace/ })).toBeNull();
+      await userEvent.click(bar.getByRole('button', { name: 'Open Draft' }));
+      expect(profiles.open).toHaveBeenCalledWith('Draft');
+    });
+
+    it('copies into a new profile without leaving this one, and shows an error from the copy', async () => {
+      vi.mocked(profiles.copyTo).mockResolvedValueOnce({ error: 'The profile could not be read.' });
+      renderPage();
+      fireEvent.click(box('Power-seeking'), { ctrlKey: true });
+      const bar = within(screen.getByTestId('idea-selection'));
+      await userEvent.click(bar.getByRole('button', { name: 'Copy to…' }));
+      await userEvent.click(screen.getByRole('menuitem', { name: 'New profile…' }));
+      await userEvent.type(screen.getByLabelText('Profile name'), 'Workshop{Enter}');
+      expect((await bar.findByRole('alert')).textContent).toBe('The profile could not be read.');
+      expect(profiles.create).toHaveBeenCalledWith('Workshop', undefined, false);
+      expect(profiles.copyTo).toHaveBeenCalledWith(['power-seeking'], 'Workshop', false);
+      expect(profiles.open).not.toHaveBeenCalled();
+    });
+
+    it('says so when nothing selected can be copied', async () => {
+      renderPage();
+      fireEvent.click(box('Orthogonality thesis'), { ctrlKey: true });
+      await userEvent.click(screen.getByRole('button', { name: 'Copy to…' }));
+      expect(screen.getByRole('status').textContent).toBe('Nothing to copy: the selected concepts are not written yet, so they have no file.');
+      expect(profiles.copyTo).not.toHaveBeenCalled();
+    });
+
+    it('closes the panel and clears the selection when another profile opens', async () => {
+      const { rerender } = renderPage();
+      await userEvent.click(box('Instrumental convergence'));
+      fireEvent.click(box('Power-seeking'), { ctrlKey: true });
+      await userEvent.type(screen.getByLabelText('Find a concept'), 'power');
+      map = { ...map, profiles: { ...profiles, current: 'Draft' }, graph: buildIdeaGraph([]), total: 0, read: 0 };
+      rerender(page());
+      expect(screen.queryByTestId('idea-panel')).toBeNull();
+      expect(screen.queryByTestId('idea-selection')).toBeNull();
+      expect((screen.getByLabelText('Find a concept') as HTMLInputElement).value).toBe('');
+      expect(screen.getByText('No concepts in this profile yet. Add the first one with "Add concept".')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Profile: Draft' })).toBeTruthy();
     });
   });
 });

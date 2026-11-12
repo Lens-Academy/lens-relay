@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -18,8 +18,10 @@ import { IdeaMapDrawing } from './IdeaMapDrawing';
 import { IdeaOrderView } from './IdeaOrderView';
 import { IdeaPanel } from './IdeaPanel';
 import { IdeaTableView } from './IdeaTableView';
+import { ProfileSwitcher } from './ProfileSwitcher';
 import { QuestionForm } from './QuestionForm';
-import { BUTTON, PRIMARY_BUTTON, type PickMarks } from './ideaLook';
+import { SelectionBar } from './SelectionBar';
+import { BUTTON, PRIMARY_BUTTON, type IdeaViewProps, type PickKeys, type PickMarks } from './ideaLook';
 import { useIdeaMap } from './useIdeaMap';
 
 const VIEWS = [
@@ -35,7 +37,9 @@ const NO_PICKS: Picks = { requires: [], helpful: [] };
  * The creator's concept map of the Context Accelerator (/concept-map): the
  * idea files of `Lens Edu/Context Accelerator LOs/` as a graph, read live,
  * in three views with a side panel; links that can edit also add, edit,
- * rename and delete ideas and add, edit and delete their questions from it.
+ * rename and delete ideas and add, edit and delete their questions from it,
+ * and select several ideas to delete (or, where the hook has profiles, copy
+ * into another profile) together.
  */
 export function ConceptMapPage() {
   const [params, setParams] = useSearchParams();
@@ -83,10 +87,24 @@ function ConceptMap({ folder, onFolder, view, onView }: {
   /** The idea a question is added to, or whose question (`edit`: its place
    *  and what it said when the form opened) is edited. */
   const [questionFor, setQuestionFor] = useState<{ key: string; edit?: { index: number; before: IdeaQuestion } } | null>(null);
+  /** The ideas selected to act on together (Ctrl/Cmd/Shift-click, the boxes of the table). */
+  const [chosen, setChosen] = useState<readonly string[]>([]);
 
   // The views wait until every file is read once, so the map is not laid out
   // again for each file that arrives; later additions just appear.
   const [loaded, setLoaded] = useState(false);
+  // Another profile is another set of concepts: nothing of the one before stays open
+  const profile = map.profiles?.current;
+  const [shownProfile, setShownProfile] = useState(profile);
+  if (profile !== shownProfile) {
+    setShownProfile(profile);
+    setSelected(null);
+    setMode(null);
+    setQuestionFor(null);
+    setChosen([]);
+    setFind('');
+    setLoaded(false);
+  }
   if (!loaded && map.ready && map.total > 0 && map.read === map.total) setLoaded(true);
 
   const matches = useMemo(() => {
@@ -120,18 +138,50 @@ function ConceptMap({ folder, onFolder, view, onView }: {
     openForm({ kind: 'edit', key }, { requires: start.requires, helpful: start.helpful });
   };
 
-  /** A click on an idea in any view: select it, or, while a form is open, pick it. */
-  const onPick = (key: string, shift: boolean) => {
+  /** Several can be selected by a link that can edit, while no form is open. */
+  const choosing = canEdit && !mode && !questionFor;
+  const chosenKeys = useMemo(() => (choosing ? chosen.filter((key) => graph.byKey.has(key)) : []), [choosing, chosen, graph]);
+  const chosenSet = useMemo(() => new Set(chosenKeys), [chosenKeys]);
+  const choose = useCallback((keys: string[], on: boolean) => setChosen((current) => {
+    const next = new Set(current);
+    for (const key of keys) {
+      if (on) next.add(key);
+      else next.delete(key);
+    }
+    return [...next];
+  }), []);
+
+  /**
+   * A click on an idea in any view: open it in the panel, or with Ctrl, Cmd
+   * or Shift put it into (or take it out of) the selection of several; while
+   * a form is open, pick it as a requirement instead.
+   */
+  const onPick = (key: string, keys: PickKeys) => {
     // The question form belongs to one idea: a click elsewhere must not lose what is typed
     if (questionFor) return;
     if (!mode) {
-      setSelected(key);
+      if (keys.toggle && choosing) choose([key], !chosenSet.has(key));
+      else setSelected(key);
       return;
     }
     const node = graph.byKey.get(key);
     if (!node || (mode.kind !== 'add' && mode.key === key)) return;
-    setPicks((current) => togglePick(current, node.name, shift ? 'helpful' : clickList));
+    setPicks((current) => togglePick(current, node.name, keys.shift ? 'helpful' : clickList));
   };
+
+  // Escape: first the selection of several, then the panel. (A menu, a
+  // confirm step or the list of a pick box that is open takes it before.)
+  const escape = choosing ? (chosenKeys.length > 0 ? 'selection' : selected !== null ? 'panel' : null) : null;
+  useEffect(() => {
+    if (!escape) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (escape === 'selection') setChosen([]);
+      else setSelected(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [escape]);
 
   const submit = async (fields: IdeaFields | null): Promise<string | null> => {
     if (!mode) return null;
@@ -166,17 +216,26 @@ function ConceptMap({ folder, onFolder, view, onView }: {
   const questionEdit = questionFor?.edit;
   const written = graph.nodes.filter((node) => node.written).length;
   const unwritten = graph.nodes.length - written;
-  const views = { graph, selected: mode ? null : selected, marks, matches, onPick };
+  const views: IdeaViewProps = {
+    graph,
+    selected: mode ? null : selected,
+    chosen: chosenSet,
+    marks,
+    matches,
+    onPick,
+    onChoose: choosing ? choose : undefined,
+  };
 
   return (
     <div className="flex h-full flex-col" data-testid="concept-map-page">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-200 px-6 py-3">
         <h1 className="text-xl font-semibold text-gray-800">Concept map</h1>
+        {map.profiles && <ProfileSwitcher profiles={map.profiles} count={map.ready && map.read === map.total ? written : null} />}
         {map.folders.length > 1 ? (
           <select className="lens-input" aria-label="Folder" value={folder} onChange={(e) => onFolder(e.target.value)}>
             {map.folders.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
-        ) : (
+        ) : !map.profiles && (
           <span className="text-sm text-gray-500">Context Accelerator</span>
         )}
         <div role="group" aria-label="View" className="inline-flex items-center rounded bg-gray-200 p-0.5">
@@ -227,13 +286,29 @@ function ConceptMap({ folder, onFolder, view, onView }: {
         </div>
       )}
 
+      {chosenKeys.length > 0 && (
+        <SelectionBar
+          graph={graph}
+          keys={chosenKeys}
+          profiles={map.profiles}
+          deleteNote={map.deleteNote}
+          onClear={() => setChosen([])}
+          onDelete={async (keys) => {
+            const failed = await map.deleteIdeas(keys);
+            // Stopped half way: what is gone leaves the selection by itself
+            if (!failed) setChosen([]);
+            return failed;
+          }}
+        />
+      )}
+
       <div className="relative flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1" key={profile}>
           {!map.ready ? (
             <p className="px-6 py-6 text-sm text-gray-500">Loading…</p>
           ) : map.total === 0 ? (
             <p className="px-6 py-6 text-sm text-gray-500">
-              No concepts in {IDEAS_SHARED_FOLDER}/{folder} yet.{canEdit && ' Add the first one with "Add concept".'}
+              {map.profiles ? 'No concepts in this profile yet.' : `No concepts in ${IDEAS_SHARED_FOLDER}/${folder} yet.`}{canEdit && ' Add the first one with "Add concept".'}
             </p>
           ) : !loaded ? (
             <p className="px-6 py-6 text-sm text-gray-500" role="status">Reading {map.read} of {map.total} concepts…</p>
@@ -288,7 +363,8 @@ function ConceptMap({ folder, onFolder, view, onView }: {
                 onCreate={() => openForm({ kind: 'add', name: selectedNode.name })}
                 onEdit={() => editIdea(selectedNode.key)}
                 onDelete={async () => {
-                  const failed = await map.deleteIdea(selectedNode.key);
+                  // One that is not written yet has no file: every link to it goes instead
+                  const failed = selectedNode.docId ? await map.deleteIdea(selectedNode.key) : await map.deleteIdeas([selectedNode.key]);
                   // An idea other files still name stays on the map as "not written yet"
                   if (!failed) setSelected(null);
                   return failed;
