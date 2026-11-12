@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from 'react';
 import type { IdeaGraph, IdeaLinks, IdeaNode, Priority } from '../../lib/idea-map';
 
 /** The three priority colours, shared by the map, the steps and the legend. */
@@ -59,12 +60,27 @@ export interface PickKeys {
   shift: boolean;
   /** Ctrl, Cmd or Shift was held: add it to, or take it out of, the selection of several. */
   toggle: boolean;
+  /** Made with the keyboard (Enter or Space on the idea): the focus follows into the panel. */
+  byKey?: boolean;
 }
 
-export const pickKeys = (e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): PickKeys => ({
+export const pickKeys = (e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; detail?: number }): PickKeys => ({
   shift: e.shiftKey,
   toggle: e.shiftKey || e.ctrlKey || e.metaKey,
+  // A click a key made counts no presses
+  byKey: e.detail === 0,
 });
+
+/**
+ * Enter with Ctrl, Cmd or Shift on a focused idea does what a click with that
+ * key held does (a browser makes no such click of it by itself).
+ */
+export function pickByEnter(e: KeyboardEvent<HTMLElement>, pick: (keys: PickKeys) => void) {
+  if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  pick({ ...pickKeys(e), byKey: true });
+}
 
 /** What each of the three views gets from the page. */
 export interface IdeaViewProps {

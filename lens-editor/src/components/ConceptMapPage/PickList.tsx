@@ -17,7 +17,7 @@ const LIST_NOTE: Partial<Record<LinkList, string>> = {
  * written, and the map shows it as "not written yet". "Needed for" and
  * "Helpful for" take written ideas only: the link goes into their file.
  */
-export function PickList({ list, picks, graph, ownNames, clicksHere = false, footnote, onActivate, onToggle }: {
+export function PickList({ list, picks, graph, ownNames, clicksHere = false, autoFocus = false, footnote, onActivate, onToggle }: {
   list: LinkList;
   picks: Picks & Partial<Dependents>;
   graph: IdeaGraph;
@@ -27,6 +27,8 @@ export function PickList({ list, picks, graph, ownNames, clicksHere = false, foo
   clicksHere?: boolean;
   /** One more grey line under the box. */
   footnote?: string | null;
+  /** The focus starts in the box of this list. */
+  autoFocus?: boolean;
   /** Make this the list such clicks add to (a click into its box does). */
   onActivate?: () => void;
   /** Add a name to this list, or take it out. */
@@ -139,6 +141,7 @@ export function PickList({ list, picks, graph, ownNames, clicksHere = false, foo
         className={`lens-input w-full ${clicksHere ? '!border-indigo-400' : ''}`}
         placeholder="Type a name, or click a concept"
         autoComplete="off"
+        autoFocus={autoFocus}
         value={typed}
         onChange={(e) => {
           setTyped(e.target.value);

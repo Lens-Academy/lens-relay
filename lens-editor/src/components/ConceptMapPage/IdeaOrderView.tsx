@@ -1,13 +1,15 @@
 import { ChosenTick } from './ChosenTick';
-import { CHOSEN_LOOK, ideaLook, ideaTitle, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
+import { arrowFocus } from './ideaKeys';
+import { CHOSEN_LOOK, ideaLook, ideaTitle, pickByEnter, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
 
 /**
  * The ideas as steps, a row per step: step 1 needs nothing first, each later
- * step needs only ideas from the steps before it.
+ * step needs only ideas from the steps before it. The arrow keys move the
+ * focus from idea to idea.
  */
 export function IdeaOrderView({ graph, selected, chosen, marks, matches, onPick }: IdeaViewProps) {
   return (
-    <div className="h-full overflow-y-auto px-6 py-4" data-testid="idea-order">
+    <div className="h-full overflow-y-auto px-6 py-4" data-testid="idea-order" onKeyDown={arrowFocus}>
       <p className="mb-3 text-xs text-gray-500">
         Step 1 needs nothing first. Every later step needs only concepts from the steps before it.
       </p>
@@ -29,10 +31,12 @@ export function IdeaOrderView({ graph, selected, chosen, marks, matches, onPick 
                     key={node.key}
                     type="button"
                     data-idea={node.name}
+                    data-key={node.key}
                     data-chosen={inSet || undefined}
                     aria-pressed={marks ? word !== null : inSet || node.key === selected}
                     title={ideaTitle(node)}
                     onClick={(e) => onPick(node.key, pickKeys(e))}
+                    onKeyDown={(e) => pickByEnter(e, (keys) => onPick(node.key, keys))}
                     className={`relative flex max-w-full items-center gap-1.5 rounded border px-2 py-1 text-left text-xs hover:brightness-95 ${ideaLook(node)} ${ring} ${inSet ? CHOSEN_LOOK : ''}`}
                   >
                     {inSet && <ChosenTick className="absolute -left-2 -top-2" />}

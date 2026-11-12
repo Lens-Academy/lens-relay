@@ -1281,4 +1281,268 @@ describe('ConceptMapPage', () => {
       expect(screen.getByRole('button', { name: 'Profile: Draft' })).toBeTruthy();
     });
   });
+
+  describe('by keyboard', () => {
+    const find = () => screen.getByLabelText('Find a concept') as HTMLInputElement;
+    const panelOf = (name: string) => within(screen.getByTestId('idea-panel')).getByRole('heading', { name });
+    const ctrlEnter = '{Control>}{Enter}{/Control}';
+
+    it('lists what the search finds; arrows and Enter open one and the focus goes to its panel', async () => {
+      renderPage();
+      await userEvent.type(find(), 'co');
+      // A name that starts with what is typed comes first
+      expect(offered('Find a concept')).toEqual(['[Corrigibility]', 'Instrumental convergence']);
+      expect(screen.getByTestId('idea-counts').textContent).toBe('2 found');
+      await userEvent.keyboard('{ArrowDown}');
+      expect(offered('Find a concept')).toEqual(['Corrigibility', '[Instrumental convergence]']);
+      await userEvent.keyboard('{Enter}');
+      expect(panelOf('Instrumental convergence')).toBeTruthy();
+      expect(find().value).toBe('');
+      expect(document.activeElement).toBe(screen.getByTestId('idea-panel'));
+      expect(screen.getByTestId('idea-counts').textContent).toBe('3 concepts · 1 not written yet');
+    });
+
+    it('says when the search finds nothing; Escape empties the box and leaves the panel open', async () => {
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      await userEvent.type(find(), 'zzz');
+      expect(within(screen.getByTestId('idea-find-rows')).getByText('No concept matches.')).toBeTruthy();
+      await userEvent.keyboard('{Enter}{Escape}');
+      expect(find().value).toBe('');
+      expect(screen.queryByTestId('idea-find-rows')).toBeNull();
+      expect(panelOf('Power-seeking')).toBeTruthy();
+    });
+
+    it('goes to the search box with "/", but not while typing in a field', async () => {
+      renderPage();
+      box('Power-seeking').focus();
+      await userEvent.keyboard('/');
+      expect(document.activeElement).toBe(find());
+      expect(find().value).toBe('');
+      await userEvent.keyboard('a/b');
+      expect(find().value).toBe('a/b');
+    });
+
+    it('adds what the search finds to the selection of several with Ctrl+Enter, and keeps the text', async () => {
+      renderPage();
+      await userEvent.type(find(), 'o');
+      await userEvent.keyboard(`${ctrlEnter}{ArrowDown}${ctrlEnter}`);
+      expect(screen.getByTestId('idea-selection-count').textContent).toBe('2 selected');
+      expect(find().value).toBe('o');
+      expect(screen.queryByTestId('idea-panel')).toBeNull();
+    });
+
+    it('picks what the search finds into the list of an open form', async () => {
+      renderPage();
+      await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+      await userEvent.type(find(), 'pow{Enter}');
+      expect(names('requires')).toEqual(['Power-seeking']);
+      expect(find().value).toBe('');
+      expect(document.activeElement).toBe(find());
+      await userEvent.keyboard('corr{Shift>}{Enter}{/Shift}');
+      expect(names('helpful')).toEqual(['Corrigibility']);
+    });
+
+    it('opens a focused idea with Enter, puts the focus on the panel, and gives it back on Escape', async () => {
+      renderPage();
+      box('Power-seeking').focus();
+      await userEvent.keyboard('{Enter}');
+      expect(panelOf('Power-seeking')).toBeTruthy();
+      expect(document.activeElement).toBe(screen.getByTestId('idea-panel'));
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByTestId('idea-panel')).toBeNull();
+      expect(document.activeElement).toBe(box('Power-seeking'));
+    });
+
+    it('keeps the focus in the panel when a name in it opens another idea, and returns it on "Close"', async () => {
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      await userEvent.click(within(screen.getByTestId('idea-panel')).getByRole('button', { name: 'Corrigibility' }));
+      expect(panelOf('Corrigibility')).toBeTruthy();
+      expect(document.activeElement).toBe(screen.getByTestId('idea-panel'));
+      await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+      expect(document.activeElement).toBe(box('Corrigibility'));
+    });
+
+    it('selects several with Ctrl+Enter or Shift+Enter on a focused idea, in each view', async () => {
+      const { unmount } = renderPage();
+      box('Power-seeking').focus();
+      await userEvent.keyboard(ctrlEnter);
+      box('Corrigibility').focus();
+      await userEvent.keyboard('{Shift>}{Enter}{/Shift}');
+      expect(screen.getByTestId('idea-selection-count').textContent).toBe('2 selected');
+      expect(screen.queryByTestId('idea-panel')).toBeNull();
+      await userEvent.keyboard(ctrlEnter);
+      expect(screen.getByTestId('idea-selection-count').textContent).toBe('1 selected');
+      unmount();
+
+      for (const view of ['order', 'table']) {
+        const shown = renderPage('edit', `/concept-map?view=${view}`);
+        screen.getByTestId(`idea-${view}`).querySelector<HTMLElement>('[data-key="power-seeking"]')!.focus();
+        await userEvent.keyboard(ctrlEnter);
+        expect(screen.getByTestId('idea-selection-count').textContent).toBe('1 selected');
+        expect(screen.queryByTestId('idea-panel')).toBeNull();
+        shown.unmount();
+      }
+    });
+
+    it('starts "Add concept" in the name; Enter there moves on instead of creating; Ctrl+Enter creates and says so', async () => {
+      renderPage();
+      await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+      expect(document.activeElement).toBe(screen.getByLabelText('Name'));
+      await userEvent.keyboard('Deceptive alignment{Enter}');
+      expect(map.createIdea).not.toHaveBeenCalled();
+      expect(screen.getByTestId('idea-form')).toBeTruthy();
+      expect(document.activeElement).toBe(screen.getByLabelText('Outcome'));
+      await userEvent.keyboard(`Explain it.${ctrlEnter}`);
+      await waitFor(() => expect(screen.queryByTestId('idea-form')).toBeNull());
+      expect(vi.mocked(map.createIdea).mock.calls[0][0]).toMatchObject({ name: 'Deceptive alignment', outcome: 'Explain it.' });
+      expect(screen.getByTestId('idea-notice').textContent).toBe('Created "Deceptive alignment".');
+    });
+
+    it('closes a form with Escape: at once when nothing changed, after a second Escape when something did', async () => {
+      renderPage();
+      const add = screen.getByRole('button', { name: 'Add concept' });
+      await userEvent.click(add);
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByTestId('idea-form')).toBeNull();
+      expect(document.activeElement).toBe(add);
+
+      await userEvent.click(add);
+      await userEvent.keyboard('Half a name{Escape}');
+      expect(screen.getByTestId('form-leave-note').textContent).toContain('Press Escape again');
+      // Going on typing takes the warning back
+      await userEvent.keyboard('!');
+      expect(screen.queryByTestId('form-leave-note')).toBeNull();
+      expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Half a name!');
+      await userEvent.keyboard('{Escape}{Escape}');
+      expect(screen.queryByTestId('idea-form')).toBeNull();
+      expect(map.createIdea).not.toHaveBeenCalled();
+    });
+
+    it('asks before Escape discards a picked requirement, and closes the list of a pick box first', async () => {
+      renderPage();
+      await userEvent.click(box('Corrigibility'));
+      await userEvent.click(screen.getByRole('button', { name: 'Edit requirements' }));
+      const requires = screen.getByRole('combobox', { name: 'Requires' });
+      expect(document.activeElement).toBe(requires);
+      await userEvent.keyboard('instr');
+      await userEvent.keyboard('{Escape}');
+      // That Escape closed the list only
+      expect(screen.getByTestId('idea-form')).toBeTruthy();
+      expect(screen.queryByTestId('form-leave-note')).toBeNull();
+      await userEvent.keyboard('{Enter}{Enter}');
+      expect(names('requires')).toEqual(['Power-seeking', 'Instrumental convergence']);
+      await userEvent.keyboard('{Escape}');
+      expect(screen.getByTestId('form-leave-note')).toBeTruthy();
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByTestId('idea-form')).toBeNull();
+      expect(map.saveRequirements).not.toHaveBeenCalled();
+      // Back in the panel the form was opened from
+      expect(document.activeElement).toBe(screen.getByTestId('idea-panel'));
+    });
+
+    it('presses the buttons of the panel with E, R, Q and Delete while the focus is in it', async () => {
+      renderPage();
+      box('Power-seeking').focus();
+      await userEvent.keyboard('{Enter}e');
+      expect(screen.getByRole('form', { name: 'Edit concept' })).toBeTruthy();
+      expect(document.activeElement).toBe(screen.getByLabelText('Name'));
+      await userEvent.keyboard('{Escape}');
+      expect(document.activeElement).toBe(screen.getByTestId('idea-panel'));
+
+      await userEvent.keyboard('r');
+      expect(screen.getByRole('heading', { name: 'Requirements of Power-seeking' })).toBeTruthy();
+      await userEvent.keyboard('{Escape}q');
+      expect(screen.getByTestId('question-form')).toBeTruthy();
+      expect(document.activeElement).toBe(screen.getByLabelText('Question'));
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByTestId('question-form')).toBeNull();
+
+      await userEvent.keyboard('{Delete}');
+      const confirm = within(screen.getByTestId('idea-confirm'));
+      expect(document.activeElement).toBe(confirm.getByRole('button', { name: 'Delete concept' }));
+      // A letter does nothing while the step is open; Escape cancels it only
+      await userEvent.keyboard('e{Escape}');
+      expect(screen.queryByTestId('idea-confirm')).toBeNull();
+      expect(screen.queryByTestId('idea-form')).toBeNull();
+      expect(document.activeElement).toBe(screen.getByTestId('idea-panel'));
+
+      await userEvent.keyboard('{Delete}{Enter}');
+      await waitFor(() => expect(screen.getByTestId('idea-notice').textContent).toBe('Deleted "Power-seeking".'));
+      expect(map.deleteIdea).toHaveBeenCalledWith('power-seeking');
+      expect(document.activeElement).toBe(find());
+    });
+
+    it('has no letter keys in the panel of a link that cannot edit', async () => {
+      renderPage('view');
+      box('Power-seeking').focus();
+      await userEvent.keyboard('{Enter}e{Delete}');
+      expect(screen.queryByTestId('idea-form')).toBeNull();
+      expect(screen.queryByTestId('idea-confirm')).toBeNull();
+      expect(panelOf('Power-seeking')).toBeTruthy();
+    });
+
+    it('gives the focus back to the button that asked when a delete is cancelled', async () => {
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      const remove = screen.getByRole('button', { name: 'Delete' });
+      await userEvent.click(remove);
+      await userEvent.click(within(screen.getByTestId('idea-confirm')).getByRole('button', { name: 'Cancel' }));
+      expect(document.activeElement).toBe(remove);
+    });
+
+    it('fills a choice question without the mouse: Enter after the last option adds the next, Ctrl+Enter adds the question', async () => {
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      await userEvent.click(screen.getByRole('button', { name: 'Add question' }));
+      const form = within(screen.getByTestId('question-form'));
+      await userEvent.click(form.getByRole('button', { name: 'Choice' }));
+      await userEvent.type(form.getByLabelText('Question'), 'Which one?');
+      await userEvent.type(form.getByLabelText('Option 1'), 'First{Enter}');
+      expect(document.activeElement).toBe(form.getByLabelText('Option 2'));
+      await userEvent.keyboard('Second{Enter}');
+      expect(document.activeElement).toBe(form.getByLabelText('Option 3'));
+      expect(map.addQuestion).not.toHaveBeenCalled();
+      await userEvent.keyboard('Third');
+      await userEvent.click(form.getByLabelText('Option 1 is a right answer'));
+      await userEvent.type(form.getByLabelText('Explanation'), `Because.${ctrlEnter}`);
+      await waitFor(() => expect(screen.queryByTestId('question-form')).toBeNull());
+      expect(vi.mocked(map.addQuestion).mock.calls[0][1]).toMatchObject({
+        type: 'Choice',
+        content: 'Which one?',
+        options: [{ text: 'First', correct: true }, { text: 'Second', correct: false }, { text: 'Third', correct: false }],
+        explanation: 'Because.',
+      });
+      expect(screen.getByTestId('idea-notice').textContent).toBe('Added the question to "Power-seeking".');
+      expect(document.activeElement).toBe(screen.getByTestId('idea-panel'));
+    });
+
+    it('says why a click on a concept does nothing while a question is written', async () => {
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      await userEvent.click(screen.getByRole('button', { name: 'Add question' }));
+      await userEvent.type(screen.getByLabelText('Question'), 'Why?');
+      await userEvent.click(box('Corrigibility'));
+      expect(screen.getByTestId('idea-notice').textContent).toBe('Save or cancel the question first.');
+      expect((screen.getByLabelText('Question') as HTMLTextAreaElement).value).toBe('Why?');
+      expect(screen.getByRole('button', { name: 'Add concept' }).title).toBe('Save or cancel the question first.');
+    });
+
+    it('says what was saved', async () => {
+      renderPage();
+      await userEvent.click(box('Corrigibility'));
+      await userEvent.click(screen.getByRole('button', { name: 'Edit requirements' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Save requirements' }));
+      await waitFor(() => expect(screen.getByTestId('idea-notice').textContent).toBe('Saved the requirements of "Corrigibility".'));
+      expect(document.activeElement).toBe(screen.getByTestId('idea-panel'));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      const name = screen.getByLabelText('Name');
+      await userEvent.clear(name);
+      await userEvent.type(name, 'Corrigible agents');
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(screen.getByTestId('idea-notice').textContent).toBe('Saved "Corrigible agents" (renamed from "Corrigibility").'));
+    });
+  });
 });

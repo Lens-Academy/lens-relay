@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { sortIdeas, type IdeaSortColumn } from '../../lib/idea-map';
-import { PRIORITY_LABEL, PRIORITY_LOOK, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
+import { arrowFocus } from './ideaKeys';
+import { PRIORITY_LABEL, PRIORITY_LOOK, pickByEnter, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
 
 const COLUMNS: Array<{ id: IdeaSortColumn; label: string; title?: string; number?: boolean }> = [
   { id: 'name', label: 'Name' },
@@ -13,7 +14,8 @@ const COLUMNS: Array<{ id: IdeaSortColumn; label: string; title?: string; number
   { id: 'problems', label: 'Problems' },
 ];
 
-/** The "what is still missing" view: one row per idea, sortable. */
+/** The "what is still missing" view: one row per idea, sortable. Arrow up and
+ *  down move the focus from name to name. */
 export function IdeaTableView({ graph, selected, chosen, marks, matches, onPick, onChoose }: IdeaViewProps) {
   const [sort, setSort] = useState<{ column: IdeaSortColumn; descending: boolean }>({ column: 'name', descending: false });
   const rows = useMemo(() => {
@@ -102,7 +104,7 @@ export function IdeaTableView({ graph, selected, chosen, marks, matches, onPick,
             })}
           </tr>
         </thead>
-        <tbody>
+        <tbody onKeyDown={arrowFocus}>
           {rows.map((node) => {
             const word = pickWord(marks, node.key);
             const inSet = chosen.has(node.key);
@@ -129,7 +131,12 @@ export function IdeaTableView({ graph, selected, chosen, marks, matches, onPick,
                   </td>
                 )}
                 <td className="max-w-72 px-3 py-1.5">
-                  <button type="button" className={`text-left font-medium ${node.written ? 'text-gray-800' : 'text-gray-500 italic'}`}>
+                  <button
+                    type="button"
+                    data-key={node.key}
+                    className={`text-left font-medium ${node.written ? 'text-gray-800' : 'text-gray-500 italic'}`}
+                    onKeyDown={(e) => pickByEnter(e, (keys) => onPick(node.key, keys))}
+                  >
                     {node.name}
                   </button>
                   {word && <span className="ml-1.5 rounded bg-indigo-600 px-1 py-px text-[10px] font-medium text-white">{word}</span>}

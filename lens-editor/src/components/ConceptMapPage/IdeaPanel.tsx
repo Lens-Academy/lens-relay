@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { questionAsNew, type IdeaGraph, type IdeaNode } from '../../lib/idea-map';
 import { DocLink } from '../DocLink';
 import { Confirm } from './Confirm';
@@ -17,11 +17,17 @@ function Part({ title, children }: { title: string; children: ReactNode }) {
 
 const NONE = <p className="text-sm text-gray-400">None</p>;
 
+/** What hovering a button says about its key. */
+const keyTitle = (key: string) => `Key: ${key} (while this panel has the focus)`;
+
 /**
  * The side panel of one idea: what its file says, and what needs it. With
  * edit rights also the ways to change it: edit or delete the idea, and add,
  * edit or delete a question. The page gives it a `key` per idea, so a
  * question asked about one idea never stays open on the next.
+ *
+ * The page puts the focus on the panel when it was opened with the keyboard;
+ * while the focus is in it, E, R, Q, C and Delete press its buttons.
  */
 export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect, onClose, onCreate, onEdit, onDelete, onEditRequirements, onAddQuestion, onEditQuestion, onDeleteQuestion }: {
   node: IdeaNode;
@@ -51,6 +57,7 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
   const [confirm, setConfirm] = useState<'idea' | number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const panel = useRef<HTMLElement>(null);
   const ask = (what: 'idea' | number | null) => {
     setConfirm(what);
     setError(null);
@@ -61,7 +68,11 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
     const failed = await action();
     setBusy(false);
     if (failed) setError(failed);
-    else setConfirm(null);
+    else {
+      setConfirm(null);
+      // The button that asked may be gone with what was deleted
+      panel.current?.focus();
+    }
   };
   const namesOf = (keys: string[]) => keys.map((key) => graph.byKey.get(key)?.name ?? key);
 
@@ -83,8 +94,31 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
   ));
   const idea = node.idea;
 
+  /** The letter keys of the buttons, while the focus is in the panel. */
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    if (!canEdit || confirm !== null || busy || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const action = key === 'e' && idea ? onEdit
+      : key === 'r' && idea ? onEditRequirements
+      : key === 'q' && idea ? onAddQuestion
+      : key === 'c' && !node.written ? onCreate
+      : key === 'Delete' && (node.docId || !node.written) ? () => ask('idea')
+      : null;
+    if (!action) return;
+    e.preventDefault();
+    action();
+  };
+
   return (
-    <aside className="flex h-full flex-col" aria-label={`Concept: ${node.name}`} data-testid="idea-panel">
+    <aside
+      ref={panel}
+      tabIndex={-1}
+      className="flex h-full flex-col outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--color-blue-200)]"
+      aria-label={`Concept: ${node.name}`}
+      data-testid="idea-panel"
+      onKeyDown={onKeyDown}
+    >
       <div className="flex items-start gap-2 border-b border-gray-200 px-4 py-3">
         <div className="min-w-0 flex-1">
           <h2 className="break-words text-base font-semibold text-gray-800">{node.name}</h2>
@@ -94,7 +128,7 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
             <span>Step {node.step}</span>
           </div>
         </div>
-        <button type="button" className="lens-icon-button" onClick={onClose} aria-label="Close" title="Close">
+        <button type="button" className="lens-icon-button" onClick={onClose} aria-label="Close" title="Close (Escape)">
           <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
             <path d="M6 6l12 12M18 6 6 18" />
           </svg>
@@ -112,11 +146,11 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
         {(node.written || canEdit) && (
           <div className="mt-3 flex flex-wrap gap-2">
             {node.docId && <DocLink docId={node.docId} className={BUTTON}>Open file</DocLink>}
-            {canEdit && idea && <button type="button" className={BUTTON} onClick={onEdit}>Edit</button>}
-            {canEdit && idea && <button type="button" className={BUTTON} onClick={onEditRequirements}>Edit requirements</button>}
-            {canEdit && node.docId && <button type="button" className={BUTTON} onClick={() => ask('idea')}>Delete</button>}
-            {canEdit && !node.written && <button type="button" className={PRIMARY_BUTTON} onClick={onCreate}>Create this concept</button>}
-            {canEdit && !node.written && <button type="button" className={BUTTON} onClick={() => ask('idea')}>Remove links</button>}
+            {canEdit && idea && <button type="button" className={BUTTON} onClick={onEdit} title={keyTitle('E')}>Edit</button>}
+            {canEdit && idea && <button type="button" className={BUTTON} onClick={onEditRequirements} title={keyTitle('R')}>Edit requirements</button>}
+            {canEdit && node.docId && <button type="button" className={BUTTON} onClick={() => ask('idea')} title={keyTitle('Delete')}>Delete</button>}
+            {canEdit && !node.written && <button type="button" className={PRIMARY_BUTTON} onClick={onCreate} title={keyTitle('C')}>Create this concept</button>}
+            {canEdit && !node.written && <button type="button" className={BUTTON} onClick={() => ask('idea')} title={keyTitle('Delete')}>Remove links</button>}
           </div>
         )}
         {confirm === 'idea' && !node.written && (
@@ -212,7 +246,7 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
                   })}
                 </ol>
               )}
-              {canEdit && <button type="button" className={`${BUTTON} mt-2`} onClick={onAddQuestion}>Add question</button>}
+              {canEdit && <button type="button" className={`${BUTTON} mt-2`} onClick={onAddQuestion} title={keyTitle('Q')}>Add question</button>}
             </Part>
             {node.problems.length > 0 && (
               <Part title="Problems">

@@ -1,4 +1,5 @@
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { flushSync } from 'react-dom';
 import {
   MAX_OPTIONS,
   MIN_OPTIONS,
@@ -8,6 +9,7 @@ import {
   type QuestionField,
 } from '../../lib/idea-map';
 import { GrowingTextarea } from './GrowingTextarea';
+import { LEAVE_NOTE, saveKeys, useFormKeys } from './formKeys';
 import { BUTTON, PRIMARY_BUTTON } from './ideaLook';
 
 const LABEL = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400';
@@ -37,6 +39,10 @@ const START_SETTINGS: Record<QuestionType, QuestionField[]> = { Open: [], Choice
  * both, or a choice question), or an existing one of these two types with
  * every field it has (`initial`, "Edit question"; its type cannot change).
  * Fields without a box of their own are listed under "More settings".
+ *
+ * By keyboard: the focus starts in the question; Enter in an option goes to
+ * the next one (and adds one after the last); Ctrl/Cmd+Enter saves; Escape
+ * closes (asking once when something is not saved).
  */
 export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
   ideaName: string;
@@ -65,12 +71,23 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
   const [nextKey, setNextKey] = useState(100);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // What the form opened with: Escape asks before it discards anything else
+  const now = JSON.stringify([type, content, assessment, feedback, options, explanation, settings]);
+  const [start] = useState(now);
+  const { onKeyDown, leaving } = useFormKeys({ dirty: now !== start, busy, onCancel });
 
   const setOption = (key: number, change: Partial<Option>) => {
     setOptions((all) => all.map((option) => (option.key === key ? { ...option, ...change } : option)));
   };
+  // A row that is added (an option, a setting) is typed next: its first box takes the focus
+  const rows = useRef<HTMLDivElement>(null);
+  const [added, setAdded] = useState<number | null>(null);
+  useEffect(() => {
+    if (added !== null) rows.current?.querySelector<HTMLElement>(`[data-row="${added}"] :is(input:not([type="checkbox"]), textarea)`)?.focus();
+  }, [added]);
   const addOption = () => {
     setOptions((all) => [...all, { key: nextKey, text: '', correct: false }]);
+    setAdded(nextKey);
     setNextKey(nextKey + 1);
   };
   const shown = settings[type];
@@ -83,6 +100,7 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
   };
   const addSetting = () => {
     changeSettings((all) => [...all, { key: nextKey, name: '', value: '', fresh: true }]);
+    setAdded(nextKey);
     setNextKey(nextKey + 1);
   };
   const hintFor = (name: string) => QUESTION_SETTINGS[type].find((known) => known.name === name.trim())?.hint;
@@ -120,6 +138,7 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
     <form
       className="flex h-full flex-col"
       onSubmit={submit}
+      onKeyDown={onKeyDown}
       // What it said is about the form as it was
       onChange={() => setError(null)}
       aria-label={title}
@@ -129,7 +148,7 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
         <h2 className="text-base font-semibold text-gray-800">{title}</h2>
         <p className="mt-0.5 break-words text-xs text-gray-500">{editing ? 'of' : 'to'} {ideaName}</p>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+      <div ref={rows} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
         <div className="mt-4">
           <span id="question-type" className={LABEL}>Type</span>
           {editing ? (
@@ -152,7 +171,7 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
         </div>
         <div className="mt-4">
           <label htmlFor="question-content" className={LABEL}>Question</label>
-          <GrowingTextarea id="question-content" className="lens-input w-full" rows={3} autoFocus={!editing} value={content} onChange={(e) => setContent(e.target.value)} />
+          <GrowingTextarea id="question-content" className="lens-input w-full" rows={3} autoFocus value={content} onChange={(e) => setContent(e.target.value)} />
         </div>
 
         {type === 'Open' ? (
@@ -189,7 +208,7 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
               <legend className={LABEL}>Options</legend>
               <ul className="space-y-2">
                 {options.map((option, index) => (
-                  <li key={option.key} data-option={index + 1}>
+                  <li key={option.key} data-option={index + 1} data-row={option.key}>
                     <input
                       className="lens-input w-full"
                       aria-label={`Option ${index + 1}`}
@@ -197,6 +216,15 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
                       autoComplete="off"
                       value={option.text}
                       onChange={(e) => setOption(option.key, { text: e.target.value })}
+                      onKeyDown={(e) => {
+                        // Enter after the last option: the next one (else Enter goes to the next field)
+                        const last = index === options.length - 1;
+                        if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing || !last) return;
+                        if (!option.text.trim() || options.length >= MAX_OPTIONS) return;
+                        e.preventDefault();
+                        // Drawn before the key is over: the next letter typed is in the new option
+                        flushSync(addOption);
+                      }}
                     />
                     <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
                       <label className="flex items-center gap-1.5">
@@ -254,7 +282,7 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
               const label = setting.name.trim() || 'new setting';
               const hint = hintFor(setting.name);
               return (
-                <li key={setting.key} data-setting={setting.name.trim()}>
+                <li key={setting.key} data-setting={setting.name.trim()} data-row={setting.key}>
                   <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
                     {setting.fresh ? (
                       <input
@@ -303,9 +331,10 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
           <p className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">{error}</p>
         )}
       </div>
-      <div className="flex justify-end gap-2 border-t border-gray-200 px-4 py-3">
-        <button type="button" className={BUTTON} onClick={onCancel} disabled={busy}>Cancel</button>
-        <button type="submit" className={PRIMARY_BUTTON} disabled={busy}>
+      <div className="flex items-center justify-end gap-2 border-t border-gray-200 px-4 py-3">
+        {leaving && <p className="mr-auto text-xs text-amber-700" role="status" data-testid="form-leave-note">{LEAVE_NOTE}</p>}
+        <button type="button" className={BUTTON} onClick={onCancel} disabled={busy} title="Escape">Cancel</button>
+        <button type="submit" className={PRIMARY_BUTTON} disabled={busy} title={saveKeys()}>
           {editing ? (busy ? 'Saving…' : 'Save') : (busy ? 'Adding…' : 'Add question')}
         </button>
       </div>

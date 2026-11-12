@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { wrappedLines, type MapEdge, type MapSizes } from '../../lib/idea-map-layout';
 import { layoutFor } from '../../lib/idea-map-layouts';
 import { ChosenTick } from './ChosenTick';
 import { MapFrames, MapLayoutSwitch } from './MapLayoutSwitch';
+import { arrowFocus } from './ideaKeys';
+import { BUTTON, CHOSEN_LOOK, PRIORITY_LABEL, PRIORITY_LOOK, UNWRITTEN_LOOK, ideaLook, ideaTitle, pickByEnter, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
 import { useMapLayoutChoice } from './useMapLayoutChoice';
-import { BUTTON, CHOSEN_LOOK, PRIORITY_LABEL, PRIORITY_LOOK, UNWRITTEN_LOOK, ideaLook, ideaTitle, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
 
 // Every box is as wide as the others and as tall as its name needs: a long
 // name wraps onto more lines. Columns stand close enough that 150 ideas
@@ -24,6 +25,18 @@ const LETTERS_PER_LINE = 24;
 
 /** The height a box is given before it is measured. */
 const guessedHeight = (name: string) => Math.max(NODE_H, wrappedLines(name, LETTERS_PER_LINE) * LINE_H + 10);
+
+/** The room a box that took the focus keeps to the edge of the frame. */
+const FOCUS_EDGE = 24;
+
+/** The focus came by the keyboard, not by a press of the pointer. */
+function focusByKeys(el: Element): boolean {
+  try {
+    return el.matches(':focus-visible');
+  } catch {
+    return false;
+  }
+}
 
 interface View { x: number; y: number; k: number }
 const clampZoom = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
@@ -65,7 +78,8 @@ function centred(view: View, el: HTMLElement, width: number, height: number): Vi
 /**
  * The drawn map: ideas in columns from left (what comes first) to right, a
  * solid arrow for "requires" and a dashed one for "helpful first". Drag to
- * move, wheel or the buttons to zoom.
+ * move, wheel or the buttons to zoom. The arrow keys move the focus from idea
+ * to idea; the map follows it.
  */
 export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick }: IdeaViewProps) {
   const edges = useMemo<MapEdge[]>(() => graph.nodes.flatMap((node) => [
@@ -221,6 +235,23 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
     drag.current = null;
   };
 
+  // A box that takes the focus by the keyboard (arrow keys, Tab) outside the
+  // frame, or half under its edge, comes into view. A click moves nothing
+  // under the pointer.
+  const followFocus = (e: ReactFocusEvent<HTMLDivElement>) => {
+    const box = e.target.closest<HTMLElement>('[data-key]');
+    if (!box || !focusByKeys(box)) return;
+    const inside = e.currentTarget.getBoundingClientRect();
+    // Not laid out: nowhere to bring it
+    if (!inside.width || !inside.height) return;
+    const at = box.getBoundingClientRect();
+    const dx = at.left < inside.left + FOCUS_EDGE ? inside.left + FOCUS_EDGE - at.left
+      : at.right > inside.right - FOCUS_EDGE ? inside.right - FOCUS_EDGE - at.right : 0;
+    const dy = at.top < inside.top + FOCUS_EDGE ? inside.top + FOCUS_EDGE - at.top
+      : at.bottom > inside.bottom - FOCUS_EDGE ? inside.bottom - FOCUS_EDGE - at.bottom : 0;
+    if (dx || dy) setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
+  };
+
   const near = useMemo(() => {
     // Drawn around the selected one, the map is its neighbourhood already: nothing is dimmed
     const node = selected && around === null ? graph.byKey.get(selected) : undefined;
@@ -239,6 +270,18 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
       onPointerMove={onPointerMove}
       onPointerUp={onPointerEnd}
       onPointerCancel={onPointerEnd}
+      onKeyDown={arrowFocus}
+      onFocus={followFocus}
+      onScroll={(e) => {
+        // The browser scrolls the frame under a box that takes the focus
+        // beyond its right or lower edge: the map moves by that much instead
+        const el = e.currentTarget;
+        const { scrollLeft, scrollTop } = el;
+        if (!scrollLeft && !scrollTop) return;
+        el.scrollLeft = 0;
+        el.scrollTop = 0;
+        setView((v) => ({ ...v, x: v.x - scrollLeft, y: v.y - scrollTop }));
+      }}
       onClickCapture={(e) => {
         if (!swallowClick.current) return;
         swallowClick.current = false;
@@ -292,6 +335,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
               aria-pressed={marks ? word !== null : inSet || node.key === selected}
               title={ideaTitle(node)}
               onClick={(e) => onPick(node.key, pickKeys(e))}
+              onKeyDown={(e) => pickByEnter(e, (keys) => onPick(node.key, keys))}
               onPointerEnter={() => setHovered(node.key)}
               onPointerLeave={() => setHovered(null)}
               className={`absolute flex items-center rounded border px-2 py-1 text-left text-xs leading-[14px] hover:brightness-95 ${ideaLook(node)} ${ring} ${inSet ? CHOSEN_LOOK : ''} ${dimmed(node.key) && !inSet ? 'opacity-30' : ''}`}

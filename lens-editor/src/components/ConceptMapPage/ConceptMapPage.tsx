@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -15,6 +15,7 @@ import {
   type Picks,
 } from '../../lib/idea-map';
 import { PathExistsError } from '../../lib/relay-api';
+import { FindBox } from './FindBox';
 import { IdeaForm, type FormMode, type IdeaFields } from './IdeaForm';
 import { IdeaMapDrawing } from './IdeaMapDrawing';
 import { IdeaOrderView } from './IdeaOrderView';
@@ -35,6 +36,18 @@ type ViewId = (typeof VIEWS)[number]['id'];
 
 const NO_PICKS: IdeaLinks = { requires: [], helpful: [], neededFor: [], helpfulFor: [] };
 
+/** How long the line that says what was just done stays. */
+const NOTICE_MS = 6000;
+/** How long the focus waits for what it is to go to (a panel that opens). */
+const FOCUS_WAIT_MS = 1500;
+const QUESTION_OPEN = 'Save or cancel the question first.';
+
+/** What was just done ("Saved …"), or why a click did nothing. */
+interface Notice { text: string; kind: 'done' | 'note' }
+
+/** Where the focus goes next: the side panel, an idea in the view, or the search box. */
+type FocusTarget = { to: 'panel' } | { to: 'idea'; key: string } | { to: 'find' };
+
 /**
  * The creator's concept map of the Context Accelerator (/concept-map): the
  * idea files of `Lens Edu/Context Accelerator LOs/` as a graph, read live,
@@ -42,6 +55,12 @@ const NO_PICKS: IdeaLinks = { requires: [], helpful: [], neededFor: [], helpfulF
  * rename and delete ideas and add, edit and delete their questions from it,
  * and select several ideas to delete (or, where the hook has profiles, copy
  * into another profile) together.
+ *
+ * All of it works from the keyboard: "/" goes to the search box, whose list
+ * opens a concept with Enter; the arrow keys move between the concepts of a
+ * view; the focus follows into the panel or form that opens and comes back
+ * when it closes (Escape); what was saved or deleted is said in a line over
+ * the views.
  */
 export function ConceptMapPage() {
   const [params, setParams] = useSearchParams();
@@ -95,6 +114,24 @@ function ConceptMap({ folder, onFolder, view, onView }: {
   const [questionFor, setQuestionFor] = useState<{ key: string; edit?: { index: number; before: IdeaQuestion } } | null>(null);
   /** The ideas selected to act on together (Ctrl/Cmd/Shift-click, the boxes of the table). */
   const [chosen, setChosen] = useState<readonly string[]>([]);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const say = useCallback((text: string, kind: Notice['kind'] = 'done') => setNotice({ text, kind }), []);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  // The focus follows what the keyboard opened and comes back when it closes.
+  // What it is to go to may only be drawn a moment later (a panel of an idea
+  // just created), so it is looked for after every drawing until it is there.
+  const page = useRef<HTMLDivElement>(null);
+  const findBox = useRef<HTMLInputElement>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const focusNext = useRef<(FocusTarget & { until: number }) | null>(null);
+  const focusOn = useCallback((target: FocusTarget) => {
+    focusNext.current = { ...target, until: Date.now() + FOCUS_WAIT_MS };
+  }, []);
 
   // The views wait until every file is read once, so the map is not laid out
   // again for each file that arrives; later additions just appear.
@@ -112,6 +149,43 @@ function ConceptMap({ folder, onFolder, view, onView }: {
     setLoaded(false);
   }
   if (!loaded && map.ready && map.total > 0 && map.read === map.total) setLoaded(true);
+
+  useEffect(() => {
+    const want = focusNext.current;
+    const root = page.current;
+    if (!want || !root) return;
+    const done = (el: HTMLElement | null | undefined) => {
+      focusNext.current = null;
+      el?.focus();
+    };
+    if (Date.now() > want.until) {
+      focusNext.current = null;
+    } else if (want.to === 'find') {
+      done(findBox.current);
+    } else if (want.to === 'panel') {
+      const panel = root.querySelector<HTMLElement>('[data-testid="idea-panel"]');
+      if (panel) done(panel);
+      // No panel to come: back to the button the form was opened with
+      else if (selected === null && !mode && !questionFor) done(addButton.current ?? findBox.current);
+    } else {
+      const idea = [...root.querySelectorAll<HTMLElement>('[data-key]')].find((el) => el.dataset.key === want.key);
+      done(idea ?? findBox.current);
+    }
+  });
+
+  // "/" goes to the search box, from anywhere but a field
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (!findBox.current) return;
+      e.preventDefault();
+      findBox.current.focus();
+      findBox.current.select();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const matches = useMemo(() => {
     const wanted = find.trim().toLowerCase();
@@ -168,10 +242,16 @@ function ConceptMap({ folder, onFolder, view, onView }: {
    */
   const onPick = (key: string, keys: PickKeys) => {
     // The question form belongs to one idea: a click elsewhere must not lose what is typed
-    if (questionFor) return;
+    if (questionFor) {
+      say(QUESTION_OPEN, 'note');
+      return;
+    }
     if (!mode) {
       if (keys.toggle && choosing) choose([key], !chosenSet.has(key));
-      else setSelected(key);
+      else {
+        setSelected(key);
+        if (keys.byKey) focusOn({ to: 'panel' });
+      }
       return;
     }
     const node = graph.byKey.get(key);
@@ -186,6 +266,16 @@ function ConceptMap({ folder, onFolder, view, onView }: {
     setPicks((current) => togglePick(current, node.name, list));
   };
 
+  /** Enter in the search box, or a click on a row of its list: as a click on that idea. */
+  const onFind = (key: string, keys: PickKeys) => {
+    const several = !mode && !questionFor && keys.toggle && choosing;
+    onPick(key, { ...keys, byKey: false });
+    if (questionFor || several) return;
+    // The next one can be typed at once; an opened idea is seen among the others
+    setFind('');
+    if (!mode) focusOn({ to: 'panel' });
+  };
+
   // Escape: first the selection of several, then the panel. (A menu, a
   // confirm step or the list of a pick box that is open takes it before.)
   const escape = choosing ? (chosenKeys.length > 0 ? 'selection' : selected !== null ? 'panel' : null) : null;
@@ -194,11 +284,14 @@ function ConceptMap({ folder, onFolder, view, onView }: {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       if (escape === 'selection') setChosen([]);
-      else setSelected(null);
+      else {
+        if (selected !== null) focusOn({ to: 'idea', key: selected });
+        setSelected(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [escape]);
+  }, [escape, selected, focusOn]);
 
   const submit = async (fields: IdeaFields | null): Promise<string | null> => {
     if (!mode) return null;
@@ -208,12 +301,14 @@ function ConceptMap({ folder, onFolder, view, onView }: {
         const failed = await map.saveRequirements(mode.key, two(before), two(picks));
         if (failed) return failed;
         setSelected(mode.key);
+        say(`Saved the requirements of "${graph.byKey.get(mode.key)?.name ?? mode.key}".`);
       } else if (mode.kind === 'edit') {
         if (!fields || !editBefore) return null;
         const failed = await map.editIdea(mode.key, editBefore, { ...fields, ...picks });
         if (failed) return failed;
         // A renamed idea is on the map under its new name
         setSelected(ideaKey(fields.name));
+        say(fields.name === editBefore.name ? `Saved "${fields.name}".` : `Saved "${fields.name}" (renamed from "${editBefore.name}").`);
       } else if (fields) {
         // An idea is never its own requirement
         const own = ideaKey(fields.name);
@@ -226,12 +321,14 @@ function ConceptMap({ folder, onFolder, view, onView }: {
           helpfulFor: others(picks.helpfulFor),
         });
         setSelected(own);
+        say(`Created "${fields.name}".`);
       }
     } catch (error) {
       if (error instanceof PathExistsError) return 'A file with this name already exists.';
       return error instanceof Error ? error.message : String(error);
     }
     setMode(null);
+    focusOn({ to: 'panel' });
     return null;
   };
 
@@ -251,7 +348,7 @@ function ConceptMap({ folder, onFolder, view, onView }: {
   };
 
   return (
-    <div className="flex h-full flex-col" data-testid="concept-map-page">
+    <div ref={page} className="flex h-full flex-col" data-testid="concept-map-page">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-200 px-6 py-3">
         <h1 className="text-xl font-semibold text-gray-800">Concept map</h1>
         {map.profiles && <ProfileSwitcher profiles={map.profiles} count={map.ready && map.read === map.total ? written : null} />}
@@ -275,25 +372,29 @@ function ConceptMap({ folder, onFolder, view, onView }: {
             </button>
           ))}
         </div>
-        <input
-          type="search"
-          className="lens-input w-44"
-          placeholder="Find a concept"
-          aria-label="Find a concept"
-          value={find}
-          onChange={(e) => setFind(e.target.value)}
-        />
+        <FindBox graph={graph} value={find} onChange={setFind} onGo={onFind} box={findBox} />
         {loaded && (
+          // While something is searched only that count: the header keeps its one line
           <span className="text-xs text-gray-500" data-testid="idea-counts">
-            {written} {written === 1 ? 'concept' : 'concepts'}
-            {unwritten > 0 && ` · ${unwritten} not written yet`}
-            {matches && ` · ${matches.size} found`}
+            {matches ? `${matches.size} found` : (
+              <>
+                {written} {written === 1 ? 'concept' : 'concepts'}
+                {unwritten > 0 && ` · ${unwritten} not written yet`}
+              </>
+            )}
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
           <button type="button" className={BUTTON} onClick={map.refresh} title="Read every file again">Refresh</button>
           {canEdit && (
-            <button type="button" className={PRIMARY_BUTTON} disabled={!map.ready || questionFor !== null} onClick={() => openForm({ kind: 'add', name: '' })}>
+            <button
+              ref={addButton}
+              type="button"
+              className={PRIMARY_BUTTON}
+              disabled={!map.ready || questionFor !== null}
+              title={questionFor ? QUESTION_OPEN : undefined}
+              onClick={() => openForm({ kind: 'add', name: '' })}
+            >
               Add concept
             </button>
           )}
@@ -320,13 +421,26 @@ function ConceptMap({ folder, onFolder, view, onView }: {
           onDelete={async (keys) => {
             const failed = await map.deleteIdeas(keys);
             // Stopped half way: what is gone leaves the selection by itself
-            if (!failed) setChosen([]);
+            if (!failed) {
+              setChosen([]);
+              say(`Deleted ${keys.length === 1 ? '1 concept' : `${keys.length} concepts`}.`);
+              focusOn({ to: 'find' });
+            }
             return failed;
           }}
         />
       )}
 
       <div className="relative flex min-h-0 flex-1">
+        {notice && (
+          <p
+            className={`pointer-events-none absolute left-1/2 top-3 z-30 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded border px-3 py-1.5 text-sm shadow ${notice.kind === 'done' ? 'border-green-200 bg-green-50 text-green-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}
+            role="status"
+            data-testid="idea-notice"
+          >
+            {notice.text}
+          </p>
+        )}
         <div className="min-w-0 flex-1" key={profile}>
           {!map.ready ? (
             <p className="px-6 py-6 text-sm text-gray-500">Loading…</p>
@@ -351,12 +465,19 @@ function ConceptMap({ folder, onFolder, view, onView }: {
                 key={`${questionNode.key}:${questionEdit ? questionEdit.index : 'new'}`}
                 ideaName={questionNode.name}
                 initial={questionEdit ? questionAsNew(questionEdit.before) ?? undefined : undefined}
-                onCancel={() => setQuestionFor(null)}
+                onCancel={() => {
+                  setQuestionFor(null);
+                  focusOn({ to: 'panel' });
+                }}
                 onSubmit={async (question) => {
                   const failed = questionEdit
                     ? await map.editQuestion(questionNode.key, questionEdit.index, questionEdit.before, question)
                     : await map.addQuestion(questionNode.key, question);
-                  if (!failed) setQuestionFor(null);
+                  if (!failed) {
+                    setQuestionFor(null);
+                    say(questionEdit ? `Saved question ${questionEdit.index + 1} of "${questionNode.name}".` : `Added the question to "${questionNode.name}".`);
+                    focusOn({ to: 'panel' });
+                  }
                   return failed;
                 }}
               />
@@ -379,7 +500,10 @@ function ConceptMap({ folder, onFolder, view, onView }: {
                   setPickNote(null);
                 }}
                 note={pickNote}
-                onCancel={() => setMode(null)}
+                onCancel={() => {
+                  setMode(null);
+                  focusOn({ to: 'panel' });
+                }}
                 onSubmit={submit}
               />
             ) : selectedNode && (
@@ -390,15 +514,26 @@ function ConceptMap({ folder, onFolder, view, onView }: {
                 lensDoc={map.lensDoc}
                 canEdit={canEdit}
                 deleteNote={map.deleteNote}
-                onSelect={setSelected}
-                onClose={() => setSelected(null)}
+                onSelect={(key) => {
+                  setSelected(key);
+                  // The name pressed goes with the panel it was in
+                  focusOn({ to: 'panel' });
+                }}
+                onClose={() => {
+                  setSelected(null);
+                  focusOn({ to: 'idea', key: selectedNode.key });
+                }}
                 onCreate={() => openForm({ kind: 'add', name: selectedNode.name })}
                 onEdit={() => editIdea(selectedNode.key)}
                 onDelete={async () => {
                   // One that is not written yet has no file: every link to it goes instead
                   const failed = selectedNode.docId ? await map.deleteIdea(selectedNode.key) : await map.deleteIdeas([selectedNode.key]);
                   // An idea other files still name stays on the map as "not written yet"
-                  if (!failed) setSelected(null);
+                  if (!failed) {
+                    setSelected(null);
+                    say(selectedNode.docId ? `Deleted "${selectedNode.name}".` : `Removed the links to "${selectedNode.name}".`);
+                    focusOn({ to: 'find' });
+                  }
                   return failed;
                 }}
                 onEditRequirements={() => editRequirements(selectedNode.key)}
@@ -409,7 +544,10 @@ function ConceptMap({ folder, onFolder, view, onView }: {
                 }}
                 onDeleteQuestion={async (index) => {
                   const before = selectedNode.idea?.questionList[index];
-                  return before ? map.deleteQuestion(selectedNode.key, index, before) : null;
+                  if (!before) return null;
+                  const failed = await map.deleteQuestion(selectedNode.key, index, before);
+                  if (!failed) say(`Deleted question ${index + 1} of "${selectedNode.name}".`);
+                  return failed;
                 }}
               />
             )}

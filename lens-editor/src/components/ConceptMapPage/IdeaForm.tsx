@@ -17,6 +17,7 @@ import {
 import { BUTTON, FIELD_LABEL, LIST_LABEL, PRIMARY_BUTTON, PRIORITY_LABEL, SHIFT_LIST, listed, type LinkList } from './ideaLook';
 import { GrowingTextarea } from './GrowingTextarea';
 import { PickList } from './PickList';
+import { LEAVE_NOTE, saveKeys, useFormKeys } from './formKeys';
 
 /** What the form is for: a new idea, every part of an existing one, or only
  *  the requirements of an existing one. */
@@ -50,6 +51,10 @@ const NO_DEPENDENTS: Dependents = { neededFor: [], helpfulFor: [] };
  * "Add concept" and "Edit concept" also have the other direction: "Needed
  * for" and "Helpful for", the ideas whose own Requires / Helpful first get
  * this one.
+ *
+ * By keyboard: the focus starts in the first field; Enter in the name moves
+ * on instead of saving; Ctrl/Cmd+Enter saves; Escape closes (asking once when
+ * something is not saved).
  */
 export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, before = NO_DEPENDENTS, clickList, onClickList, note, onCancel, onSubmit }: {
   mode: FormMode;
@@ -81,6 +86,13 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, befo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
+  // What the form opened with: Escape asks before it discards anything else
+  const [start] = useState(() => JSON.stringify([name, outcome, priority, why, courses, learn, picks]));
+  const { onKeyDown, leaving } = useFormKeys({
+    dirty: JSON.stringify([name, outcome, priority, why, courses, learn, picks]) !== start,
+    busy,
+    onCancel,
+  });
 
   const self = mode.kind === 'add' ? undefined : graph.byKey.get(mode.key);
   // The name the file has now; the form's own text until the map shows a rename
@@ -144,7 +156,7 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, befo
   };
 
   return (
-    <form className="flex h-full flex-col" onSubmit={submit} aria-label={TITLE[mode.kind]} data-testid="idea-form">
+    <form className="flex h-full flex-col" onSubmit={submit} onKeyDown={onKeyDown} aria-label={TITLE[mode.kind]} data-testid="idea-form">
       <div className="border-b border-gray-200 px-4 py-3">
         <h2 className="break-words text-base font-semibold text-gray-800">
           {mode.kind === 'requirements' ? `Requirements of ${ownName}` : TITLE[mode.kind]}
@@ -160,7 +172,7 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, befo
                 id="idea-name"
                 className="lens-input w-full"
                 value={name}
-                autoFocus={mode.kind === 'add'}
+                autoFocus
                 autoComplete="off"
                 aria-invalid={tried && nameProblem !== null}
                 aria-describedby="idea-name-note"
@@ -227,6 +239,7 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, befo
             graph={graph}
             ownNames={ownNames}
             clicksHere={clickList === list}
+            autoFocus={mode.kind === 'requirements' && list === 'requires'}
             footnote={footnotes[list]}
             onActivate={() => onClickList(list)}
             onToggle={(n) => onPicks(togglePick(picks, n, list))}
@@ -277,9 +290,10 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, befo
           <p className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">{error}</p>
         )}
       </div>
-      <div className="flex justify-end gap-2 border-t border-gray-200 px-4 py-3">
-        <button type="button" className={BUTTON} onClick={onCancel} disabled={busy}>Cancel</button>
-        <button type="submit" className={PRIMARY_BUTTON} disabled={busy}>
+      <div className="flex items-center justify-end gap-2 border-t border-gray-200 px-4 py-3">
+        {leaving && <p className="mr-auto text-xs text-amber-700" role="status" data-testid="form-leave-note">{LEAVE_NOTE}</p>}
+        <button type="button" className={BUTTON} onClick={onCancel} disabled={busy} title="Escape">Cancel</button>
+        <button type="submit" className={PRIMARY_BUTTON} disabled={busy} title={saveKeys()}>
           {mode.kind === 'add' ? (busy ? 'Creating…' : 'Create concept')
             : busy ? 'Saving…' : mode.kind === 'edit' ? 'Save' : 'Save requirements'}
         </button>
