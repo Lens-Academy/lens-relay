@@ -190,6 +190,29 @@ several options are right (the platform refuses them without it).
   the folder through `useSnapshots`, writes through `createDocument` and `withLiveDoc`). Everything but the hook
   imports only `contexts/AuthContext`, `lib/relay-api` (`PathExistsError`), `components/DocLink` and `lib/idea-map`,
   so the page can be built outside the editor with another `useIdeaMap`: keep it that way.
+- More that the page does (each in the files named):
+  - Requirement boxes (`PickList.tsx`) are keyboard comboboxes; a typed name no concept has can be added as a link
+    to a concept "not written yet" (`pickChoices` in the lib). The concept forms also have "Needed for" and "Helpful
+    for": saving writes the link into the other concept's file (`dependentEdits`), every check before the first write.
+  - A box of the map is as tall as its name needs (measured, then laid out again); every textarea of the forms is a
+    `GrowingTextarea`. The name of a concept stays a one-line field.
+  - Several concepts can be selected (Ctrl/Cmd/Shift-click, or a box per row in the Table) to delete at once
+    (`deleteIdeas`, `deletePlan`). `IdeaMap.profiles` is optional (a switcher of separate sets, "Copy to…"): the
+    editor's hook provides none, a standalone build can.
+  - The drawing: `src/lib/idea-map-layered.ts` (columns by dagre, square lines on tracks of their own) and
+    `src/lib/idea-map-layouts.ts` (the "Layout" / "Group by" choice: left to right, top to bottom, groups, around
+    one concept), chosen in `MapLayoutSwitch.tsx`, kept per browser by `useMapLayoutChoice.ts`. `mapView.ts` has
+    the view that shows the map whole (below the row of controls, `CONTROL_ROOM`); a map shown whole is fitted
+    again when its frame changes size, one moved or zoomed by hand is left alone.
+  - Keyboard (keep it working when you add a control; `describe('by keyboard')` in `ConceptMapPage.test.tsx`):
+    `FindBox.tsx` lists the matches under "Find a concept" (arrows, Enter opens or picks, Escape empties, "/" goes
+    to it). `ideaKeys.ts`: arrow keys move the focus between the `[data-key]` elements of a view (`nextBox`); the
+    map follows the focus. Enter on a concept opens it, Ctrl/Cmd+Enter and Shift+Enter do what those clicks do
+    (`pickByEnter`). `formKeys.ts` (`useFormKeys`, both forms): Escape closes (asks once when something changed),
+    Ctrl/Cmd+Enter saves from any field, Enter in a one-line field moves to the next field and never saves. The
+    panel has E, R, Q, C and Delete while it holds the focus. The page moves the focus itself (`focusOn`: into the
+    panel when a concept is opened by key and after a save or cancel, back to the concept when the panel closes,
+    to the search box after a delete) and says what it did in a notice (`say`, `data-testid="idea-notice"`).
 - Local data: the default seed (`scripts/setup-local-relay.mjs`) has the three real files. For a big set run
   `npx tsx scripts/seed-fake-ideas.ts --relay-url http://127.0.0.1:<relay port>` (150 made-up ideas in
   `Context Accelerator LOs (fake 150)`; `--count 12 --cycle` makes a small set with a circle), then pick the folder in
