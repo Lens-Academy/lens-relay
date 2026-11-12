@@ -331,7 +331,7 @@ export function useIdeaMap(folder: string = IDEAS_FOLDER): IdeaMap {
     addQuestion,
     editIdea,
     deleteIdea,
-    deleteNote: `The file moves to the trash (${IDEAS_SHARED_FOLDER}/_trash) and can be restored from there.`,
+    deleteNote: `The file moves to the trash (${IDEAS_SHARED_FOLDER}/_trash). It can be moved back from there until the relay empties the trash (after 10 days, unless it is set otherwise).`,
     editQuestion,
     deleteQuestion,
   };

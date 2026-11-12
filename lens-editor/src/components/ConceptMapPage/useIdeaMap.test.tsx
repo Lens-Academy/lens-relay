@@ -439,7 +439,7 @@ describe('useIdeaMap', () => {
       expect(await result.current.deleteIdea('power-seeking')).toBeNull();
       expect(vi.mocked(trashPath).mock.calls).toEqual([[PS]]);
       expect(text('ic')).toBeUndefined();
-      expect(result.current.deleteNote).toBe('The file moves to the trash (Lens Edu/_trash) and can be restored from there.');
+      expect(result.current.deleteNote).toBe('The file moves to the trash (Lens Edu/_trash). It can be moved back from there until the relay empties the trash (after 10 days, unless it is set otherwise).');
     });
 
     it('takes its links out of the ideas that list it, then deletes the file', async () => {
