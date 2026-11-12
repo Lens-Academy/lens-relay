@@ -1,0 +1,826 @@
+import { describe, expect, it } from 'vitest';
+import {
+  PENDING_QUESTIONS_ERROR,
+  applyChanges,
+  buildIdeaGraph,
+  ideaNameProblem,
+  mapColumns,
+  mergePicks,
+  newQuestionProblem,
+  parseIdea,
+  questionChanges,
+  renderIdeaFile,
+  renderQuestion,
+  requirementChanges,
+  requirementCircle,
+  sortIdeas,
+  togglePick,
+  type IdeaFile,
+  type NewQuestion,
+} from './idea-map';
+
+const INSTRUMENTAL = `---
+id: 066b5be7-626c-46bf-bdb1-d81f1544c098
+priority: high
+courses:
+  - "[[../courses/in-development/Context Accelerator]]"
+---
+Explain why agents with very different final goals would pursue the same sub-goals.
+
+## Requires
+
+## Helpful first
+- [[Orthogonality thesis]]
+
+## Why it matters
+It is the reason an AI does not need to hate us to be dangerous.
+
+## Learn
+- Start with [[../Lenses/AFSRA - Instrumental Convergence|Rob Miles's video on instrumental convergence]] (11 minutes).
+- [[../Lenses/IABIED - Instrumental Sub-Goal Convergence]]
+
+## Questions
+#### Question: Open
+id:: 44390f4c-7e48-445e-b564-1c9f205e2685
+content:: Would you expect it to resist being switched off? Why?
+assessment-instructions:: Score out of 100.
+
+#### Question: Choice
+id:: d655611e-d45f-4e7b-ba13-d7207a178f35
+content:: Which of these would you NOT expect?
+options::
+- Getting more computing power
+- [x] Making humans happy
+shuffle:: true
+`;
+
+const POWER = `---
+id: 1c37baa4-6a91-4fe3-9e26-16b739cb1962
+priority: high
+courses:
+  - "[[../courses/in-development/Context Accelerator]]"
+---
+Explain why an AI pursuing almost any goal would tend to seek power.
+
+## Requires
+- [[Instrumental convergence]]
+
+## Helpful first
+
+## Why it matters
+A mistake in that goal gets harder to fix the longer the AI runs.
+
+## Learn
+- [[../Lenses/When should we worry about AI power-seeking]]
+
+## Questions
+#### Question: Open
+id:: 74d8bbf1-d845-4834-8b5c-7a6759161af8
+content:: Why would it try to gain control?
+`;
+
+/** Frontmatter with nothing to warn about. */
+const FM = '---\nid: 00000000-0000-4000-8000-000000000000\npriority: medium\n---\n';
+
+/** A small idea file: `requires` and `helpful` are names. */
+function idea(requires: string[] = [], helpful: string[] = [], id = ''): string {
+  return [
+    '---',
+    `id: ${id || '00000000-0000-4000-8000-000000000000'}`,
+    'priority: medium',
+    '---',
+    'Explain something.',
+    '',
+    '## Requires',
+    ...requires.map((r) => `- [[${r}]]`),
+    '',
+    '## Helpful first',
+    ...helpful.map((r) => `- [[${r}]]`),
+    '',
+    '## Learn',
+    '- [[../Lenses/A lens]]',
+    '',
+    '## Questions',
+    '#### Question: Open',
+    'id:: 11111111-1111-4111-8111-111111111111',
+    'content:: A question.',
+    '',
+  ].join('\n');
+}
+
+let nextId = 0;
+function files(spec: Record<string, string>): IdeaFile[] {
+  return Object.entries(spec).map(([name, text]) => ({ name, docId: `doc-${name}`, text }));
+}
+/** Files from name → required names, each with its own id. */
+function ideas(spec: Record<string, string[]>): IdeaFile[] {
+  return files(Object.fromEntries(Object.entries(spec).map(([name, requires]) => {
+    const id = `00000000-0000-4000-8000-${String(++nextId).padStart(12, '0')}`;
+    return [name, idea(requires, [], id)];
+  })));
+}
+
+describe('parseIdea', () => {
+  it('reads the frontmatter, the outcome and every section', () => {
+    const parsed = parseIdea(INSTRUMENTAL);
+    expect(parsed.id).toBe('066b5be7-626c-46bf-bdb1-d81f1544c098');
+    expect(parsed.priority).toBe('high');
+    expect(parsed.courses).toEqual(['../courses/in-development/Context Accelerator']);
+    expect(parsed.outcome).toBe('Explain why agents with very different final goals would pursue the same sub-goals.');
+    expect(parsed.requires).toEqual([]);
+    expect(parsed.helpful).toEqual(['Orthogonality thesis']);
+    expect(parsed.why).toBe('It is the reason an AI does not need to hate us to be dangerous.');
+    expect(parsed.questions).toBe(2);
+    expect(parsed.bareQuestions).toBe(0);
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  it('keeps the Learn lines as written, with each link and its shown words', () => {
+    const parsed = parseIdea(INSTRUMENTAL);
+    expect(parsed.learn).toEqual([
+      [
+        { text: 'Start with ' },
+        { link: '../Lenses/AFSRA - Instrumental Convergence', label: "Rob Miles's video on instrumental convergence" },
+        { text: ' (11 minutes).' },
+      ],
+      [{ link: '../Lenses/IABIED - Instrumental Sub-Goal Convergence', label: 'IABIED - Instrumental Sub-Goal Convergence' }],
+    ]);
+    expect(parsed.lenses).toEqual([
+      '../Lenses/AFSRA - Instrumental Convergence',
+      '../Lenses/IABIED - Instrumental Sub-Goal Convergence',
+    ]);
+  });
+
+  it('reads requirements with aliases, anchors and several links on a line', () => {
+    const parsed = parseIdea('Outcome.\n\n## Requires\n- [[A|the first]] and [[B#part]]\n* [[A]]\n\n## Helpful first\n[[C.md]]\n');
+    expect(parsed.requires).toEqual(['A', 'B']);
+    expect(parsed.helpful).toEqual(['C']);
+  });
+
+  it('matches section headings in any case and ignores unknown ones with a warning', () => {
+    const parsed = parseIdea(FM + 'Outcome.\n\n## REQUIRES\n- [[A]]\n\n## Notes\n- [[B]]\n\n## why it matters\nBecause.\n');
+    expect(parsed.requires).toEqual(['A']);
+    expect(parsed.why).toBe('Because.');
+    expect(parsed.warnings).toEqual(['Unknown section "Notes"']);
+  });
+
+  it('takes a missing or unknown priority as medium, with a warning', () => {
+    expect(parseIdea('---\nid: 066b5be7-626c-46bf-bdb1-d81f1544c098\n---\nOutcome.\n')).toMatchObject({
+      priority: 'medium',
+      warnings: ['No priority: taken as medium'],
+    });
+    expect(parseIdea('---\npriority: urgent\n---\nOutcome.\n')).toMatchObject({
+      priority: 'medium',
+      warnings: ['Unknown priority "urgent": taken as medium'],
+    });
+    expect(parseIdea('---\npriority: High\n---\nOutcome.\n').priority).toBe('high');
+  });
+
+  it('has no id when the frontmatter has none or it is not a UUID', () => {
+    expect(parseIdea('Outcome.\n').id).toBeNull();
+    expect(parseIdea('---\nid: <new uuid>\npriority: low\n---\nOutcome.\n').id).toBeNull();
+  });
+
+  it('reads course links written without quotes', () => {
+    expect(parseIdea('---\ncourses:\n  - [[../courses/A course]]\n  - "[[../courses/B|shown]]"\n---\nOutcome.\n').courses)
+      .toEqual(['../courses/A course', '../courses/B']);
+  });
+
+  it('strips %% comments before reading the body', () => {
+    const parsed = parseIdea('Outcome. %%a note%%\n\n## Requires\n- [[A]]\n\n%%\n## Requires\n- [[Hidden]]\n%%\n');
+    expect(parsed.outcome).toBe('Outcome.');
+    expect(parsed.requires).toEqual(['A']);
+  });
+
+  it('reads the text learners get: pending suggestions are not in it', () => {
+    const text = 'Outcome{++ suggested++}.\n\n## Requires\n- [[A]]\n{++- [[Suggested]]\n++}{--- [[Kept]]\n--}';
+    const parsed = parseIdea(text);
+    expect(parsed.outcome).toBe('Outcome.');
+    expect(parsed.requires).toEqual(['A', 'Kept']);
+  });
+
+  it('counts typed questions and reports bare and unknown ones', () => {
+    const parsed = parseIdea(FM + 'Outcome.\n\n## Questions\n#### Question: Open\nid:: a\n\n#### Question\nid:: b\n\n#### Question: Essay\nid:: c\n\n#### Text\ncontent:: x\n');
+    expect(parsed.questions).toBe(3);
+    expect(parsed.bareQuestions).toBe(1);
+    expect(parsed.warnings).toEqual(['Unknown question type "Essay"']);
+  });
+
+  it('reads a file with Windows line endings', () => {
+    const parsed = parseIdea('---\r\npriority: low\r\n---\r\nOutcome.\r\n\r\n## Requires\r\n- [[A]]\r\n');
+    expect(parsed).toMatchObject({ priority: 'low', outcome: 'Outcome.', requires: ['A'] });
+  });
+
+  it('reads an empty file without failing', () => {
+    expect(parseIdea('')).toMatchObject({ id: null, outcome: '', requires: [], questions: 0 });
+  });
+});
+
+describe('buildIdeaGraph', () => {
+  const graph = buildIdeaGraph(files({ 'Instrumental convergence': INSTRUMENTAL, 'Power-seeking': POWER }));
+
+  it('has a node per file and a placeholder per target with no file', () => {
+    expect(graph.nodes.map((n) => [n.name, n.written])).toEqual([
+      ['Instrumental convergence', true],
+      ['Orthogonality thesis', false],
+      ['Power-seeking', true],
+    ]);
+    expect(graph.byKey.get('orthogonality thesis')).toMatchObject({ docId: null, idea: null, helpfulFor: ['instrumental convergence'] });
+  });
+
+  it('computes "needed for" from the Requires of the others', () => {
+    expect(graph.byKey.get('instrumental convergence')!.neededFor).toEqual(['power-seeking']);
+    expect(graph.byKey.get('power-seeking')!.requires).toEqual(['instrumental convergence']);
+    expect(graph.byKey.get('power-seeking')!.neededFor).toEqual([]);
+  });
+
+  it('resolves names whatever their case, and keeps the file name', () => {
+    const g = buildIdeaGraph(ideas({ Alpha: [], Beta: ['ALPHA'] }));
+    expect(g.nodes.map((n) => n.name)).toEqual(['Alpha', 'Beta']);
+    expect(g.byKey.get('beta')!.requires).toEqual(['alpha']);
+  });
+
+  it('skips files whose name starts with _', () => {
+    const g = buildIdeaGraph(files({ _Template: idea(['Name of an idea']), Alpha: idea() }));
+    expect(g.nodes.map((n) => n.name)).toEqual(['Alpha']);
+  });
+
+  it('puts ideas in steps: one more than the latest requirement', () => {
+    const g = buildIdeaGraph(ideas({ A: [], B: ['A'], C: ['A', 'B'], D: [], E: ['Missing'] }));
+    expect(g.steps.map((step) => step.map((n) => n.name))).toEqual([
+      ['A', 'D', 'Missing'],
+      ['B', 'E'],
+      ['C'],
+    ]);
+    expect(g.byKey.get('c')!.step).toBe(3);
+  });
+
+  it('does not let "helpful first" move an idea to a later step', () => {
+    const g = buildIdeaGraph(files({ A: idea(), B: idea([], ['A']) }));
+    expect(g.byKey.get('b')!.step).toBe(1);
+  });
+
+  it('keeps a link named under both headings as a requirement only', () => {
+    const g = buildIdeaGraph(files({ A: idea(), B: idea(['A'], ['A']) }));
+    expect(g.byKey.get('b')).toMatchObject({ requires: ['a'], helpful: [] });
+  });
+
+  it('marks the ideas in a cycle, gives them one step, and carries on', () => {
+    const g = buildIdeaGraph(ideas({ A: [], B: ['A', 'D'], C: ['B'], D: ['C'], E: ['D'], F: ['F'] }));
+    expect(g.nodes.filter((n) => n.inCycle).map((n) => n.name).sort()).toEqual(['B', 'C', 'D', 'F']);
+    expect(g.cycles.map((c) => [...c].sort())).toEqual([['b', 'c', 'd'], ['f']]);
+    expect(['a', 'b', 'c', 'd', 'e', 'f'].map((k) => g.byKey.get(k)!.step)).toEqual([1, 2, 2, 2, 3, 1]);
+    expect(g.byKey.get('c')!.problems.map((p) => p.kind)).toContain('cycle');
+    expect(g.byKey.get('e')!.problems.map((p) => p.kind)).not.toContain('cycle');
+  });
+
+  it('lists what is still missing in an idea', () => {
+    const g = buildIdeaGraph(files({
+      Bare: '---\npriority: urgent\n---\n\n## Requires\n- [[Nowhere]]\n\n## Questions\n#### Question\nid:: a\n',
+      Fine: idea(),
+    }));
+    expect(g.byKey.get('fine')!.problems).toEqual([]);
+    expect(g.byKey.get('bare')!.problems.map((p) => p.kind)).toEqual([
+      'no-id', 'no-outcome', 'no-lens', 'not-written', 'bare-question', 'warning',
+    ]);
+    expect(g.byKey.get('bare')!.problems.find((p) => p.kind === 'not-written')!.text).toBe('Requirement not written yet: Nowhere');
+  });
+
+  it('reports no questions, and an id used twice', () => {
+    const g = buildIdeaGraph(files({
+      A: idea([], [], '11111111-2222-4333-8444-555555555555'),
+      B: idea([], [], '11111111-2222-4333-8444-555555555555').replace(/#### Question[\s\S]*$/, ''),
+    }));
+    expect(g.byKey.get('a')!.problems.map((p) => p.kind)).toEqual(['duplicate-id']);
+    expect(g.byKey.get('b')!.problems.map((p) => p.kind)).toEqual(['duplicate-id', 'no-questions']);
+    expect(g.byKey.get('a')!.problems[0].text).toBe('Same id as B');
+  });
+
+  it('reports a Learn link to a lens that does not exist, when it can tell', () => {
+    const g = buildIdeaGraph(files({ A: idea() }), { lensExists: () => false });
+    expect(g.byKey.get('a')!.problems).toEqual([
+      { kind: 'lens-missing', text: 'Lens not found: A lens', error: true },
+    ]);
+  });
+
+  it('has nothing to say about a placeholder but that it is not written', () => {
+    const g = buildIdeaGraph(ideas({ A: ['Missing'] }));
+    expect(g.byKey.get('missing')!.problems).toEqual([{ kind: 'placeholder', text: 'Not written yet', error: false }]);
+  });
+
+  it('keeps a file it could not read as an idea, and says so', () => {
+    const g = buildIdeaGraph([{ name: 'A', docId: 'doc-a', text: null }, ...ideas({ B: ['A'] })]);
+    expect(g.byKey.get('a')).toMatchObject({ written: true, idea: null, docId: 'doc-a', neededFor: ['b'] });
+    expect(g.byKey.get('a')!.problems).toEqual([{ kind: 'unread', text: 'Could not read this file', error: true }]);
+    expect(g.byKey.get('b')!.problems).toEqual([]);
+  });
+
+  it('stays quick with 150 ideas and 250 links', () => {
+    const spec: Record<string, string[]> = {};
+    for (let i = 0; i < 150; i++) {
+      spec[`Idea ${i}`] = i === 0 ? [] : [`Idea ${Math.floor(i / 2)}`, ...(i % 3 === 0 && i > 3 ? [`Idea ${i - 3}`] : [])];
+    }
+    const started = performance.now();
+    const g = buildIdeaGraph(ideas(spec));
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(g.nodes).toHaveLength(150);
+    expect(g.cycles).toEqual([]);
+  });
+});
+
+describe('renderIdeaFile', () => {
+  it('writes a new file in the folder\'s format', () => {
+    const text = renderIdeaFile({
+      id: '9f1c2a8e-0b1d-4c3e-8f5a-6b7c8d9e0f1a',
+      priority: 'low',
+      outcome: '  Explain why the sky is blue.  ',
+      why: 'Otherwise the sky stays a mystery.',
+      requires: ['Light', 'Air'],
+      helpful: ['Colour'],
+    });
+    expect(text).toBe(`---
+id: 9f1c2a8e-0b1d-4c3e-8f5a-6b7c8d9e0f1a
+priority: low
+courses:
+  - "[[../courses/in-development/Context Accelerator]]"
+---
+Explain why the sky is blue.
+
+## Requires
+- [[Light]]
+- [[Air]]
+
+## Helpful first
+- [[Colour]]
+
+## Why it matters
+Otherwise the sky stays a mystery.
+
+## Learn
+
+## Questions
+`);
+  });
+
+  it('leaves the headings of empty sections, as the real files do', () => {
+    const text = renderIdeaFile({ id: 'x', priority: 'medium', outcome: 'Do it.', why: '', requires: [], helpful: [] });
+    expect(text.split('---\n')[2]).toBe('Do it.\n\n## Requires\n\n## Helpful first\n\n## Why it matters\n\n## Learn\n\n## Questions\n');
+  });
+
+  it('keeps typed text from becoming a heading or a second paragraph', () => {
+    const text = renderIdeaFile({ id: 'x', priority: 'high', outcome: 'One.\n## Two', why: 'A.\n\nB.', requires: [], helpful: [] });
+    expect(text).toContain('\nOne. ## Two\n');
+    expect(text).toContain('## Why it matters\nA. B.\n');
+  });
+
+  it('is read back as written', () => {
+    const input = { id: '9f1c2a8e-0b1d-4c3e-8f5a-6b7c8d9e0f1a', priority: 'high' as const, outcome: 'Do it.', why: 'It matters.', requires: ['A'], helpful: ['B'] };
+    expect(parseIdea(renderIdeaFile(input))).toMatchObject({ ...input, questions: 0, learn: [], warnings: [] });
+  });
+});
+
+describe('ideaNameProblem', () => {
+  const existing = ['Power-seeking', '_Template'];
+
+  it('accepts a new plain name', () => {
+    expect(ideaNameProblem('Orthogonality thesis', existing)).toBeNull();
+    expect(ideaNameProblem("Goodhart's law (strong form)", existing)).toBeNull();
+  });
+
+  it('refuses an empty name', () => {
+    expect(ideaNameProblem('   ', existing)).toBe('Give the concept a name.');
+  });
+
+  it('refuses a name that exists, whatever its case', () => {
+    expect(ideaNameProblem('power-Seeking', existing)).toBe('A file with this name already exists.');
+    expect(ideaNameProblem(' Power-seeking ', existing)).toBe('A file with this name already exists.');
+  });
+
+  it('refuses characters a file name or a link cannot have', () => {
+    for (const ch of ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '[', ']', '#', '^']) {
+      expect(ideaNameProblem(`A${ch}B`, existing), ch).toBe(`A name cannot contain ${ch}`);
+    }
+  });
+
+  it('refuses names the map would skip or the folder cannot hold', () => {
+    expect(ideaNameProblem('_Draft', existing)).toBe('A name cannot start with _ or a dot.');
+    expect(ideaNameProblem('.hidden', existing)).toBe('A name cannot start with _ or a dot.');
+    expect(ideaNameProblem('Idea.md', existing)).toBe('Leave out ".md": the name becomes the file name.');
+    expect(ideaNameProblem('x'.repeat(121), existing)).toBe('This name is too long.');
+  });
+});
+
+describe('togglePick', () => {
+  it('adds and removes a requirement', () => {
+    const one = togglePick({ requires: [], helpful: [] }, 'A', 'requires');
+    expect(one).toEqual({ requires: ['A'], helpful: [] });
+    expect(togglePick(one, 'A', 'requires')).toEqual({ requires: [], helpful: [] });
+  });
+
+  it('moves an idea between "requires" and "helpful first"', () => {
+    const picks = togglePick({ requires: ['A', 'B'], helpful: [] }, 'a', 'helpful');
+    expect(picks).toEqual({ requires: ['B'], helpful: ['a'] });
+    expect(togglePick(picks, 'A', 'requires')).toEqual({ requires: ['B', 'A'], helpful: [] });
+  });
+});
+
+describe('mergePicks', () => {
+  it('makes the changes asked for in the file as it is now', () => {
+    // Someone added C to the file while the form was open
+    const live = { requires: ['A', 'C'], helpful: ['H'] };
+    const before = { requires: ['A'], helpful: ['H'] };
+    expect(mergePicks(live, before, { requires: ['A', 'B'], helpful: [] }))
+      .toEqual({ requires: ['A', 'C', 'B'], helpful: [] });
+  });
+
+  it('moves an idea between the lists, never leaving it in both', () => {
+    const before = { requires: ['A'], helpful: ['H'] };
+    expect(mergePicks(before, before, { requires: ['h'], helpful: ['A'] })).toEqual({ requires: ['h'], helpful: ['A'] });
+    // Added as helpful here, as a requirement by someone else: the requirement stays
+    expect(mergePicks({ requires: ['A', 'X'], helpful: ['H'] }, before, { requires: ['A'], helpful: ['H', 'X'] }))
+      .toEqual({ requires: ['A', 'X'], helpful: ['H'] });
+  });
+
+  it('changes nothing when nothing was changed in the form', () => {
+    const live = { requires: ['A', 'C'], helpful: [] };
+    const before = { requires: ['A'], helpful: ['H'] };
+    expect(mergePicks(live, before, before)).toEqual(live);
+  });
+});
+
+describe('requirementCircle', () => {
+  const g = buildIdeaGraph(ideas({ A: [], B: ['A'], C: ['B'], D: ['Missing'] }));
+
+  it('finds the way back when a requirement already needs the idea', () => {
+    expect(requirementCircle(g, 'A', ['C'])).toEqual(['A', 'C', 'B', 'A']);
+    expect(requirementCircle(g, 'a', ['D', 'b'])).toEqual(['A', 'B', 'A']);
+    expect(requirementCircle(g, 'Missing', ['D'])).toEqual(['Missing', 'D', 'Missing']);
+  });
+
+  it('says an idea cannot require itself', () => {
+    expect(requirementCircle(g, 'B', ['b'])).toEqual(['B', 'B']);
+  });
+
+  it('finds none otherwise, or for a name the map does not have', () => {
+    expect(requirementCircle(g, 'C', ['A', 'B'])).toBeNull();
+    expect(requirementCircle(g, 'D', ['C'])).toBeNull();
+    expect(requirementCircle(g, 'Brand new', ['C'])).toBeNull();
+    expect(requirementCircle(g, 'A', [])).toBeNull();
+  });
+});
+
+describe('requirementChanges', () => {
+  const rewrite = (text: string, requires: string[], helpful: string[]) => {
+    const result = requirementChanges(text, requires, helpful);
+    if ('error' in result) throw new Error(result.error);
+    return applyChanges(text, result.changes);
+  };
+
+  it('changes nothing when the lists already say it', () => {
+    expect(requirementChanges(POWER, ['Instrumental convergence'], [])).toEqual({ changes: [] });
+    expect(requirementChanges(POWER, ['instrumental Convergence'], [])).toEqual({ changes: [] });
+  });
+
+  it('adds a requirement as a line under the heading of an empty section', () => {
+    expect(rewrite(INSTRUMENTAL, ['Goals'], ['Orthogonality thesis']))
+      .toBe(INSTRUMENTAL.replace('## Requires\n\n', '## Requires\n- [[Goals]]\n\n'));
+  });
+
+  it('adds after the last line of a section that has some', () => {
+    expect(rewrite(POWER, ['Instrumental convergence', 'Goals'], ['Agency']))
+      .toBe(POWER
+        .replace('- [[Instrumental convergence]]\n', '- [[Instrumental convergence]]\n- [[Goals]]\n')
+        .replace('## Helpful first\n\n', '## Helpful first\n- [[Agency]]\n\n'));
+  });
+
+  it('removes the line of a requirement that is dropped, and only that', () => {
+    expect(rewrite(POWER, [], [])).toBe(POWER.replace('- [[Instrumental convergence]]\n', ''));
+    const two = POWER.replace('- [[Instrumental convergence]]\n', '- [[Instrumental convergence]]\n- [[Goals|aims]]\n');
+    expect(rewrite(two, ['Goals'], [])).toBe(two.replace('- [[Instrumental convergence]]\n', ''));
+  });
+
+  it('makes changes of single lines, so the rest of the file is never rewritten', () => {
+    const result = requirementChanges(POWER, ['Goals'], ['Agency']);
+    if ('error' in result) throw new Error(result.error);
+    const start = POWER.indexOf('- [[Instrumental convergence]]');
+    const helpfulAt = POWER.indexOf('## Helpful first\n') + '## Helpful first\n'.length;
+    expect(result.changes).toEqual([
+      { from: start, to: start + '- [[Instrumental convergence]]\n'.length, insert: '- [[Goals]]\n' },
+      { from: helpfulAt, to: helpfulAt, insert: '- [[Agency]]\n' },
+    ]);
+  });
+
+  it('takes a dropped link out of a line that says more', () => {
+    const text = 'Outcome.\n\n## Requires\n- [[A]] and then [[B]], see notes\n- some words\n\n## Learn\n';
+    expect(rewrite(text, ['A'], [])).toBe('Outcome.\n\n## Requires\n- [[A]] and then , see notes\n- some words\n\n## Learn\n');
+  });
+
+  it('moves an idea from "requires" to "helpful first"', () => {
+    expect(rewrite(POWER, [], ['Instrumental convergence']))
+      .toBe(POWER.replace('- [[Instrumental convergence]]\n\n## Helpful first\n', '\n## Helpful first\n- [[Instrumental convergence]]\n'));
+  });
+
+  it('adds a missing heading, before the sections that follow it', () => {
+    const text = '---\nid: x\n---\nOutcome.\n\n## Why it matters\nBecause.\n\n## Learn\n';
+    expect(rewrite(text, ['A'], [])).toBe('---\nid: x\n---\nOutcome.\n\n## Requires\n- [[A]]\n\n## Why it matters\nBecause.\n\n## Learn\n');
+    expect(rewrite(text, ['A'], ['B']))
+      .toBe('---\nid: x\n---\nOutcome.\n\n## Requires\n- [[A]]\n\n## Helpful first\n- [[B]]\n\n## Why it matters\nBecause.\n\n## Learn\n');
+    expect(rewrite(text, [], [])).toBe(text);
+  });
+
+  it('adds "Helpful first" after an existing "Requires"', () => {
+    const text = 'Outcome.\n\n## Requires\n- [[A]]\n\n## Learn\n';
+    expect(rewrite(text, ['A'], ['B'])).toBe('Outcome.\n\n## Requires\n- [[A]]\n\n## Helpful first\n- [[B]]\n\n## Learn\n');
+  });
+
+  it('adds the headings at the end of a file that has no sections', () => {
+    expect(rewrite('Outcome.', ['A'], [])).toBe('Outcome.\n\n## Requires\n- [[A]]\n');
+    expect(rewrite('Outcome.\n', ['A'], ['B'])).toBe('Outcome.\n\n## Requires\n- [[A]]\n\n## Helpful first\n- [[B]]\n');
+  });
+
+  it('adds to a section that ends the file without a line break', () => {
+    expect(rewrite('Outcome.\n\n## Requires', ['A'], [])).toBe('Outcome.\n\n## Requires\n- [[A]]\n');
+    expect(rewrite('Outcome.\n\n## Requires\n- [[A]]', ['A', 'B'], [])).toBe('Outcome.\n\n## Requires\n- [[A]]\n- [[B]]\n');
+  });
+
+  it('does not mistake a heading in the frontmatter or in a comment for a section', () => {
+    const text = '---\nnote: |\n  ## Requires\n---\nOutcome.\n\n%%\n## Requires\n- [[Hidden]]\n%%\n\n## Learn\n';
+    expect(rewrite(text, ['A'], [])).toBe('---\nnote: |\n  ## Requires\n---\nOutcome.\n\n%%\n## Requires\n- [[Hidden]]\n%%\n\n## Requires\n- [[A]]\n\n## Learn\n');
+  });
+
+  it('refuses while a requirements section holds a pending suggestion', () => {
+    const text = 'Outcome.\n\n## Requires\n- [[A]]\n{++- [[B]]\n++}\n## Learn\n';
+    expect(requirementChanges(text, ['A', 'C'], [])).toEqual({
+      error: 'The requirements of this file have pending suggestions. Open the file and accept or reject them first.',
+    });
+    // A suggestion elsewhere in the file is no obstacle
+    const elsewhere = 'Outcome{++ more++}.\n\n## Requires\n- [[A]]\n\n## Learn\n';
+    expect(rewrite(elsewhere, [], [])).toBe('Outcome{++ more++}.\n\n## Requires\n\n## Learn\n');
+  });
+
+  it('gives a file the parser reads back as asked', () => {
+    const text = rewrite(INSTRUMENTAL, ['Goals', 'Agency'], ['Rationality']);
+    expect(parseIdea(text)).toMatchObject({ requires: ['Goals', 'Agency'], helpful: ['Rationality'] });
+    expect(parseIdea(text).questions).toBe(2);
+  });
+});
+
+describe('sortIdeas', () => {
+  const g = buildIdeaGraph(files({
+    Beta: idea(['Alpha']).replace('priority: medium', 'priority: low'),
+    Alpha: idea().replace('priority: medium', 'priority: high'),
+    Gamma: idea(['Alpha', 'Beta']),
+  }));
+  const names = (column: Parameters<typeof sortIdeas>[1], descending = false) =>
+    sortIdeas(g.nodes, column, descending).map((n) => n.name);
+
+  it('sorts by name', () => {
+    expect(names('name')).toEqual(['Alpha', 'Beta', 'Gamma']);
+    expect(names('name', true)).toEqual(['Gamma', 'Beta', 'Alpha']);
+  });
+
+  it('sorts by priority: high first', () => {
+    expect(names('priority')).toEqual(['Alpha', 'Gamma', 'Beta']);
+  });
+
+  it('sorts by counts, ties by name', () => {
+    expect(names('requires', true)).toEqual(['Gamma', 'Beta', 'Alpha']);
+    expect(names('neededFor', true)).toEqual(['Alpha', 'Beta', 'Gamma']);
+    expect(names('questions')).toEqual(['Alpha', 'Beta', 'Gamma']);
+    expect(names('step')).toEqual(['Alpha', 'Beta', 'Gamma']);
+  });
+
+  it('does not change the list it is given', () => {
+    const before = g.nodes.map((n) => n.name);
+    sortIdeas(g.nodes, 'name', true);
+    expect(g.nodes.map((n) => n.name)).toEqual(before);
+  });
+});
+
+describe('mapColumns', () => {
+  it('puts what comes first on the left: a chain is one idea per column', () => {
+    const graph = buildIdeaGraph(ideas({ C: ['B'], B: ['A'], A: [] }));
+    expect(mapColumns(graph)).toEqual([['a'], ['b'], ['c']]);
+  });
+
+  it('counts "helpful first" too, so every arrow points to the right', () => {
+    const graph = buildIdeaGraph(files({ 'Instrumental convergence': INSTRUMENTAL, 'Power-seeking': POWER }));
+    expect(mapColumns(graph)).toEqual([['orthogonality thesis'], ['instrumental convergence'], ['power-seeking']]);
+  });
+
+  it('keeps the ideas of a circle in one column and holds every idea once', () => {
+    const graph = buildIdeaGraph(ideas({ A: [], B: ['A', 'D'], C: ['B'], D: ['C'], E: ['D'], Self: ['Self'] }));
+    expect(mapColumns(graph)).toEqual([['a', 'self'], ['b', 'c', 'd'], ['e']]);
+  });
+
+  it('orders a column by where its neighbours are, so fewer lines cross', () => {
+    const graph = buildIdeaGraph(ideas({ A1: [], A2: [], B1: ['A2'], B2: ['A1'] }));
+    expect(mapColumns(graph)).toEqual([['a1', 'a2'], ['b2', 'b1']]);
+  });
+
+  it('is empty for no ideas', () => {
+    expect(mapColumns(buildIdeaGraph([]))).toEqual([]);
+  });
+});
+
+describe('the questions of an idea', () => {
+  it('lists each question with its type and the first line of its content', () => {
+    const idea = parseIdea([
+      '---', 'id: 11111111-1111-4111-8111-111111111111', 'priority: high', '---', 'Outcome.', '',
+      '## Questions',
+      '#### Question: Open',
+      'id:: 22222222-2222-4222-8222-222222222222',
+      'content:: Why would it seek power?',
+      'It has a second line.',
+      'assessment-instructions:: Score out of 100.',
+      '',
+      '#### Question: Choice',
+      'id:: 33333333-3333-4333-8333-333333333333',
+      'content:: Which one is right?',
+      'options::',
+      '- [x] This',
+      '- [ ] That',
+      '',
+      '#### Question',
+      'content:: {++Suggested, not there yet++}Old style',
+      '',
+      '#### Text',
+      'content:: Not a question.',
+    ].join('\n'));
+    expect(idea.questionList).toEqual([
+      { type: 'Open', content: 'Why would it seek power?' },
+      { type: 'Choice', content: 'Which one is right?' },
+      { type: '', content: 'Old style' },
+    ]);
+    expect(idea.questions).toBe(3);
+  });
+
+  it('is an empty list for a file without questions', () => {
+    expect(parseIdea('Outcome.\n\n## Questions\n').questionList).toEqual([]);
+    expect(parseIdea('Outcome.\n').questionList).toEqual([]);
+  });
+});
+
+describe('newQuestionProblem', () => {
+  const open: NewQuestion = { type: 'Open', content: 'Why?' };
+  const choice: NewQuestion = {
+    type: 'Choice',
+    content: 'Which?',
+    options: [{ text: 'This', correct: true }, { text: 'That', correct: false }],
+  };
+
+  it('accepts a question with only its text, and one with every field', () => {
+    expect(newQuestionProblem(open)).toBeNull();
+    expect(newQuestionProblem({ ...open, assessment: 'Score out of 100.', feedback: 'Be kind.\nAnd short.' })).toBeNull();
+    expect(newQuestionProblem(choice)).toBeNull();
+    expect(newQuestionProblem({ ...choice, explanation: 'Because: this.' })).toBeNull();
+  });
+
+  it('needs the question itself', () => {
+    expect(newQuestionProblem({ ...open, content: '  \n ' })).toBe('Write the question.');
+    expect(newQuestionProblem({ ...choice, content: '' })).toBe('Write the question.');
+  });
+
+  it('refuses a value with a line that starts a heading or a field', () => {
+    expect(newQuestionProblem({ ...open, content: 'Why?\n## Requires' })).toMatch(/^The question cannot/);
+    expect(newQuestionProblem({ ...open, content: '#### Question: Open' })).toMatch(/^The question cannot/);
+    expect(newQuestionProblem({ ...open, assessment: 'Good.\n  id:: 5' })).toMatch(/^The grading text cannot/);
+    expect(newQuestionProblem({ ...open, feedback: 'content:: other' })).toMatch(/^The tutor text cannot/);
+    expect(newQuestionProblem({ ...choice, explanation: 'feedback-instructions:: x' })).toMatch(/^The explanation cannot/);
+    expect(newQuestionProblem({ ...choice, options: [{ text: '# one', correct: true }, { text: 'two', correct: false }] })).toMatch(/^An option cannot/);
+    // Inside a line they are plain text
+    expect(newQuestionProblem({ ...open, content: 'Is C# a language, and what does a:: b mean?' })).toBeNull();
+  });
+
+  it('needs 2 to 6 filled options with at least one right answer', () => {
+    const options = (count: number) => Array.from({ length: count }, (_, i) => ({ text: `Option ${i + 1}`, correct: i === 0 }));
+    expect(newQuestionProblem({ ...choice, options: options(1) })).toBe('A choice question needs at least 2 options.');
+    expect(newQuestionProblem({ ...choice, options: options(6) })).toBeNull();
+    expect(newQuestionProblem({ ...choice, options: options(7) })).toBe('A choice question has at most 6 options.');
+    expect(newQuestionProblem({ ...choice, options: [{ text: 'This', correct: true }, { text: '  ', correct: false }] }))
+      .toBe('Fill in every option, or remove the empty ones.');
+    expect(newQuestionProblem({ ...choice, options: [{ text: 'This', correct: false }, { text: 'That', correct: false }] }))
+      .toBe('Tick at least one right answer.');
+  });
+});
+
+describe('renderQuestion', () => {
+  const id = '44444444-4444-4444-8444-444444444444';
+
+  it('writes an open question, leaving out the fields that are empty', () => {
+    expect(renderQuestion({ id, type: 'Open', content: ' Why would it seek power? ', assessment: '  ', feedback: '' }))
+      .toBe(`#### Question: Open\nid:: ${id}\ncontent:: Why would it seek power?\n`);
+  });
+
+  it('writes the grading and the tutor text of an open question, each as one paragraph', () => {
+    expect(renderQuestion({
+      id, type: 'Open', content: 'Why?\nSay it in\n\nyour own words.', assessment: 'Score out of 100.\n60: names power.', feedback: ' Point to the lens. ',
+    })).toBe([
+      '#### Question: Open',
+      `id:: ${id}`,
+      'content:: Why? Say it in your own words.',
+      'assessment-instructions:: Score out of 100. 60: names power.',
+      'feedback-instructions:: Point to the lens.',
+      '',
+    ].join('\n'));
+  });
+
+  it('writes a choice question with ticked right answers, shuffled', () => {
+    expect(renderQuestion({
+      id,
+      type: 'Choice',
+      content: 'Which are sub-goals of most goals?',
+      options: [{ text: 'More resources', correct: true }, { text: ' Fewer\noptions ', correct: false }, { text: 'Staying switched on', correct: true }],
+      explanation: 'Both help with nearly any goal.',
+    })).toBe([
+      '#### Question: Choice',
+      `id:: ${id}`,
+      'content:: Which are sub-goals of most goals?',
+      'options::',
+      '- [x] More resources',
+      '- [ ] Fewer options',
+      '- [x] Staying switched on',
+      'shuffle:: true',
+      'explanation:: Both help with nearly any goal.',
+      '',
+    ].join('\n'));
+  });
+
+  it('leaves out an empty explanation', () => {
+    const text = renderQuestion({ id, type: 'Choice', content: 'Which?', options: [{ text: 'A', correct: true }, { text: 'B', correct: false }] });
+    expect(text.endsWith('- [ ] B\nshuffle:: true\n')).toBe(true);
+  });
+
+  it('is read back as the question it was', () => {
+    const segment = renderQuestion({ id, type: 'Choice', content: 'Which?', options: [{ text: 'A', correct: true }, { text: 'B', correct: false }] });
+    expect(parseIdea(`Outcome.\n\n## Questions\n${segment}`).questionList).toEqual([{ type: 'Choice', content: 'Which?' }]);
+  });
+});
+
+describe('questionChanges', () => {
+  const SEGMENT = '#### Question: Open\nid:: 55555555-5555-4555-8555-555555555555\ncontent:: New?\n';
+  const FIRST = '#### Question: Open\nid:: 22222222-2222-4222-8222-222222222222\ncontent:: First?\n';
+  const HEAD = '---\nid: 11111111-1111-4111-8111-111111111111\npriority: high\n---\nOutcome.\n\n## Requires\n- [[Other]]\n\n';
+  const add = (text: string) => {
+    const result = questionChanges(text, SEGMENT);
+    if ('error' in result) throw new Error(result.error);
+    return applyChanges(text, result.changes);
+  };
+
+  it('puts the question after the last one, a blank line between them', () => {
+    expect(add(`${HEAD}## Questions\n${FIRST}`)).toBe(`${HEAD}## Questions\n${FIRST}\n${SEGMENT}`);
+    // Blank lines at the end of the file stay where they are
+    expect(add(`${HEAD}## Questions\n${FIRST}\n\n`)).toBe(`${HEAD}## Questions\n${FIRST}\n${SEGMENT}\n\n`);
+    // A last line without a line break gets one
+    expect(add(`${HEAD}## Questions\n${FIRST}`.slice(0, -1))).toBe(`${HEAD}## Questions\n${FIRST}\n${SEGMENT}`);
+  });
+
+  it('puts the first question straight under the heading', () => {
+    expect(add(`${HEAD}## Questions\n`)).toBe(`${HEAD}## Questions\n${SEGMENT}`);
+    expect(add(`${HEAD}## Questions`)).toBe(`${HEAD}## Questions\n${SEGMENT}`);
+    expect(add(`${HEAD}## questions\n\n`)).toBe(`${HEAD}## questions\n${SEGMENT}\n`);
+  });
+
+  it('ends the section there when another section follows', () => {
+    expect(add(`${HEAD}## Questions\n${FIRST}\n## Learn\n- [[../Lenses/A lens]]\n`))
+      .toBe(`${HEAD}## Questions\n${FIRST}\n${SEGMENT}\n## Learn\n- [[../Lenses/A lens]]\n`);
+    expect(add(`${HEAD}## Questions\n${FIRST}## Learn\n`)).toBe(`${HEAD}## Questions\n${FIRST}\n${SEGMENT}\n## Learn\n`);
+    expect(add(`${HEAD}## Questions\n## Learn\n`)).toBe(`${HEAD}## Questions\n${SEGMENT}\n## Learn\n`);
+  });
+
+  it('adds the heading at the end of a file that has none', () => {
+    expect(add(HEAD)).toBe(`${HEAD}## Questions\n${SEGMENT}`);
+    expect(add(HEAD.trimEnd())).toBe(`${HEAD}## Questions\n${SEGMENT}`);
+    expect(add(`${HEAD.trimEnd()}\n`)).toBe(`${HEAD}## Questions\n${SEGMENT}`);
+    expect(add('')).toBe(`## Questions\n${SEGMENT}`);
+  });
+
+  it('does not take a heading inside a comment or the frontmatter for the section', () => {
+    const text = `${HEAD}%%\n## Questions\n%%\n`;
+    expect(add(text)).toBe(`${text}\n## Questions\n${SEGMENT}`);
+  });
+
+  it('makes one insertion and touches nothing else', () => {
+    const text = `${HEAD}## Questions\n${FIRST}\n## Learn\n`;
+    const result = questionChanges(text, SEGMENT);
+    expect(result).toEqual({ changes: [{ from: text.indexOf('\n## Learn'), to: text.indexOf('\n## Learn'), insert: `\n${SEGMENT}` }] });
+  });
+
+  it('refuses while the questions hold a pending suggestion', () => {
+    expect(questionChanges(`${HEAD}## Questions\n${FIRST}{++\n#### Question: Open\ncontent:: Suggested?\n++}`, SEGMENT))
+      .toEqual({ error: PENDING_QUESTIONS_ERROR });
+    expect(questionChanges(`${HEAD}## Questions\n${FIRST.replace('First', '{~~First~>Second~~}')}`, SEGMENT))
+      .toEqual({ error: PENDING_QUESTIONS_ERROR });
+  });
+
+  it('is not held up by a suggestion elsewhere in the file, or by a comment', () => {
+    const text = `${HEAD.replace('Outcome.', 'Outcome{++ of it++}.')}## Questions\n${FIRST}{>>a remark<<}\n`;
+    expect(add(text)).toBe(`${text}\n${SEGMENT}`);
+  });
+
+  it('gives a file whose questions read back in order', () => {
+    const idea = parseIdea(add(`${HEAD}## Questions\n${FIRST}`));
+    expect(idea.questionList).toEqual([{ type: 'Open', content: 'First?' }, { type: 'Open', content: 'New?' }]);
+    expect(idea.requires).toEqual(['Other']);
+  });
+});

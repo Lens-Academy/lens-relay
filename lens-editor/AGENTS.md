@@ -161,3 +161,25 @@ concept and its direct children (backlinkers in `Concepts/` whose parents includ
 - `src/components/ConceptGraphPanel/`: the header, the drawing (`ConceptGraphDrawing.tsx`, loaded lazily so only concept
   files download dagre) and its data hook (reads files through the relationships panel's
   `useSnapshots`, growing the set of files to read as the walks reach them).
+
+## Concept map page (Context Accelerator)
+
+`/concept-map` (••• menu, "Concept Map") draws the idea files of `Lens Edu/Context Accelerator LOs/` as a graph: one
+file per idea, `## Requires` and `## Helpful first` hold wikilinks to other ideas, a link to a file that does not
+exist is an idea "not written yet". Three views (Map, Order, Table) and a side panel; links that can edit also add an
+idea, create a not-written-yet one, change an idea's two requirement lists (only those lines are rewritten) and add a
+question (one typed `#### Question: Open|Choice` segment appended to `## Questions`). The page never deletes or
+renames a file, and never edits an existing question.
+
+- `src/lib/idea-map.ts`: file parsing, the graph (steps, circles, problems), sorting, the map's column layout, the
+  text of a new file, the changes for a requirements edit, the text of a new question and the change that appends
+  it. Pure. The platform reads the same files for the learner's
+  tree, so the format is a contract: change it on both sides or not at all.
+- `src/components/ConceptMapPage/`: the page, the three views, the panel, the two forms, and `useIdeaMap.ts` (reads
+  the folder through `useSnapshots`, writes through `createDocument` and `withLiveDoc`). Everything but the hook
+  imports only `contexts/AuthContext`, `lib/relay-api` (`PathExistsError`), `components/DocLink` and `lib/idea-map`,
+  so the page can be built outside the editor with another `useIdeaMap`: keep it that way.
+- Local data: the default seed (`scripts/setup-local-relay.mjs`) has the three real files. For a big set run
+  `npx tsx scripts/seed-fake-ideas.ts --relay-url http://127.0.0.1:<relay port>` (150 made-up ideas in
+  `Context Accelerator LOs (fake 150)`; `--count 12 --cycle` makes a small set with a circle), then pick the folder in
+  the page's header or with `?folder=`. The script refuses any relay that is not on localhost.

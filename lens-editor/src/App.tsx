@@ -37,6 +37,7 @@ import { ReviewPage } from './components/ReviewPage/ReviewPage';
 import { RecentChangesPage } from './components/RecentChangesPage/RecentChangesPage';
 import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
 import { PromotionRoute } from './components/Promotion/PromotionRoute';
+import { ConceptMapPage } from './components/ConceptMapPage';
 import { MultiDocSectionEditor } from './components/SectionEditor';
 import { applySuggestionActionsViaServer, SUGGESTION_NOT_FOUND } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
@@ -696,6 +697,11 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                     <Route path="/add-source" element={
                       canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                         ? <AddArticlePage shareToken={shareToken} />
+                        : <DefaultLanding />
+                    } />
+                    <Route path="/concept-map" element={
+                      isAllFolders || folderUuid === EDU_FOLDER_ID
+                        ? <ConceptMapPage />
                         : <DefaultLanding />
                     } />
                     {/* The page's old address, kept for links and bookmarks */}
