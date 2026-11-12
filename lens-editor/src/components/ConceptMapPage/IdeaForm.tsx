@@ -1,10 +1,13 @@
 import { useId, useMemo, useState, type FormEvent } from 'react';
 import {
+  IDEA_COURSE_LINK,
   PRIORITIES,
+  ideaEditProblem,
   ideaKey,
   ideaNameProblem,
   requirementCircle,
   togglePick,
+  type IdeaEdit,
   type IdeaGraph,
   type IdeaNode,
   type Picks,
@@ -12,15 +15,23 @@ import {
 } from '../../lib/idea-map';
 import { BUTTON, PRIMARY_BUTTON, PRIORITY_LABEL } from './ideaLook';
 
-/** What the form is for: a new idea, or the requirements of an existing one. */
-export type FormMode = { kind: 'add'; name: string } | { kind: 'requirements'; key: string };
+/** What the form is for: a new idea, every part of an existing one, or only
+ *  the requirements of an existing one. */
+export type FormMode = { kind: 'add'; name: string } | { kind: 'edit'; key: string } | { kind: 'requirements'; key: string };
 
+/** What the form holds besides the two lists of requirements. */
 export interface IdeaFields {
   name: string;
   outcome: string;
   priority: Priority;
   why: string;
+  /** Link targets of the `courses` list, one per line in the form. */
+  courses: string[];
+  /** The text under `## Learn`, as written. */
+  learn: string;
 }
+
+const TITLE: Record<FormMode['kind'], string> = { add: 'Add concept', edit: 'Edit concept', requirements: 'Edit requirements' };
 
 const LABEL = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400';
 const LIST_LABEL: Record<keyof Picks, string> = { requires: 'Requires', helpful: 'Helpful first' };
@@ -89,14 +100,16 @@ function PickList({ list, names, candidates, onToggle }: {
 
 /**
  * The creator's form, in the side panel so the map stays in view: "Add
- * concept" (a new file) or "Edit requirements" (the two lists of an existing
- * one). Requirements are picked by typing here or by clicking ideas in the
- * view next to it.
+ * concept" (a new file), "Edit concept" (every part of an existing file, its
+ * name included) or "Edit requirements" (only the two lists). Requirements
+ * are picked by typing here or by clicking ideas in the view next to it.
  */
-export function IdeaForm({ mode, graph, fileNames, picks, onPicks, clickList, onClickList, onCancel, onSubmit }: {
+export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clickList, onClickList, onCancel, onSubmit }: {
   mode: FormMode;
+  /** "Edit concept": what the file says now (its lists are in `picks`). */
+  initial?: IdeaEdit;
   graph: IdeaGraph;
-  /** Names of the files in the folder: a new idea cannot take one. */
+  /** Names of the files in the folder: an idea cannot take another one's. */
   fileNames: readonly string[];
   picks: Picks;
   onPicks: (picks: Picks) => void;
@@ -104,19 +117,35 @@ export function IdeaForm({ mode, graph, fileNames, picks, onPicks, clickList, on
   clickList: keyof Picks;
   onClickList: (list: keyof Picks) => void;
   onCancel: () => void;
-  /** Create (with the fields) or save (null); resolves to an error to show, or null. */
+  /** Create or save (with the fields), or save the requirements (null);
+   *  resolves to an error to show, or null. */
   onSubmit: (fields: IdeaFields | null) => Promise<string | null>;
 }) {
-  const [name, setName] = useState(mode.kind === 'add' ? mode.name : '');
-  const [outcome, setOutcome] = useState('');
-  const [priority, setPriority] = useState<Priority>('medium');
-  const [why, setWhy] = useState('');
+  const [name, setName] = useState(mode.kind === 'add' ? mode.name : initial?.name ?? '');
+  const [outcome, setOutcome] = useState(initial?.outcome ?? '');
+  const [priority, setPriority] = useState<Priority>(initial?.priority ?? 'medium');
+  const [why, setWhy] = useState(initial?.why ?? '');
+  const [courses, setCourses] = useState((initial?.courses ?? [IDEA_COURSE_LINK]).join('\n'));
+  const [learn, setLearn] = useState(initial?.learn ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
 
-  const self = mode.kind === 'requirements' ? graph.byKey.get(mode.key) : undefined;
-  const nameProblem = mode.kind === 'add' ? ideaNameProblem(name, fileNames) : null;
+  const self = mode.kind === 'add' ? undefined : graph.byKey.get(mode.key);
+  // The name the file has now; the form's own text until the map shows a rename
+  const ownName = self?.name ?? initial?.name ?? '';
+  const renamed = mode.kind === 'edit' && name.trim() !== ownName;
+  const nameProblem = mode.kind === 'add' ? ideaNameProblem(name, fileNames)
+    : renamed ? ideaNameProblem(name, fileNames.filter((other) => other !== ownName))
+    : null;
+  const fields = (): IdeaFields => ({
+    name: name.trim(),
+    outcome,
+    priority,
+    why,
+    courses: courses.split('\n').map((line) => line.trim()).filter(Boolean),
+    learn,
+  });
   const picked = new Set([...picks.requires, ...picks.helpful].map(ideaKey));
   const ownKey = self?.key ?? ideaKey(name);
   const candidates = graph.nodes.filter((node) => node.key !== ownKey && !picked.has(node.key));
@@ -126,9 +155,15 @@ export function IdeaForm({ mode, graph, fileNames, picks, onPicks, clickList, on
     e.preventDefault();
     setTried(true);
     if (nameProblem || busy) return;
+    // A changed file is checked part by part when it is saved (ideaEditChanges)
+    const problem = mode.kind === 'add' ? ideaEditProblem(fields()) : null;
+    if (problem) {
+      setError(problem);
+      return;
+    }
     setBusy(true);
     setError(null);
-    const failed = await onSubmit(mode.kind === 'add' ? { name: name.trim(), outcome, priority, why } : null);
+    const failed = await onSubmit(mode.kind === 'requirements' ? null : fields());
     // On success the page closes the form
     if (failed) {
       setError(failed);
@@ -137,14 +172,15 @@ export function IdeaForm({ mode, graph, fileNames, picks, onPicks, clickList, on
   };
 
   return (
-    <form className="flex h-full flex-col" onSubmit={submit} aria-label={mode.kind === 'add' ? 'Add concept' : 'Edit requirements'} data-testid="idea-form">
+    <form className="flex h-full flex-col" onSubmit={submit} aria-label={TITLE[mode.kind]} data-testid="idea-form">
       <div className="border-b border-gray-200 px-4 py-3">
         <h2 className="break-words text-base font-semibold text-gray-800">
-          {mode.kind === 'add' ? 'Add concept' : `Requirements of ${self?.name ?? ''}`}
+          {mode.kind === 'requirements' ? `Requirements of ${ownName}` : TITLE[mode.kind]}
         </h2>
+        {mode.kind === 'edit' && <p className="mt-0.5 break-words text-xs text-gray-500">{ownName}</p>}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-        {mode.kind === 'add' && (
+        {mode.kind !== 'requirements' && (
           <>
             <div className="mt-4">
               <label htmlFor="idea-name" className={LABEL}>Name</label>
@@ -152,14 +188,16 @@ export function IdeaForm({ mode, graph, fileNames, picks, onPicks, clickList, on
                 id="idea-name"
                 className="lens-input w-full"
                 value={name}
-                autoFocus
+                autoFocus={mode.kind === 'add'}
                 autoComplete="off"
                 aria-invalid={tried && nameProblem !== null}
                 aria-describedby="idea-name-note"
                 onChange={(e) => setName(e.target.value)}
               />
               <p id="idea-name-note" className={`mt-1 text-xs ${nameProblem && (tried || name.trim()) ? 'text-red-700' : 'text-gray-400'}`}>
-                {nameProblem && (tried || name.trim()) ? nameProblem : 'The name becomes the file name.'}
+                {nameProblem && (tried || name.trim()) ? nameProblem
+                  : renamed ? 'Saving renames the file. Links to it in other concepts get the new name.'
+                  : mode.kind === 'edit' ? 'The name is the file name.' : 'The name becomes the file name.'}
               </p>
             </div>
             <div className="mt-4">
@@ -167,7 +205,7 @@ export function IdeaForm({ mode, graph, fileNames, picks, onPicks, clickList, on
               <textarea
                 id="idea-outcome"
                 className="lens-input w-full"
-                rows={3}
+                rows={mode.kind === 'edit' ? 4 : 3}
                 placeholder="What a learner can explain or do, in one sentence"
                 value={outcome}
                 onChange={(e) => setOutcome(e.target.value)}
@@ -181,13 +219,43 @@ export function IdeaForm({ mode, graph, fileNames, picks, onPicks, clickList, on
             </div>
             <div className="mt-4">
               <label htmlFor="idea-why" className={LABEL}>Why it matters</label>
-              <textarea id="idea-why" className="lens-input w-full" rows={2} placeholder="One or two sentences" value={why} onChange={(e) => setWhy(e.target.value)} />
+              <textarea id="idea-why" className="lens-input w-full" rows={mode.kind === 'edit' ? 4 : 2} placeholder="One or two sentences" value={why} onChange={(e) => setWhy(e.target.value)} />
             </div>
           </>
         )}
 
         <PickList list="requires" names={picks.requires} candidates={candidates} onToggle={(n) => onPicks(togglePick(picks, n, 'requires'))} />
         <PickList list="helpful" names={picks.helpful} candidates={candidates} onToggle={(n) => onPicks(togglePick(picks, n, 'helpful'))} />
+
+        {mode.kind !== 'requirements' && (
+          <>
+            <div className="mt-4">
+              <label htmlFor="idea-learn" className={LABEL}>Learn</label>
+              <textarea
+                id="idea-learn"
+                className="lens-input w-full font-mono text-xs"
+                rows={mode.kind === 'edit' ? 4 : 2}
+                placeholder="- [[../Lenses/Name of a lens]]: what it is for"
+                aria-describedby="idea-learn-note"
+                value={learn}
+                onChange={(e) => setLearn(e.target.value)}
+              />
+              <p id="idea-learn-note" className="mt-1 text-xs text-gray-400">One line per lens, as in the file.</p>
+            </div>
+            <div className="mt-4">
+              <label htmlFor="idea-courses" className={LABEL}>Courses</label>
+              <textarea
+                id="idea-courses"
+                className="lens-input w-full font-mono text-xs"
+                rows={2}
+                aria-describedby="idea-courses-note"
+                value={courses}
+                onChange={(e) => setCourses(e.target.value)}
+              />
+              <p id="idea-courses-note" className="mt-1 text-xs text-gray-400">One course link per line.</p>
+            </div>
+          </>
+        )}
 
         <div className="mt-4 rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
           <div className="flex flex-wrap items-center gap-2">
@@ -221,7 +289,8 @@ export function IdeaForm({ mode, graph, fileNames, picks, onPicks, clickList, on
       <div className="flex justify-end gap-2 border-t border-gray-200 px-4 py-3">
         <button type="button" className={BUTTON} onClick={onCancel} disabled={busy}>Cancel</button>
         <button type="submit" className={PRIMARY_BUTTON} disabled={busy}>
-          {mode.kind === 'add' ? (busy ? 'Creating…' : 'Create concept') : (busy ? 'Saving…' : 'Save requirements')}
+          {mode.kind === 'add' ? (busy ? 'Creating…' : 'Create concept')
+            : busy ? 'Saving…' : mode.kind === 'edit' ? 'Save' : 'Save requirements'}
         </button>
       </div>
     </form>

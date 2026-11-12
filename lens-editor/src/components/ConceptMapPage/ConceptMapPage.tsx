@@ -1,7 +1,17 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { IDEAS_FOLDER, IDEAS_SHARED_FOLDER, ideaKey, togglePick, type Picks } from '../../lib/idea-map';
+import {
+  IDEAS_FOLDER,
+  IDEAS_SHARED_FOLDER,
+  ideaAsEdit,
+  ideaKey,
+  questionAsNew,
+  togglePick,
+  type IdeaEdit,
+  type IdeaQuestion,
+  type Picks,
+} from '../../lib/idea-map';
 import { PathExistsError } from '../../lib/relay-api';
 import { IdeaForm, type FormMode, type IdeaFields } from './IdeaForm';
 import { IdeaMapDrawing } from './IdeaMapDrawing';
@@ -24,8 +34,8 @@ const NO_PICKS: Picks = { requires: [], helpful: [] };
 /**
  * The creator's concept map of the Context Accelerator (/concept-map): the
  * idea files of `Lens Edu/Context Accelerator LOs/` as a graph, read live,
- * in three views with a side panel; links that can edit also add ideas,
- * change requirements and add questions from it.
+ * in three views with a side panel; links that can edit also add, edit,
+ * rename and delete ideas and add, edit and delete their questions from it.
  */
 export function ConceptMapPage() {
   const [params, setParams] = useSearchParams();
@@ -68,8 +78,11 @@ function ConceptMap({ folder, onFolder, view, onView }: {
   /** The requirements as they were when "Edit requirements" opened. */
   const [before, setBefore] = useState<Picks>(NO_PICKS);
   const [clickList, setClickList] = useState<keyof Picks>('requires');
-  /** Key of the idea a question is being added to. */
-  const [questionFor, setQuestionFor] = useState<string | null>(null);
+  /** The idea as it was when "Edit concept" opened. */
+  const [editBefore, setEditBefore] = useState<IdeaEdit | null>(null);
+  /** The idea a question is added to, or whose question (`edit`: its place
+   *  and what it said when the form opened) is edited. */
+  const [questionFor, setQuestionFor] = useState<{ key: string; edit?: { index: number; before: IdeaQuestion } } | null>(null);
 
   // The views wait until every file is read once, so the map is not laid out
   // again for each file that arrives; later additions just appear.
@@ -83,7 +96,7 @@ function ConceptMap({ folder, onFolder, view, onView }: {
   const marks = useMemo<PickMarks | null>(() => (mode ? {
     requires: new Set(picks.requires.map(ideaKey)),
     helpful: new Set(picks.helpful.map(ideaKey)),
-    self: mode.kind === 'requirements' ? mode.key : null,
+    self: mode.kind === 'add' ? null : mode.key,
   } : null), [mode, picks]);
 
   const openForm = (next: FormMode, start: Picks = NO_PICKS) => {
@@ -98,6 +111,14 @@ function ConceptMap({ folder, onFolder, view, onView }: {
     const names = (keys: string[]) => keys.map((k) => graph.byKey.get(k)?.name ?? k);
     openForm({ kind: 'requirements', key }, { requires: names(node.requires), helpful: names(node.helpful) });
   };
+  const editIdea = (key: string) => {
+    const node = graph.byKey.get(key);
+    if (!node?.idea) return;
+    // The names as the file has them: saving compares the file with these
+    const start = ideaAsEdit(node.name, node.idea);
+    setEditBefore(start);
+    openForm({ kind: 'edit', key }, { requires: start.requires, helpful: start.helpful });
+  };
 
   /** A click on an idea in any view: select it, or, while a form is open, pick it. */
   const onPick = (key: string, shift: boolean) => {
@@ -108,7 +129,7 @@ function ConceptMap({ folder, onFolder, view, onView }: {
       return;
     }
     const node = graph.byKey.get(key);
-    if (!node || (mode.kind === 'requirements' && mode.key === key)) return;
+    if (!node || (mode.kind !== 'add' && mode.key === key)) return;
     setPicks((current) => togglePick(current, node.name, shift ? 'helpful' : clickList));
   };
 
@@ -119,6 +140,12 @@ function ConceptMap({ folder, onFolder, view, onView }: {
         const failed = await map.saveRequirements(mode.key, before, picks);
         if (failed) return failed;
         setSelected(mode.key);
+      } else if (mode.kind === 'edit') {
+        if (!fields || !editBefore) return null;
+        const failed = await map.editIdea(mode.key, editBefore, { ...fields, requires: picks.requires, helpful: picks.helpful });
+        if (failed) return failed;
+        // A renamed idea is on the map under its new name
+        setSelected(ideaKey(fields.name));
       } else if (fields) {
         // An idea is never its own requirement
         const own = ideaKey(fields.name);
@@ -135,7 +162,8 @@ function ConceptMap({ folder, onFolder, view, onView }: {
   };
 
   const selectedNode = selected ? graph.byKey.get(selected) : undefined;
-  const questionNode = questionFor ? graph.byKey.get(questionFor) : undefined;
+  const questionNode = questionFor ? graph.byKey.get(questionFor.key) : undefined;
+  const questionEdit = questionFor?.edit;
   const written = graph.nodes.filter((node) => node.written).length;
   const unwritten = graph.nodes.length - written;
   const views = { graph, selected: mode ? null : selected, marks, matches, onPick };
@@ -221,19 +249,23 @@ function ConceptMap({ folder, onFolder, view, onView }: {
           <div className="absolute inset-y-0 right-0 z-20 w-full max-w-sm border-l border-gray-200 bg-white shadow-lg md:static md:w-80 md:shrink-0 md:shadow-none lg:w-96">
             {questionNode ? (
               <QuestionForm
-                key={questionNode.key}
+                key={`${questionNode.key}:${questionEdit ? questionEdit.index : 'new'}`}
                 ideaName={questionNode.name}
+                initial={questionEdit ? questionAsNew(questionEdit.before) ?? undefined : undefined}
                 onCancel={() => setQuestionFor(null)}
                 onSubmit={async (question) => {
-                  const failed = await map.addQuestion(questionNode.key, question);
+                  const failed = questionEdit
+                    ? await map.editQuestion(questionNode.key, questionEdit.index, questionEdit.before, question)
+                    : await map.addQuestion(questionNode.key, question);
                   if (!failed) setQuestionFor(null);
                   return failed;
                 }}
               />
             ) : mode ? (
               <IdeaForm
-                key={mode.kind === 'add' ? `add:${mode.name}` : `requirements:${mode.key}`}
+                key={mode.kind === 'add' ? `add:${mode.name}` : `${mode.kind}:${mode.key}`}
                 mode={mode}
+                initial={mode.kind === 'edit' ? editBefore ?? undefined : undefined}
                 graph={graph}
                 fileNames={map.fileNames}
                 picks={picks}
@@ -245,15 +277,32 @@ function ConceptMap({ folder, onFolder, view, onView }: {
               />
             ) : selectedNode && (
               <IdeaPanel
+                key={selectedNode.key}
                 node={selectedNode}
                 graph={graph}
                 lensDoc={map.lensDoc}
                 canEdit={canEdit}
+                deleteNote={map.deleteNote}
                 onSelect={setSelected}
                 onClose={() => setSelected(null)}
                 onCreate={() => openForm({ kind: 'add', name: selectedNode.name })}
+                onEdit={() => editIdea(selectedNode.key)}
+                onDelete={async () => {
+                  const failed = await map.deleteIdea(selectedNode.key);
+                  // An idea other files still name stays on the map as "not written yet"
+                  if (!failed) setSelected(null);
+                  return failed;
+                }}
                 onEditRequirements={() => editRequirements(selectedNode.key)}
-                onAddQuestion={() => setQuestionFor(selectedNode.key)}
+                onAddQuestion={() => setQuestionFor({ key: selectedNode.key })}
+                onEditQuestion={(index) => {
+                  const before = selectedNode.idea?.questionList[index];
+                  if (before) setQuestionFor({ key: selectedNode.key, edit: { index, before } });
+                }}
+                onDeleteQuestion={async (index) => {
+                  const before = selectedNode.idea?.questionList[index];
+                  return before ? map.deleteQuestion(selectedNode.key, index, before) : null;
+                }}
               />
             )}
           </div>

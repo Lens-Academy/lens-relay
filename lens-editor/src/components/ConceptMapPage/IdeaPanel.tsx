@@ -1,7 +1,37 @@
-import type { ReactNode } from 'react';
-import type { IdeaGraph, IdeaNode } from '../../lib/idea-map';
+import { useState, type ReactNode } from 'react';
+import { questionAsNew, type IdeaGraph, type IdeaNode } from '../../lib/idea-map';
 import { DocLink } from '../DocLink';
 import { BUTTON, PRIMARY_BUTTON, PRIORITY_LABEL, PRIORITY_LOOK } from './ideaLook';
+
+const DANGER_BUTTON = 'px-3 py-1 rounded bg-red-600 text-sm text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed';
+const ROW_ACTION = 'text-xs text-blue-600 hover:underline';
+
+/** "A", "A and B", "A, B and C". */
+function listed(names: string[]): string {
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** The step before something is deleted: what goes, and the two buttons. */
+function Confirm({ label, action, busy, error, onCancel, onConfirm, children }: {
+  label: string;
+  action: string;
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-gray-800" role="group" aria-label={label} data-testid="idea-confirm">
+      {children}
+      {error && <p className="mt-2 text-xs text-red-700" role="alert">{error}</p>}
+      <div className="mt-2 flex justify-end gap-2">
+        <button type="button" className={`${BUTTON} bg-white`} onClick={onCancel} disabled={busy}>Cancel</button>
+        <button type="button" className={DANGER_BUTTON} onClick={onConfirm} disabled={busy}>{busy ? 'Deleting…' : action}</button>
+      </div>
+    </div>
+  );
+}
 
 function Part({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -14,20 +44,53 @@ function Part({ title, children }: { title: string; children: ReactNode }) {
 
 const NONE = <p className="text-sm text-gray-400">None</p>;
 
-/** The side panel of one idea: what its file says, and what needs it. */
-export function IdeaPanel({ node, graph, lensDoc, canEdit, onSelect, onClose, onCreate, onEditRequirements, onAddQuestion }: {
+/**
+ * The side panel of one idea: what its file says, and what needs it. With
+ * edit rights also the ways to change it: edit or delete the idea, and add,
+ * edit or delete a question. The page gives it a `key` per idea, so a
+ * question asked about one idea never stays open on the next.
+ */
+export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect, onClose, onCreate, onEdit, onDelete, onEditRequirements, onAddQuestion, onEditQuestion, onDeleteQuestion }: {
   node: IdeaNode;
   graph: IdeaGraph;
   /** The doc a Learn link points to (bare uuid), or null. */
   lensDoc: (link: string) => string | null;
   canEdit: boolean;
+  /** What becomes of a deleted file, said before deleting ("… can be restored …"). */
+  deleteNote?: string;
   onSelect: (key: string) => void;
   onClose: () => void;
   /** "Create this concept", on a "not written yet" idea. */
   onCreate: () => void;
+  /** Open the form with every part of the idea. */
+  onEdit: () => void;
+  /** Delete the idea, once confirmed here; resolves to an error to show, or null. */
+  onDelete: () => Promise<string | null>;
   onEditRequirements: () => void;
   onAddQuestion: () => void;
+  /** Open the form for the question at this place of `idea.questionList`. */
+  onEditQuestion: (index: number) => void;
+  /** Delete that question, once confirmed here; resolves to an error to show, or null. */
+  onDeleteQuestion: (index: number) => Promise<string | null>;
 }) {
+  /** What is about to be deleted: the idea, or the question at a place. */
+  const [confirm, setConfirm] = useState<'idea' | number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ask = (what: 'idea' | number | null) => {
+    setConfirm(what);
+    setError(null);
+  };
+  const run = async (action: () => Promise<string | null>) => {
+    setBusy(true);
+    setError(null);
+    const failed = await action();
+    setBusy(false);
+    if (failed) setError(failed);
+    else setConfirm(null);
+  };
+  const namesOf = (keys: string[]) => keys.map((key) => graph.byKey.get(key)?.name ?? key);
+
   const names = (keys: string[]) => (keys.length === 0 ? NONE : (
     <ul className="space-y-0.5">
       {keys.map((key) => {
@@ -75,9 +138,30 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, onSelect, onClose, on
         {(node.written || canEdit) && (
           <div className="mt-3 flex flex-wrap gap-2">
             {node.docId && <DocLink docId={node.docId} className={BUTTON}>Open file</DocLink>}
+            {canEdit && idea && <button type="button" className={BUTTON} onClick={onEdit}>Edit</button>}
             {canEdit && idea && <button type="button" className={BUTTON} onClick={onEditRequirements}>Edit requirements</button>}
+            {canEdit && node.docId && <button type="button" className={BUTTON} onClick={() => ask('idea')}>Delete</button>}
             {canEdit && !node.written && <button type="button" className={PRIMARY_BUTTON} onClick={onCreate}>Create this concept</button>}
           </div>
+        )}
+        {confirm === 'idea' && (
+          <Confirm label="Delete concept" action="Delete concept" busy={busy} error={error} onCancel={() => ask(null)} onConfirm={() => run(onDelete)}>
+            <p>Delete the concept "{node.name}"?</p>
+            {node.neededFor.length > 0 && (
+              <p className="mt-1">
+                {listed(namesOf(node.neededFor))} {node.neededFor.length === 1 ? 'lists' : 'list'} it as required; {node.neededFor.length === 1 ? 'that link is' : 'those links are'} removed too.
+              </p>
+            )}
+            {node.helpfulFor.length > 0 && (
+              <p className="mt-1">
+                {listed(namesOf(node.helpfulFor))} {node.helpfulFor.length === 1 ? 'lists' : 'list'} it as helpful first; {node.helpfulFor.length === 1 ? 'that link is' : 'those links are'} removed too.
+              </p>
+            )}
+            {idea && idea.questionList.length > 0 && (
+              <p className="mt-1">Its {idea.questionList.length === 1 ? 'question goes' : `${idea.questionList.length} questions go`} with it.</p>
+            )}
+            {deleteNote && <p className="mt-1 text-xs text-gray-600">{deleteNote}</p>}
+          </Confirm>
         )}
 
         {idea && (
@@ -114,12 +198,35 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, onSelect, onClose, on
             <Part title="Questions">
               {idea.questionList.length === 0 ? NONE : (
                 <ol className="list-decimal space-y-1 pl-5 text-sm text-gray-800" data-testid="idea-questions">
-                  {idea.questionList.map((question, i) => (
-                    <li key={i}>
-                      <span className="mr-1.5 rounded border border-gray-200 px-1 py-px text-xs text-gray-500">{question.type || 'No type'}</span>
-                      {question.content || <span className="text-gray-400">No question text</span>}
-                    </li>
-                  ))}
+                  {idea.questionList.map((question, i) => {
+                    const [first, ...more] = question.content.split('\n');
+                    return (
+                      <li key={i}>
+                        <span className="mr-1.5 rounded border border-gray-200 px-1 py-px text-xs text-gray-500">{question.type || 'No type'}</span>
+                        <span title={more.length > 0 ? question.content : undefined} data-testid="idea-question-text">
+                          {question.content ? `${first}${more.length > 0 ? ' …' : ''}` : <span className="text-gray-400">No question text</span>}
+                        </span>
+                        {canEdit && (
+                          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5" data-testid="idea-question-actions">
+                            {questionAsNew(question) ? (
+                              <button type="button" className={ROW_ACTION} aria-label={`Edit question ${i + 1}`} onClick={() => onEditQuestion(i)}>Edit</button>
+                            ) : (
+                              <>
+                                {node.docId && <DocLink docId={node.docId} className={ROW_ACTION}>Open file</DocLink>}
+                                <span className="text-xs text-gray-400">This kind of question is edited in the file.</span>
+                              </>
+                            )}
+                            <button type="button" className={ROW_ACTION} aria-label={`Delete question ${i + 1}`} onClick={() => ask(i)}>Delete</button>
+                          </div>
+                        )}
+                        {confirm === i && (
+                          <Confirm label="Delete question" action="Delete question" busy={busy} error={error} onCancel={() => ask(null)} onConfirm={() => run(() => onDeleteQuestion(i))}>
+                            <p>Delete question {i + 1} from the file?</p>
+                          </Confirm>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ol>
               )}
               {canEdit && <button type="button" className={`${BUTTON} mt-2`} onClick={onAddQuestion}>Add question</button>}

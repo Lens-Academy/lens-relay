@@ -12,7 +12,11 @@
  * This file reads an idea (`parseIdea`), puts the ideas of a folder into a
  * graph with steps, cycles and what is still missing (`buildIdeaGraph`),
  * writes a new idea file (`renderIdeaFile`) and works out the line changes
- * that give a file other requirements (`requirementChanges`). Names are
+ * that give a file other requirements (`requirementChanges`), other values
+ * (`ideaEditChanges`), another name for an idea it links (`renameLinkChanges`)
+ * or no link to it (`removeLinkChanges`), and that add, change or remove a
+ * question (`questionChanges`, `questionEditChanges`, `questionDeleteChanges`).
+ * Every change leaves the rest of the file as it is, byte for byte. Names are
  * matched whatever their case, as wikilinks resolve in the editor.
  */
 import { parseSections } from '../components/SectionEditor/parseSections';
@@ -26,7 +30,7 @@ export const IDEAS_SHARED_FOLDER = 'Lens Edu';
 /** The folder of idea files, at the top of that shared folder. */
 export const IDEAS_FOLDER = 'Context Accelerator LOs';
 /** What a new idea lists under `courses`. */
-const IDEA_COURSE_LINK = '../courses/in-development/Context Accelerator';
+export const IDEA_COURSE_LINK = '../courses/in-development/Context Accelerator';
 
 export const PRIORITIES = ['high', 'medium', 'low'] as const;
 export type Priority = (typeof PRIORITIES)[number];
@@ -34,11 +38,31 @@ export type Priority = (typeof PRIORITIES)[number];
 /** A piece of a Learn line: words, or a link with the words it shows. */
 export type LearnPart = { text: string } | { link: string; label: string };
 
-/** A question of an idea: the type after `#### Question:` ("" when it has
- *  none) and the first line of its `content::`. */
+/** A `name:: value` field of a question, as written. */
+export interface QuestionField {
+  name: string;
+  value: string;
+}
+
+/**
+ * A question of an idea: the type after `#### Question:` ("" when it has
+ * none) and its values as written in the file, line breaks kept. A value is
+ * null when its field is not there; `options` also when the list cannot be
+ * read as options. A plain `- text` option and `- [ ] text` are both not a
+ * right answer. `other` holds every field not named here, in order
+ * (`max-words`, `shuffle`, `multi`, `force-feedback`, unknown ones).
+ */
 export interface IdeaQuestion {
   type: string;
   content: string;
+  id: string | null;
+  /** `assessment-instructions::` */
+  assessment: string | null;
+  /** `feedback-instructions::` */
+  feedback: string | null;
+  options: { text: string; correct: boolean }[] | null;
+  explanation: string | null;
+  other: QuestionField[];
 }
 
 export interface ParsedIdea {
@@ -55,6 +79,8 @@ export interface ParsedIdea {
   why: string;
   /** The lines under `## Learn`, without their list marker. */
   learn: LearnPart[][];
+  /** The text under `## Learn`, as written. */
+  learnText: string;
   /** Link targets under `## Learn`. */
   lenses: string[];
   /** Question segments under `## Questions`. */
@@ -134,6 +160,66 @@ function learnLine(line: string): LearnPart[] {
   return parts;
 }
 
+const FIELD_LINE = /^(\w[\w-]*)::(?:\s(.*))?$/;
+
+/** A `name:: value` field of a segment: the lines it takes (`end` is past its
+ *  last line that says something) and its value as lib/parseFields reads it. */
+interface SegmentField {
+  name: string;
+  start: number;
+  end: number;
+  value: string;
+}
+
+/** The fields among `lines`, the lines of a segment after its heading. */
+function fieldsOf(lines: readonly string[]): SegmentField[] {
+  const starts = lines.flatMap((line, start) => {
+    const name = FIELD_LINE.exec(line)?.[1];
+    return name ? [{ name, start }] : [];
+  });
+  return starts.map(({ name, start }, n) => {
+    let end = n + 1 < starts.length ? starts[n + 1].start : lines.length;
+    while (end > start + 1 && lines[end - 1].trim() === '') end--;
+    return { name, start, end, value: parseFields(lines.slice(start, end).join('\n')).get(name) ?? '' };
+  });
+}
+
+/** The fields an `IdeaQuestion` holds by name; the rest is its `other`. */
+const NAMED_FIELDS = ['id', 'content', 'assessment-instructions', 'feedback-instructions', 'options', 'explanation'];
+
+/** The options of an `options::` list, as the platform reads them; null when
+ *  a line is no option (or is a survey's `- freeform::`). */
+function readOptions(value: string): { text: string; correct: boolean }[] | null {
+  const options: { text: string; correct: boolean }[] = [];
+  for (const line of value.split('\n')) {
+    const item = line.trim();
+    if (!item) continue;
+    const box = /^-\s*\[([xX]|\s?)\]\s*(.*)$/.exec(item);
+    const plain = box || /^-\s*freeform::/.test(item) ? null : /^-\s+(.+)$/.exec(item);
+    if (!box && !plain) return null;
+    options.push({ text: (box ? box[2] : plain![1]).trim(), correct: !!box && box[1].toLowerCase() === 'x' });
+  }
+  return options;
+}
+
+/** A question from the lines of its segment after the heading. Of a field
+ *  written twice the last one counts, as for the platform. */
+function readQuestion(type: string, lines: readonly string[]): IdeaQuestion {
+  const fields = fieldsOf(lines);
+  const values = new Map(fields.map((field) => [field.name, field.value]));
+  const options = values.get('options');
+  return {
+    type,
+    content: values.get('content') ?? '',
+    id: values.get('id')?.trim() || null,
+    assessment: values.get('assessment-instructions') ?? null,
+    feedback: values.get('feedback-instructions') ?? null,
+    options: options === undefined ? null : readOptions(options),
+    explanation: values.get('explanation') ?? null,
+    other: fields.filter((field) => !NAMED_FIELDS.includes(field.name)).map(({ name, value }) => ({ name, value })),
+  };
+}
+
 /**
  * Read an idea file: the text learners get (pending suggestions are not in
  * it), without `%% comments %%`. Never throws; what it cannot read is left
@@ -179,12 +265,13 @@ export function parseIdea(raw: string): ParsedIdea {
     const question = QUESTION_TITLE.exec(part.label);
     if (!question) continue;
     const type = (question[1] ?? '').trim();
-    questionList.push({ type, content: (parseFields(part.content).get('content') ?? '').trim().split('\n')[0].trim() });
+    questionList.push(readQuestion(type, part.content.split('\n').slice(1)));
     if (!type) bareQuestions++;
     else if (!QUESTION_TYPES.includes(type.toLowerCase())) warnings.push(`Unknown question type "${type}"`);
   }
 
-  const learn = (sections.get('learn') ?? '')
+  const learnText = (sections.get('learn') ?? '').trim();
+  const learn = learnText
     .split('\n')
     .map((line) => line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').trim())
     .filter(Boolean)
@@ -199,6 +286,7 @@ export function parseIdea(raw: string): ParsedIdea {
     helpful: linkedNames(sections.get('helpful first') ?? ''),
     why: (sections.get('why it matters') ?? '').trim(),
     learn,
+    learnText,
     lenses: learn.flatMap((line) => line.flatMap((part) => ('link' in part ? [part.link] : []))),
     questions: questionList.length,
     questionList,
@@ -510,21 +598,33 @@ export interface NewIdea {
   /** Names of the ideas that must come first. */
   requires: readonly string[];
   helpful: readonly string[];
+  /** Link targets for `courses`; the Context Accelerator when left out. */
+  courses?: readonly string[];
+  /** The text under `## Learn`: a line per lens. */
+  learn?: string;
 }
 
 /** Typed text as one paragraph: a line break could start a heading. */
 const oneParagraph = (text: string) => text.trim().split(/\s*\n\s*/).filter(Boolean).join(' ');
 const linkLines = (names: readonly string[]) => names.map((name) => `- [[${name}]]\n`).join('');
 
-/** The text of a new idea file, with empty `## Learn` and `## Questions`. */
-export function renderIdeaFile({ id, priority, outcome, why, requires, helpful }: NewIdea): string {
+/** Course links as typed: without `[[ ]]` around them, empty ones dropped. */
+const cleanCourses = (courses: readonly string[]) =>
+  courses.map((course) => course.trim().replace(/^\[\[/, '').replace(/\]\]$/, '').trim()).filter(Boolean);
+const courseLines = (courses: readonly string[]) => ['courses:', ...courses.map((course) => `  - "[[${course}]]"`)];
+
+/** The text of a new idea file, with an empty `## Questions`. */
+export function renderIdeaFile({ id, priority, outcome, why, requires, helpful, courses, learn }: NewIdea): string {
   const whyText = oneParagraph(why);
+  const learnText = cleanValue(learn);
+  const courseList = cleanCourses(courses ?? [IDEA_COURSE_LINK]);
+  const front = [`id: ${id}`, `priority: ${priority}`, ...(courseList.length > 0 ? courseLines(courseList) : [])];
   return [
-    `---\nid: ${id}\npriority: ${priority}\ncourses:\n  - "[[${IDEA_COURSE_LINK}]]"\n---\n${oneParagraph(outcome)}\n`,
+    `---\n${front.join('\n')}\n---\n${oneParagraph(outcome)}\n`,
     `## Requires\n${linkLines(requires)}`,
     `## Helpful first\n${linkLines(helpful)}`,
     `## Why it matters\n${whyText ? `${whyText}\n` : ''}`,
-    '## Learn\n',
+    `## Learn\n${learnText ? `${learnText}\n` : ''}`,
     '## Questions\n',
   ].join('\n');
 }
@@ -676,7 +776,11 @@ function scanFile(text: string) {
   /** A suggestion nobody accepted or rejected yet touches `from`..`to`. */
   const pendingIn = (from: number, to: number) =>
     markup.some((r) => r.type !== 'comment' && r.type !== 'highlight' && r.from < to && r.to > from);
-  return { isHidden, sectionOf, headingAt, pendingIn };
+  /** A suggestion, a remark or a `%% comment %%` touches `from`..`to`. */
+  const markedIn = (from: number, to: number) => [...markup, ...hidden].some((r) => r.from < to && r.to > from);
+  /** The first `## ` heading of the file, or null. */
+  const firstHeading = headings[0] ? lines[headings[0].index] : null;
+  return { lines, frontmatterEnd, firstHeading, isHidden, sectionOf, headingAt, pendingIn, markedIn };
 }
 
 /** What separates a new last section from a text that ends as `text` does: a blank line. */
@@ -692,8 +796,30 @@ const gapAtEnd = (text: string) => (text.length === 0 || text.endsWith('\n\n') ?
  * Refuses while one of the two sections holds a pending suggestion.
  */
 export function requirementChanges(text: string, requires: readonly string[], helpful: readonly string[]): Changes {
-  const { isHidden, sectionOf, headingAt, pendingIn } = scanFile(text);
+  const edits = requirementEdits(text, scanFile(text), requires, helpful);
+  if ('error' in edits) return edits;
+  return { changes: mergeChanges([...edits.changes, ...sectionInserts(text, edits.newSections)]) };
+}
 
+/** New sections by the position they go to (several may go to the same). */
+type NewSections = Map<number, string[]>;
+
+/** The changes that put new sections (each ending in a line break) in. */
+function sectionInserts(text: string, newSections: NewSections): TextChange[] {
+  return [...newSections].map(([pos, blocks]) => (pos === text.length
+    // At the end of the file: a blank line before, none after
+    ? { from: pos, to: pos, insert: gapAtEnd(text) + blocks.join('\n') }
+    : { from: pos, to: pos, insert: blocks.map((b) => `${b}\n`).join('') }));
+}
+
+/** `requirementChanges`: the changes inside the two sections, and the
+ *  sections to add. */
+function requirementEdits(
+  text: string,
+  { isHidden, sectionOf, headingAt, pendingIn }: ReturnType<typeof scanFile>,
+  requires: readonly string[],
+  helpful: readonly string[],
+): { changes: TextChange[]; newSections: NewSections } | { error: string } {
   const changes: TextChange[] = [];
   /** Lines to put at `pos`, the start of a line or the end of the text. */
   const insertLines = (pos: number, block: string) => {
@@ -706,8 +832,7 @@ export function requirementChanges(text: string, requires: readonly string[], he
     { name: 'requires' as const, title: 'Requires', wanted: requires, section: requiresSection },
     { name: 'helpful first' as const, title: 'Helpful first', wanted: helpful, section: sectionOf('helpful first') },
   ];
-  /** New sections, by the position they go to (both may go to the same). */
-  const newSections = new Map<number, string[]>();
+  const newSections: NewSections = new Map();
 
   for (const { name, title, wanted, section } of lists) {
     const wantedKeys = new Set(wanted.map(ideaKey));
@@ -757,16 +882,7 @@ export function requirementChanges(text: string, requires: readonly string[], he
     if (added.length > 0) insertLines(insertAt, linkLines(added));
   }
 
-  for (const [pos, blocks] of newSections) {
-    if (pos === text.length) {
-      // At the end of the file: a blank line before, none after
-      changes.push({ from: pos, to: pos, insert: gapAtEnd(text) + blocks.join('\n') });
-    } else {
-      changes.push({ from: pos, to: pos, insert: blocks.map((b) => `${b}\n`).join('') });
-    }
-  }
-
-  return { changes: mergeChanges(changes) };
+  return { changes, newSections };
 }
 
 /** In text order, with changes that touch joined into one. */
@@ -801,64 +917,148 @@ export function applyChanges(text: string, changes: readonly TextChange[]): stri
 // Questions
 // ---------------------------------------------------------------------------
 
-/** A question to add to an idea, as the form holds it. */
+/** A question to add to an idea, as the form holds it. `other` are its
+ *  further fields (`max-words`, `multi`, `force-feedback`, …); left out, a
+ *  new choice question gets `shuffle:: true`. */
 export type NewQuestion =
-  | { type: 'Open'; content: string; assessment?: string; feedback?: string }
-  | { type: 'Choice'; content: string; options: { text: string; correct: boolean }[]; explanation?: string };
+  | { type: 'Open'; content: string; assessment?: string; feedback?: string; other?: QuestionField[] }
+  | { type: 'Choice'; content: string; options: { text: string; correct: boolean }[]; explanation?: string; other?: QuestionField[] };
 
 export const MIN_OPTIONS = 2;
 export const MAX_OPTIONS = 6;
 
+/** Further fields the platform knows, to offer in the form (any name can be typed). */
+export const QUESTION_SETTINGS: Record<NewQuestion['type'], ReadonlyArray<{ name: string; hint: string }>> = {
+  Open: [
+    { name: 'max-words', hint: 'Longest answer, in words' },
+    { name: 'force-feedback', hint: 'When the tutor answers unasked: true, first, or below 60' },
+    { name: 'example-answer', hint: 'Shown after the learner answered' },
+    { name: 'placeholder', hint: 'Grey text in the empty answer box' },
+    { name: 'optional', hint: 'true: may be skipped' },
+    { name: 'enforce-voice', hint: 'true: answered by voice' },
+  ],
+  Choice: [
+    { name: 'multi', hint: 'true: several options may be ticked' },
+    { name: 'shuffle', hint: 'true: options in a mixed order' },
+    { name: 'max-select', hint: 'Most options a learner may tick' },
+    { name: 'feedback-instructions', hint: 'How the tutor should respond' },
+    { name: 'force-feedback', hint: 'When the tutor answers unasked: true or first' },
+    { name: 'optional', hint: 'true: may be skipped' },
+  ],
+};
+
 export const PENDING_QUESTIONS_ERROR =
   'The questions of this file have pending suggestions. Open the file and accept or reject them first.';
+export const PENDING_QUESTION_ERROR =
+  'This question has a pending suggestion or a comment in it. Open the file and accept, reject or remove it first.';
+export const QUESTION_MOVED_ERROR =
+  'This question was changed in the file meanwhile. Close this form and open it again.';
+const FILE_ONLY_QUESTION_ERROR = 'This kind of question is edited in the file.';
 
 /** A line that would start a heading or a field of its own inside a value. */
 const BREAKS_VALUE = /^\s*(?:#|\w[\w-]*::)/m;
 
-/**
- * Why `question` cannot be added, or null. Every value becomes one
- * paragraph of a `name:: value` field, so none may hold a line that starts a
- * heading or another field.
- */
-export function newQuestionProblem(question: NewQuestion): string | null {
-  if (!question.content.trim()) return 'Write the question.';
-  const values: Array<[string, string | undefined]> = question.type === 'Open'
-    ? [['The question', question.content], ['The grading text', question.assessment], ['The tutor text', question.feedback]]
-    : [
-      ['The question', question.content],
-      ...question.options.map((option): [string, string] => ['An option', option.text]),
-      ['The explanation', question.explanation],
-    ];
-  for (const [label, value] of values) {
-    if (value && BREAKS_VALUE.test(value)) return `${label} cannot have a line that starts with # or with a field name like "name::".`;
+/** A value as it is written: line breaks kept, no blank lines around it, no
+ *  spaces at line ends. */
+const cleanValue = (value: string | null | undefined) =>
+  (value ?? '').replace(/\r\n?/g, '\n').split('\n').map((line) => line.trimEnd()).join('\n').trim();
+
+const valueProblem = (label: string, value: string) =>
+  (BREAKS_VALUE.test(value) ? `${label} cannot have a line that starts with # or with a field name like "name::".` : null);
+
+function optionsProblem(options: readonly { text: string; correct: boolean }[]): string | null {
+  for (const option of options) {
+    const problem = valueProblem('An option', option.text);
+    if (problem) return problem;
   }
-  if (question.type === 'Choice') {
-    if (question.options.length < MIN_OPTIONS) return `A choice question needs at least ${MIN_OPTIONS} options.`;
-    if (question.options.length > MAX_OPTIONS) return `A choice question has at most ${MAX_OPTIONS} options.`;
-    if (question.options.some((option) => !option.text.trim())) return 'Fill in every option, or remove the empty ones.';
-    if (!question.options.some((option) => option.correct)) return 'Tick at least one right answer.';
+  if (options.length < MIN_OPTIONS) return `A choice question needs at least ${MIN_OPTIONS} options.`;
+  if (options.length > MAX_OPTIONS) return `A choice question has at most ${MAX_OPTIONS} options.`;
+  if (options.some((option) => !option.text.trim())) return 'Fill in every option, or remove the empty ones.';
+  if (!options.some((option) => option.correct)) return 'Tick at least one right answer.';
+  return null;
+}
+
+/** The text fields the form holds besides the question itself, in the order
+ *  they are written, with what an error calls them. */
+function textFields(question: NewQuestion): Array<{ name: string; label: string; value: string }> {
+  return question.type === 'Open'
+    ? [
+      { name: 'assessment-instructions', label: 'The grading text', value: cleanValue(question.assessment) },
+      { name: 'feedback-instructions', label: 'The tutor text', value: cleanValue(question.feedback) },
+    ]
+    : [{ name: 'explanation', label: 'The explanation', value: cleanValue(question.explanation) }];
+}
+
+/** The names the form has its own boxes for (and the id, which never changes). */
+const boxNames = (question: NewQuestion) =>
+  ['id', 'content', ...(question.type === 'Choice' ? ['options'] : []), ...textFields(question).map((field) => field.name)];
+
+/**
+ * The further fields of a question as they are written. A choice question
+ * with several right answers needs `multi:: true` (the platform refuses it
+ * otherwise): `several` adds it.
+ */
+function otherFields(question: NewQuestion, several = false): QuestionField[] {
+  const fields = (question.other ?? (question.type === 'Choice' ? [{ name: 'shuffle', value: 'true' }] : []))
+    .map(({ name, value }) => ({ name: name.trim(), value: cleanValue(value) }));
+  if (!several || question.type !== 'Choice' || question.options.filter((option) => option.correct).length < 2) return fields;
+  const multi = fields.find((field) => field.name === 'multi');
+  if (!multi) return [...fields, { name: 'multi', value: 'true' }];
+  return fields.map((field) => (field === multi ? { ...field, value: 'true' } : field));
+}
+
+/** Why these further fields cannot be written, or null. `known` are the
+ *  names the question already has among them. */
+function otherProblem(question: NewQuestion, fields: readonly QuestionField[], known: readonly string[] = []): string | null {
+  const seen = new Set<string>();
+  for (const { name, value } of fields) {
+    if (seen.has(name)) return `The setting "${name}" is there twice.`;
+    seen.add(name);
+    if (!known.includes(name)) {
+      if (!/^\w[\w-]*$/.test(name)) return name ? `"${name}" cannot be the name of a setting: letters, digits and - only.` : 'Give the new setting a name.';
+      if (boxNames(question).includes(name)) return `"${name}" has its own box in this form.`;
+    }
+    const problem = valueProblem(`The setting "${name}"`, value);
+    if (problem) return problem;
   }
   return null;
 }
 
 /**
+ * Why `question` cannot be added, or null. A value may have several lines,
+ * but none that starts a heading or another field.
+ */
+export function newQuestionProblem(question: NewQuestion): string | null {
+  if (!question.content.trim()) return 'Write the question.';
+  const values = [{ label: 'The question', value: question.content }, ...textFields(question)];
+  for (const { label, value } of values) {
+    const problem = valueProblem(label, value);
+    if (problem) return problem;
+  }
+  const problem = question.type === 'Choice' ? optionsProblem(question.options) : null;
+  return problem ?? otherProblem(question, otherFields(question));
+}
+
+/** The lines of a field: a value of one line beside its name, one of several
+ *  lines under it (as is one in quotes, which would lose them beside it). */
+function fieldLines(name: string, value: string): string[] {
+  const inline = !value.includes('\n') && !(value.startsWith('"') && value.endsWith('"'));
+  return inline ? [`${name}:: ${value}`] : [`${name}::`, ...value.split('\n')];
+}
+
+/** Right answers ticked, the others plain: the platform refuses `- [ ]`. */
+const optionLines = (options: readonly { text: string; correct: boolean }[]) =>
+  ['options::', ...options.map((option) => `- ${option.correct ? '[x] ' : ''}${oneParagraph(option.text)}`)];
+
+/**
  * The text of a question segment (standard Lens syntax, always typed), ending
- * in a line break. Optional fields that are empty are left out.
+ * in a line break. Fields that are empty are left out.
  */
 export function renderQuestion(question: NewQuestion & { id: string }): string {
-  const lines = [`#### Question: ${question.type}`, `id:: ${question.id}`, `content:: ${oneParagraph(question.content)}`];
-  const field = (name: string, value: string | undefined) => {
-    const text = oneParagraph(value ?? '');
-    if (text) lines.push(`${name}:: ${text}`);
-  };
-  if (question.type === 'Open') {
-    field('assessment-instructions', question.assessment);
-    field('feedback-instructions', question.feedback);
-  } else {
-    lines.push('options::');
-    for (const option of question.options) lines.push(`- [${option.correct ? 'x' : ' '}] ${oneParagraph(option.text)}`);
-    lines.push('shuffle:: true');
-    field('explanation', question.explanation);
+  const lines = [`#### Question: ${question.type}`, `id:: ${question.id}`, ...fieldLines('content', cleanValue(question.content))];
+  if (question.type === 'Choice') lines.push(...optionLines(question.options));
+  for (const { name, value } of [...otherFields(question, true), ...textFields(question)]) {
+    if (value) lines.push(...fieldLines(name, value));
   }
   return `${lines.join('\n')}\n`;
 }
@@ -885,4 +1085,456 @@ export function questionChanges(text: string, segment: string): Changes {
   const before = (unfinishedLine ? '\n' : '') + (last ? '\n' : '');
   const after = pos < text.length && pos === section.to ? '\n' : '';
   return { changes: [{ from: pos, to: pos, insert: before + block + after }] };
+}
+
+/**
+ * A question as the form holds it, to edit it there; null for one the form
+ * cannot edit: any type but Open and Choice, and a Choice whose options the
+ * form cannot show. Every field of the question but its `id` is in it: the
+ * ones without a box of their own under `other`.
+ */
+export function questionAsNew(question: IdeaQuestion): NewQuestion | null {
+  const type = question.type.toLowerCase();
+  const field = (name: string, value: string | null) => (value === null ? [] : [{ name, value }]);
+  const others = question.other.map((other) => ({ ...other }));
+  if (type === 'open') {
+    return {
+      type: 'Open',
+      content: question.content,
+      assessment: question.assessment ?? '',
+      feedback: question.feedback ?? '',
+      other: [...field('explanation', question.explanation), ...others],
+    };
+  }
+  if (type === 'choice' && question.options && question.options.length >= MIN_OPTIONS) {
+    return {
+      type: 'Choice',
+      content: question.content,
+      options: question.options.map((option) => ({ ...option })),
+      explanation: question.explanation ?? '',
+      other: [
+        ...field('assessment-instructions', question.assessment),
+        ...field('feedback-instructions', question.feedback),
+        ...others,
+      ],
+    };
+  }
+  return null;
+}
+
+type Options = readonly { text: string; correct: boolean }[] | null;
+const sameOptions = (a: Options, b: Options) =>
+  a === b || (!!a && !!b && a.length === b.length && a.every((option, i) => option.text.trim() === b[i].text.trim() && option.correct === b[i].correct));
+const sameQuestion = (a: IdeaQuestion, b: IdeaQuestion) =>
+  a.type === b.type && a.id === b.id && a.content === b.content && a.assessment === b.assessment
+  && a.feedback === b.feedback && a.explanation === b.explanation && sameOptions(a.options, b.options)
+  && a.other.length === b.other.length && a.other.every((field, i) => field.name === b.other[i].name && field.value === b.other[i].value);
+
+const SEGMENT_HEADING = /^#{1,4}\s+(.+)$/;
+
+/** The question segments among the lines under `## Questions`, in order:
+ *  each with its heading line and the lines up to the next heading. */
+function questionSegments(body: readonly Line[], isHidden: (pos: number) => boolean) {
+  const segments: Array<{ type: string; heading: Line; lines: Line[] }> = [];
+  let current: (typeof segments)[number] | null = null;
+  for (const line of body) {
+    const title = isHidden(line.from) ? undefined : SEGMENT_HEADING.exec(line.text)?.[1];
+    if (title === undefined) {
+      current?.lines.push(line);
+      continue;
+    }
+    const question = QUESTION_TITLE.exec(title.trim().replace(/:$/, '').trim());
+    current = question ? { type: (question[1] ?? '').trim(), heading: line, lines: [] } : null;
+    if (current) segments.push(current);
+  }
+  return segments;
+}
+
+/** Where a line's text ends, before its line break. */
+const lineEnd = (line: Line) => line.from + line.text.length;
+
+/**
+ * The question at place `index` of `text`, when it still is `before` (the
+ * question a form or a confirm step was opened with) and holds no pending
+ * suggestion and no comment; else the error to show.
+ */
+function findQuestion(text: string, index: number, before: IdeaQuestion) {
+  const { isHidden, sectionOf, pendingIn, markedIn } = scanFile(text);
+  const section = sectionOf('questions');
+  // A suggestion can hide which question is meant: a suggested heading is not one yet
+  const moved = { error: section && pendingIn(section.from, section.to) ? PENDING_QUESTIONS_ERROR : QUESTION_MOVED_ERROR };
+  const segments = section ? questionSegments(section.body, isHidden) : [];
+  const segment = segments[index];
+  if (!section || !segment) return moved;
+
+  // Blank lines and a comment after the question are not part of it
+  const lines = [...segment.lines];
+  while (lines.length > 0 && (lines[lines.length - 1].text.trim() === '' || isHidden(lines[lines.length - 1].from))) lines.pop();
+  if (markedIn(segment.heading.from, (lines.at(-1) ?? segment.heading).to)) return { error: PENDING_QUESTION_ERROR };
+
+  const texts = lines.map((line) => line.text);
+  const live = readQuestion(segment.type, texts);
+  if (!sameQuestion(live, before)) return moved;
+  return { section, segment, lines, live, fields: fieldsOf(texts), last: index === segments.length - 1 };
+}
+
+/**
+ * The changes that make the question at place `index` of `text` (a file as
+ * stored) say what the form says (`after`), given the question the form was
+ * opened with (`before`). Only the fields the user changed are written: a
+ * changed one in its place, an emptied or removed one loses its lines, a new
+ * one goes after the last field of its kind (the form's own boxes: `content`,
+ * `assessment-instructions` and `feedback-instructions` for Open, `options`
+ * and `explanation` for Choice; then the further ones, at the end). The
+ * heading, the `id::`, every unchanged field and the rest of the file are
+ * never touched, and an unchanged field is not held to the rules for new text.
+ *
+ * Refuses when the question at that place is no longer `before` (someone
+ * edited meanwhile), and while it holds a pending suggestion or a comment.
+ */
+export function questionEditChanges(text: string, index: number, before: IdeaQuestion, after: NewQuestion): Changes {
+  const found = findQuestion(text, index, before);
+  if ('error' in found) return found;
+  const { segment, lines, live, fields } = found;
+  const form = questionAsNew(live);
+  if (!form || form.type !== after.type) return { error: FILE_ONLY_QUESTION_ERROR };
+
+  const boxes = boxNames(after).slice(1);
+  const liveOther = otherFields(form);
+  const optionsChanged = after.type === 'Choice' && !sameOptions(live.options, after.options);
+  const wantedOther = otherFields(after, optionsChanged);
+  const known = liveOther.map((field) => field.name);
+  const twice = [...boxes, ...known].find((name) => fields.filter((field) => field.name === name).length > 1);
+  if (twice) return { error: `This question has "${twice}::" twice. Edit it in the file.` };
+  const taken = wantedOther.find(({ name }) => !known.includes(name) && fields.some((field) => field.name === name));
+  if (taken) return { error: `This question has "${taken.name}::" already. Edit it in the file.` };
+
+  const place = (name: string) => fields.findIndex((field) => field.name === name);
+  /** What becomes of a field of the file: new lines, or null when it goes. */
+  const rewritten = new Map<number, string[] | null>();
+  /** Lines to add after a field of the file (-1: after the heading). */
+  const added = new Map<number, string[]>();
+  const boxAnchor = Math.max(-1, ...boxes.map(place), ...(boxes.some((name) => place(name) !== -1) ? [] : [fields.map((field) => field.name).lastIndexOf('id')]));
+  const set = (name: string, newLines: string[] | null, anchor: number) => {
+    const at = place(name);
+    if (at !== -1) rewritten.set(at, newLines);
+    else if (newLines) added.set(anchor, [...(added.get(anchor) ?? []), ...newLines]);
+  };
+
+  const content = cleanValue(after.content);
+  if (content !== cleanValue(live.content)) {
+    const problem = content ? valueProblem('The question', content) : 'Write the question.';
+    if (problem) return { error: problem };
+    set('content', fieldLines('content', content), boxAnchor);
+  }
+  if (after.type === 'Choice' && optionsChanged) {
+    const problem = optionsProblem(after.options);
+    if (problem) return { error: problem };
+    set('options', optionLines(after.options), boxAnchor);
+  }
+  for (const { name, label, value } of textFields(after)) {
+    if (value === cleanValue(fields[place(name)]?.value)) continue;
+    const problem = valueProblem(label, value);
+    if (problem) return { error: problem };
+    set(name, value ? fieldLines(name, value) : null, boxAnchor);
+  }
+
+  const changedOther = wantedOther.filter(({ name, value }) => value !== liveOther.find((field) => field.name === name)?.value);
+  const problem = otherProblem(after, changedOther, known)
+    ?? otherProblem(after, wantedOther.map(({ name }) => ({ name, value: '' })), known);
+  if (problem) return { error: problem };
+  for (const { name } of liveOther) {
+    if (!wantedOther.some((field) => field.name === name)) set(name, null, -1);
+  }
+  for (const { name, value } of changedOther) set(name, value ? fieldLines(name, value) : null, fields.length - 1);
+
+  const changes: TextChange[] = [];
+  for (const [anchor, newLines] of added) {
+    if (rewritten.has(anchor)) {
+      // In the place of a field that goes, or straight after its new lines
+      rewritten.set(anchor, [...(rewritten.get(anchor) ?? []), ...newLines]);
+      continue;
+    }
+    const at = lineEnd(anchor === -1 ? segment.heading : lines[fields[anchor].end - 1]);
+    changes.push({ from: at, to: at, insert: `\n${newLines.join('\n')}` });
+  }
+  for (const [at, newLines] of rewritten) {
+    const from = lines[fields[at].start].from;
+    const last = lines[fields[at].end - 1];
+    changes.push(newLines ? { from, to: lineEnd(last), insert: newLines.join('\n') } : { from, to: last.to, insert: '' });
+  }
+  return { changes: mergeChanges(changes) };
+}
+
+/**
+ * The change that takes the question at place `index` out of `text` (a file
+ * as stored), with the blank line that set it apart; `before` is the question
+ * the user was shown. Same refusals as `questionEditChanges`.
+ */
+export function questionDeleteChanges(text: string, index: number, before: IdeaQuestion): Changes {
+  const found = findQuestion(text, index, before);
+  if ('error' in found) return found;
+  const { section, segment, lines } = found;
+  let from = segment.heading.from;
+  let to = (lines.at(-1) ?? segment.heading).to;
+  const rest = segment.lines.slice(lines.length);
+  const blank = rest.findIndex((line) => line.text.trim() !== '');
+  if (blank !== -1 || !found.last) {
+    // Something follows in the section: the blank lines after the question go with it
+    for (const line of blank === -1 ? rest : rest.slice(0, blank)) to = line.to;
+  } else {
+    // The last one: the blank lines before it go, those before the next section stay
+    for (let at = section.body.indexOf(segment.heading) - 1; at >= 0 && section.body[at].text.trim() === ''; at--) from = section.body[at].from;
+  }
+  return { changes: [{ from, to, insert: '' }] };
+}
+
+// ---------------------------------------------------------------------------
+// Editing, renaming and deleting an idea
+// ---------------------------------------------------------------------------
+
+/** Everything of an idea the form holds (its questions have their own form). */
+export interface IdeaEdit {
+  name: string;
+  priority: Priority;
+  /** Link targets of the frontmatter `courses`. */
+  courses: string[];
+  outcome: string;
+  why: string;
+  /** The text under `## Learn`, as written: a line per lens. */
+  learn: string;
+  /** Names of the ideas that must come first. */
+  requires: string[];
+  helpful: string[];
+}
+
+export const IDEA_MOVED_ERROR =
+  'This concept was changed in the file meanwhile. Close this form and open it again.';
+const UNSAFE_IDEA_ERROR = 'This file is written in a way the form cannot change safely. Edit it in the file.';
+const pendingPartError = (part: string) =>
+  `${part} of this file has a pending suggestion or a comment in it. Open the file and accept, reject or remove it first.`;
+
+/** An idea as the form holds it. */
+export function ideaAsEdit(name: string, idea: ParsedIdea): IdeaEdit {
+  const required = new Set(idea.requires.map(ideaKey));
+  return {
+    name,
+    priority: idea.priority,
+    courses: [...idea.courses],
+    outcome: idea.outcome,
+    why: idea.why,
+    learn: idea.learnText,
+    requires: [...idea.requires],
+    helpful: idea.helpful.filter((other) => !required.has(ideaKey(other))),
+  };
+}
+
+/** Why these values cannot be written to an idea file, or null (the name has
+ *  its own check, `ideaNameProblem`). */
+export function ideaEditProblem(edit: Partial<Pick<IdeaEdit, 'courses' | 'outcome' | 'why' | 'learn'>>): string | null {
+  const texts = [['The outcome', edit.outcome], ['Why it matters', edit.why], ['Learn', edit.learn]] as const;
+  for (const [label, value] of texts) {
+    if (/^#{1,2}(?!#)/m.test(cleanValue(value))) return `${label} cannot have a line that starts with # or ##: that starts a new part of the file.`;
+  }
+  if (cleanCourses(edit.courses ?? []).some((course) => /["[\]|\n]/.test(course))) return 'A course link cannot contain " [ ] or |.';
+  return null;
+}
+
+const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((value, i) => value === b[i]);
+const sameIdeas = (a: readonly string[], b: readonly string[]) => sameList(a.map(ideaKey), b.map(ideaKey));
+
+/**
+ * The changes that make `text` (an idea file as stored) say what the form
+ * says (`after`), given what the form was opened with (`before`). Only the
+ * parts the user changed are written: the frontmatter `priority` and
+ * `courses`, the outcome paragraph, the text under `## Why it matters` and
+ * `## Learn`, and the link lines of `## Requires` and `## Helpful first` (as
+ * `requirementChanges` does). A part that was not there is added in the
+ * format's order; an emptied section keeps its heading (an empty section is
+ * fine in the format), emptied `courses` lose their key. The `id`, the
+ * questions, unknown sections and all the rest stay byte for byte. The name
+ * is not in the text: a new one is a rename of the file.
+ *
+ * Refuses when the file no longer says `before` (someone edited meanwhile),
+ * while a part to change holds a pending suggestion or a comment, and when
+ * the file would not read back as the form says.
+ */
+export function ideaEditChanges(text: string, before: IdeaEdit, after: IdeaEdit): Changes {
+  const scan = scanFile(text);
+  const { lines, frontmatterEnd, firstHeading } = scan;
+  const live = ideaAsEdit('', parseIdea(text));
+  if (
+    live.priority !== before.priority || !sameList(live.courses, before.courses) || live.outcome !== before.outcome
+    || live.why !== before.why || live.learn !== before.learn
+    || !sameIdeas(live.requires, before.requires) || !sameIdeas(live.helpful, before.helpful)
+  ) return { error: IDEA_MOVED_ERROR };
+
+  const want = {
+    priority: after.priority,
+    courses: cleanCourses(after.courses),
+    outcome: cleanValue(after.outcome),
+    why: cleanValue(after.why),
+    learn: cleanValue(after.learn),
+  };
+  const changed = {
+    priority: want.priority !== live.priority,
+    courses: !sameList(want.courses, live.courses),
+    outcome: want.outcome !== cleanValue(live.outcome),
+    why: want.why !== cleanValue(live.why),
+    learn: want.learn !== cleanValue(live.learn),
+    picks: !sameIdeas(after.requires, live.requires) || !sameIdeas(after.helpful, live.helpful),
+  };
+  const problem = ideaEditProblem({
+    ...(changed.courses ? { courses: want.courses } : {}),
+    ...(changed.outcome ? { outcome: want.outcome } : {}),
+    ...(changed.why ? { why: want.why } : {}),
+    ...(changed.learn ? { learn: want.learn } : {}),
+  });
+  if (problem) return { error: problem };
+
+  const changes: TextChange[] = [];
+  /** A line break first, for what goes after a last line that has none. */
+  const lead = (pos: number) => (pos === text.length && text.length > 0 && !text.endsWith('\n') ? '\n' : '');
+
+  // The frontmatter: one key each, with the lines of its list
+  const front = lines.filter((line) => line.from < frontmatterEnd);
+  const keys = front.slice(1, -1);
+  const keyLines = (key: string) => {
+    const at = keys.findIndex((line) => new RegExp(`^${key}\\s*:`).test(line.text));
+    if (at === -1) return null;
+    let end = at + 1;
+    while (end < keys.length && /^(?:\s+\S|-(?:\s|$))/.test(keys[end].text)) end++;
+    return { first: keys[at], last: keys[end - 1] };
+  };
+  const frontChanges: Array<{ key: string; newLines: string[]; at: () => number }> = [];
+  if (changed.priority) {
+    frontChanges.push({ key: 'priority', newLines: [`priority: ${want.priority}`], at: () => (keyLines('id')?.last ?? front[0]).to });
+  }
+  if (changed.courses) {
+    frontChanges.push({ key: 'courses', newLines: want.courses.length > 0 ? courseLines(want.courses) : [], at: () => front[front.length - 1].from });
+  }
+  if (front.length === 0) {
+    const block = frontChanges.flatMap(({ newLines }) => newLines);
+    if (block.length > 0) changes.push({ from: 0, to: 0, insert: `---\n${block.join('\n')}\n---\n` });
+  } else {
+    for (const { key, newLines, at } of frontChanges) {
+      const found = keyLines(key);
+      if (found && scan.markedIn(found.first.from, found.last.to)) return { error: pendingPartError('The frontmatter') };
+      if (found) {
+        changes.push(newLines.length > 0
+          ? { from: found.first.from, to: lineEnd(found.last), insert: newLines.join('\n') }
+          : { from: found.first.from, to: found.last.to, insert: '' });
+      } else if (newLines.length > 0) {
+        changes.push({ from: at(), to: at(), insert: `${newLines.join('\n')}\n` });
+      }
+    }
+  }
+
+  /** Make the lines of `body` that say something read `wanted`; with none,
+   *  it goes to `pos`. The blank lines and comments around them stay. */
+  const setText = (body: readonly Line[], pos: number, wanted: string, part: string): string | null => {
+    const skip = (line: Line) => line.text.trim() === '' || scan.isHidden(line.from);
+    let start = 0;
+    let end = body.length;
+    while (start < end && skip(body[start])) start++;
+    while (end > start && skip(body[end - 1])) end--;
+    if (start === end) {
+      // A blank line before what follows
+      const next = lines.find((line) => line.from >= pos);
+      if (wanted) changes.push({ from: pos, to: pos, insert: `${lead(pos)}${wanted}\n${next && next.text.trim() !== '' ? '\n' : ''}` });
+      return null;
+    }
+    const first = body[start];
+    const last = body[end - 1];
+    if (scan.markedIn(first.from, last.to)) return pendingPartError(part);
+    changes.push(wanted ? { from: first.from, to: lineEnd(last), insert: wanted } : { from: first.from, to: last.to, insert: '' });
+    return null;
+  };
+
+  if (changed.outcome) {
+    const body = lines.filter((line) => line.from >= frontmatterEnd && (!firstHeading || line.from < firstHeading.from));
+    const failed = setText(body, frontmatterEnd, want.outcome, 'The outcome');
+    if (failed) return { error: failed };
+  }
+
+  let newSections: NewSections = new Map();
+  if (changed.picks) {
+    const edits = requirementEdits(text, scan, after.requires, after.helpful);
+    if ('error' in edits) return edits;
+    changes.push(...edits.changes);
+    newSections = edits.newSections;
+  }
+  const sections = [
+    { name: 'why it matters' as const, title: 'Why it matters', wanted: want.why, isChanged: changed.why, later: SECTIONS.slice(3) },
+    { name: 'learn' as const, title: 'Learn', wanted: want.learn, isChanged: changed.learn, later: SECTIONS.slice(4) },
+  ];
+  for (const { name, title, wanted, isChanged, later } of sections) {
+    if (!isChanged) continue;
+    const section = scan.sectionOf(name);
+    if (section) {
+      const failed = setText(section.body, section.heading.to, wanted, `"${title}"`);
+      if (failed) return { error: failed };
+    } else if (wanted) {
+      const pos = scan.headingAt(later) ?? text.length;
+      newSections.set(pos, [...(newSections.get(pos) ?? []), `## ${title}\n${wanted}\n`]);
+    }
+  }
+  changes.push(...sectionInserts(text, newSections));
+
+  const merged = mergeChanges(changes);
+  if (merged.length === 0) return { changes: [] };
+  // Read it back: a file written in an unusual way must not be damaged
+  const result = ideaAsEdit('', parseIdea(applyChanges(text, merged)));
+  const keySet = (names: readonly string[]) => [...new Set(names.map(ideaKey))].sort();
+  const required = new Set(after.requires.map(ideaKey));
+  const reads = result.priority === want.priority && sameList(result.courses, want.courses)
+    && cleanValue(result.outcome) === want.outcome && cleanValue(result.why) === want.why && cleanValue(result.learn) === want.learn
+    && sameList(keySet(result.requires), keySet(after.requires))
+    && sameList(keySet(result.helpful), keySet(after.helpful.filter((name) => !required.has(ideaKey(name)))));
+  return reads ? { changes: merged } : { error: UNSAFE_IDEA_ERROR };
+}
+
+/** The links to the idea `name` under `## Requires` and `## Helpful first`
+ *  of a scanned file, comments left out. */
+function requirementLinks(scan: ReturnType<typeof scanFile>, name: string) {
+  const key = ideaKey(name);
+  return (['requires', 'helpful first'] as const).flatMap((section) => (scan.sectionOf(section)?.body ?? []).flatMap((line) =>
+    [...line.text.matchAll(WIKILINK)]
+      .map((match) => ({ from: line.from + match.index, to: line.from + match.index + match[0].length, target: match[1].split('#')[0] }))
+      .filter((link) => !scan.isHidden(link.from) && ideaKey(linkName(link.target)) === key)));
+}
+
+/**
+ * The changes that make `text` (another idea's file, as stored) link to
+ * `newName` wherever its `## Requires` and `## Helpful first` link to
+ * `oldName`: only the name inside the link changes (a path before it, a
+ * `#heading` and the words shown stay). No link, no changes. Refuses while
+ * such a link is inside a pending suggestion.
+ */
+export function renameLinkChanges(text: string, oldName: string, newName: string): Changes {
+  const scan = scanFile(text);
+  const changes: TextChange[] = [];
+  for (const link of requirementLinks(scan, oldName)) {
+    if (scan.pendingIn(link.from, link.to)) return { error: PENDING_REQUIREMENTS_ERROR };
+    const file = link.target.slice(link.target.lastIndexOf('/') + 1);
+    const [, space, name] = /^(\s*)(.*?)(?:\.md)?\s*$/i.exec(file)!;
+    const from = link.from + 2 + (link.target.length - file.length) + space.length;
+    changes.push({ from, to: from + name.length, insert: newName.trim() });
+  }
+  return { changes };
+}
+
+/**
+ * The changes that take every link to the idea `name` out of the
+ * `## Requires` and `## Helpful first` of `text` (another idea's file, as
+ * stored), for when that idea is deleted: its line goes, or just the link on
+ * a line that says more. No link, no changes. Refuses while one of the two
+ * sections it changes holds a pending suggestion.
+ */
+export function removeLinkChanges(text: string, name: string): Changes {
+  const scan = scanFile(text);
+  if (requirementLinks(scan, name).length === 0) return { changes: [] };
+  const live = parseIdea(text);
+  const others = (names: readonly string[]) => names.filter((other) => ideaKey(other) !== ideaKey(name));
+  return requirementChanges(text, others(live.requires), others(live.helpful));
 }

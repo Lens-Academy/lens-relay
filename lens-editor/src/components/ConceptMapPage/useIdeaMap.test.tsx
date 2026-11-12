@@ -7,8 +7,15 @@ import { DisplayNameProvider } from '../../contexts/DisplayNameContext';
 import { NavigationContext } from '../../contexts/NavigationContext';
 import type { DocConnection } from '../../hooks/useDocConnection';
 import { __embedDocsTesting } from '../../lib/embed-docs';
-import { PENDING_QUESTIONS_ERROR, PENDING_REQUIREMENTS_ERROR } from '../../lib/idea-map';
-import { createDocument } from '../../lib/relay-api';
+import {
+  IDEA_MOVED_ERROR,
+  PENDING_QUESTIONS_ERROR,
+  PENDING_REQUIREMENTS_ERROR,
+  QUESTION_MOVED_ERROR,
+  ideaAsEdit,
+  parseIdea,
+} from '../../lib/idea-map';
+import { RelayApiError, TrashRefusedError, createDocument, movePath, trashPath } from '../../lib/relay-api';
 import { useIdeaMap } from './useIdeaMap';
 
 vi.mock('../../hooks/useDocConnection', () => ({
@@ -18,6 +25,8 @@ vi.mock('../../hooks/useDocConnection', () => ({
 vi.mock('../../lib/relay-api', async (original) => ({
   ...(await original<typeof import('../../lib/relay-api')>()),
   createDocument: vi.fn(),
+  movePath: vi.fn(),
+  trashPath: vi.fn(),
 }));
 
 const md = (id: string) => ({ id, type: 'markdown' as const, version: 0 });
@@ -88,6 +97,8 @@ function renderMap(folder?: string) {
 beforeEach(() => {
   localStorage.clear();
   vi.mocked(createDocument).mockReset();
+  vi.mocked(movePath).mockReset();
+  vi.mocked(trashPath).mockReset();
   __embedDocsTesting.reset();
   __embedDocsTesting.setReader(async (fullId) => {
     const text = texts[fullId.slice(RELAY_ID.length + 1)];
@@ -210,14 +221,15 @@ describe('useIdeaMap', () => {
         'content:: Which helps with most goals\\?',
         'options::',
         '- \\[x\\] Power',
-        '- \\[ \\] Rest',
+        // A wrong answer has no box: the platform takes "- [ ]" for a mistake
+        '- Rest',
         'shuffle:: true',
         '$',
       ].join('\n')));
       // The panel lists it without waiting for the next read
       await waitFor(() => expect(result.current.graph.byKey.get('power-seeking')!.idea!.questionList).toEqual([
-        { type: 'Open', content: 'Why?' },
-        { type: 'Choice', content: 'Which helps with most goals?' },
+        expect.objectContaining({ type: 'Open', content: 'Why?' }),
+        expect.objectContaining({ type: 'Choice', content: 'Which helps with most goals?', other: [{ name: 'shuffle', value: 'true' }] }),
       ]));
     });
 
@@ -242,6 +254,245 @@ describe('useIdeaMap', () => {
       });
       expect(failed).toBe(PENDING_QUESTIONS_ERROR);
       expect(live.doc.getText('contents').toString()).toBe(liveText);
+    });
+  });
+
+  describe('editQuestion and deleteQuestion', () => {
+    const TWO = `${POWER}\n#### Question: Choice\nid:: c\ncontent:: Which?\noptions::\n- [x] A\n- B\n`;
+    const open = (text: string) => parseIdea(text).questionList[0];
+
+    it('rewrites only the changed field of the question in the live file', async () => {
+      // Someone edited a sentence elsewhere after the form opened
+      const liveText = TWO.replace('most goals', 'nearly all goals');
+      const live = connection(liveText);
+      __embedDocsTesting.setConnector(async () => live);
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      let failed: string | null = 'not run';
+      await act(async () => {
+        failed = await result.current.editQuestion('power-seeking', 0, open(POWER), { type: 'Open', content: 'Why?', assessment: '- 60: a\n- 40: b', other: [] });
+      });
+      expect(failed).toBeNull();
+      expect(live.doc.getText('contents').toString()).toBe(liveText.replace('content:: Why?\n', 'content:: Why?\nassessment-instructions::\n- 60: a\n- 40: b\n'));
+      await waitFor(() => expect(result.current.graph.byKey.get('power-seeking')!.idea!.questionList[0].assessment).toBe('- 60: a\n- 40: b'));
+    });
+
+    it('writes nothing when the question is no longer what the form was opened with', async () => {
+      const liveText = TWO.replace('content:: Why?', 'content:: Why not?');
+      const live = connection(liveText);
+      __embedDocsTesting.setConnector(async () => live);
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await result.current.editQuestion('power-seeking', 0, open(POWER), { type: 'Open', content: 'Why so?' })).toBe(QUESTION_MOVED_ERROR);
+      expect(await result.current.deleteQuestion('power-seeking', 0, open(POWER))).toBe(QUESTION_MOVED_ERROR);
+      expect(live.doc.getText('contents').toString()).toBe(liveText);
+    });
+
+    it('takes one question out of the live file', async () => {
+      const live = connection(TWO);
+      __embedDocsTesting.setConnector(async () => live);
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      let failed: string | null = 'not run';
+      await act(async () => {
+        failed = await result.current.deleteQuestion('power-seeking', 1, parseIdea(TWO).questionList[1]);
+      });
+      expect(failed).toBeNull();
+      expect(live.doc.getText('contents').toString()).toBe(POWER);
+    });
+  });
+
+  describe('editIdea', () => {
+    const before = ideaAsEdit('Power-seeking', parseIdea(POWER));
+    /** A live doc per file, as the relay has them. */
+    const liveDocs = (overrides: Record<string, string> = {}) => {
+      const docs = new Map<string, DocConnection>();
+      __embedDocsTesting.setConnector(async (fullId) => {
+        const id = fullId.slice(RELAY_ID.length + 1);
+        if (!docs.has(id)) docs.set(id, connection(overrides[id] ?? texts[id]));
+        return docs.get(id)!;
+      });
+      return (id: string) => docs.get(id)?.doc.getText('contents').toString();
+    };
+
+    it('writes only the parts that changed into the live file, and renames nothing', async () => {
+      // A question was added in the file after the form opened: not this form's part
+      const liveText = `${POWER}\n#### Question: Open\ncontent:: Another?\n`;
+      const text = liveDocs({ ps: liveText });
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      let failed: string | null = 'not run';
+      await act(async () => {
+        failed = await result.current.editIdea('power-seeking', before, {
+          ...before,
+          priority: 'low',
+          outcome: 'Explain it.\nIn two lines.',
+          courses: ['../courses/A'],
+          // Itself is never its own requirement
+          requires: ['Instrumental convergence', 'power-seeking', 'Goals'],
+        });
+      });
+      expect(failed).toBeNull();
+      expect(text('ps')).toBe(liveText
+        .replace('priority: high\n', 'priority: low\ncourses:\n  - "[[../courses/A]]"\n')
+        .replace('Explain why power helps with most goals.', 'Explain it.\nIn two lines.')
+        .replace('- [[Instrumental convergence]]\n', '- [[Instrumental convergence]]\n- [[Goals]]\n'));
+      expect(movePath).not.toHaveBeenCalled();
+      await waitFor(() => expect(result.current.graph.byKey.get('power-seeking')!.idea!.priority).toBe('low'));
+    });
+
+    it('writes nothing when the file no longer says what the form was opened with', async () => {
+      const liveText = POWER.replace('most goals', 'nearly all goals');
+      const text = liveDocs({ ps: liveText });
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await result.current.editIdea('power-seeking', before, { ...before, name: 'Power', priority: 'low' })).toBe(IDEA_MOVED_ERROR);
+      expect(text('ps')).toBe(liveText);
+      expect(movePath).not.toHaveBeenCalled();
+    });
+
+    it('refuses a part that holds a comment, and a name another file has', async () => {
+      const text = liveDocs();
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await result.current.editIdea('power-seeking', before, { ...before, why: 'New.' })).toMatch(/^"Why it matters" of this file has a pending suggestion or a comment/);
+      expect(await result.current.editIdea('power-seeking', before, { ...before, name: 'instrumental Convergence', priority: 'low' })).toBe('A file with this name already exists.');
+      expect(await result.current.editIdea('power-seeking', before, { ...before, name: '_Template' })).toBe('A name cannot start with _ or a dot.');
+      expect(text('ps') ?? POWER).toBe(POWER);
+      expect(movePath).not.toHaveBeenCalled();
+      expect(await result.current.editIdea('orthogonality thesis', before, before)).toBe('This concept has no file yet.');
+    });
+
+    it('renames the file through the relay move, after the other changes, and rewrites the links the relay left', async () => {
+      const text = liveDocs();
+      vi.mocked(movePath).mockResolvedValue({} as Awaited<ReturnType<typeof movePath>>);
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      const convergence = ideaAsEdit('Instrumental convergence', parseIdea(texts.ic));
+      let failed: string | null = 'not run';
+      await act(async () => {
+        failed = await result.current.editIdea('instrumental convergence', convergence, { ...convergence, name: ' Convergence ', priority: 'low' });
+      });
+      expect(failed).toBeNull();
+      expect(movePath).toHaveBeenCalledWith('Lens Edu/Context Accelerator LOs/Instrumental convergence.md', '/Context Accelerator LOs/Convergence.md');
+      expect(text('ic')).toBe(texts.ic.replace('priority: high', 'priority: low'));
+      // This relay did not rewrite the link in the file that requires it
+      expect(text('ps')).toBe(POWER.replace('- [[Instrumental convergence]]', '- [[Convergence]]'));
+    });
+
+    it('leaves a link alone that the relay rewrote already', async () => {
+      const text = liveDocs();
+      vi.mocked(movePath).mockImplementation(async () => {
+        texts.ps = POWER.replace('- [[Instrumental convergence]]', '- [[Convergence]]');
+        return {} as Awaited<ReturnType<typeof movePath>>;
+      });
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      const convergence = ideaAsEdit('Instrumental convergence', parseIdea(texts.ic));
+      try {
+        let failed: string | null = 'not run';
+        await act(async () => {
+          failed = await result.current.editIdea('instrumental convergence', convergence, { ...convergence, name: 'Convergence' });
+        });
+        expect(failed).toBeNull();
+        // Not opened for editing at all
+        expect(text('ps')).toBeUndefined();
+        await waitFor(() => expect(result.current.graph.byKey.get('power-seeking')!.requires).toEqual(['convergence']));
+      } finally {
+        texts.ps = POWER;
+      }
+    });
+
+    it('says that the other changes are saved when the rename fails', async () => {
+      const text = liveDocs();
+      vi.mocked(movePath).mockRejectedValue(new RelayApiError('conflict', 409));
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      let failed: string | null = null;
+      await act(async () => {
+        failed = await result.current.editIdea('power-seeking', before, { ...before, name: 'Power', priority: 'low' });
+      });
+      expect(failed).toBe('The other changes are saved, but the rename failed: "Power.md" or "Power.html" already exists: a .md and a .html file cannot share a name. Close this form and open it again.');
+      expect(text('ps')).toBe(POWER.replace('priority: high', 'priority: low'));
+    });
+  });
+
+  describe('deleteIdea', () => {
+    const liveDocs = (overrides: Record<string, string> = {}) => {
+      const docs = new Map<string, DocConnection>();
+      __embedDocsTesting.setConnector(async (fullId) => {
+        const id = fullId.slice(RELAY_ID.length + 1);
+        if (!docs.has(id)) docs.set(id, connection(overrides[id] ?? texts[id]));
+        return docs.get(id)!;
+      });
+      return (id: string) => docs.get(id)?.doc.getText('contents').toString();
+    };
+    const IC = 'Lens Edu/Context Accelerator LOs/Instrumental convergence.md';
+    const PS = 'Lens Edu/Context Accelerator LOs/Power-seeking.md';
+    const trashed = {} as Awaited<ReturnType<typeof trashPath>>;
+
+    it('moves a file nothing links to into the trash', async () => {
+      const text = liveDocs();
+      vi.mocked(trashPath).mockResolvedValue(trashed);
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await result.current.deleteIdea('power-seeking')).toBeNull();
+      expect(vi.mocked(trashPath).mock.calls).toEqual([[PS]]);
+      expect(text('ic')).toBeUndefined();
+      expect(result.current.deleteNote).toBe('The file moves to the trash (Lens Edu/_trash) and can be restored from there.');
+    });
+
+    it('takes its links out of the ideas that list it, then deletes the file', async () => {
+      const text = liveDocs();
+      vi.mocked(trashPath)
+        .mockRejectedValueOnce(new TrashRefusedError('linked', [{ path: PS, count: 1 }]))
+        .mockResolvedValue(trashed);
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      let failed: string | null = 'not run';
+      await act(async () => {
+        failed = await result.current.deleteIdea('instrumental convergence');
+      });
+      expect(failed).toBeNull();
+      expect(text('ps')).toBe(POWER.replace('- [[Instrumental convergence]]\n', ''));
+      // Asked first without force, so that the relay names what links to it
+      expect(vi.mocked(trashPath).mock.calls).toEqual([[IC], [IC, true]]);
+      await waitFor(() => expect(result.current.graph.byKey.get('power-seeking')!.requires).toEqual([]));
+    });
+
+    it('changes nothing when a file outside the map links to it', async () => {
+      const text = liveDocs();
+      vi.mocked(trashPath).mockRejectedValue(new TrashRefusedError('linked', [{ path: PS, count: 1 }, { path: 'Lens Edu/courses/A course.md', count: 2 }]));
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await result.current.deleteIdea('instrumental convergence'))
+        .toBe('Nothing was deleted: Lens Edu/courses/A course.md links to this concept too. Take that link out first, or delete the file in the file tree.');
+      expect(text('ps')).toBeUndefined();
+      expect(trashPath).toHaveBeenCalledTimes(1);
+    });
+
+    it('changes nothing when its link in another idea sits beside a pending suggestion', async () => {
+      const suggested = POWER.replace('- [[Instrumental convergence]]\n', '- [[Instrumental convergence]]\n{++- [[Suggested]]\n++}');
+      texts.ps = suggested;
+      try {
+        const text = liveDocs();
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        expect(await result.current.deleteIdea('instrumental convergence')).toBe(`Nothing was deleted. In "Power-seeking": ${PENDING_REQUIREMENTS_ERROR}`);
+        expect(trashPath).not.toHaveBeenCalled();
+        expect(text('ps')).toBeUndefined();
+      } finally {
+        texts.ps = POWER;
+      }
+    });
+
+    it('says what the relay said when the delete fails, and refuses an idea without a file', async () => {
+      liveDocs();
+      vi.mocked(trashPath).mockRejectedValue(new RelayApiError('forbidden', 403));
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await result.current.deleteIdea('power-seeking')).toBe('Your access level cannot delete files');
+      expect(await result.current.deleteIdea('orthogonality thesis')).toBe('This concept has no file yet.');
     });
   });
 

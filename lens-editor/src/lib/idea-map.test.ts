@@ -1,20 +1,33 @@
 import { describe, expect, it } from 'vitest';
 import {
+  IDEA_MOVED_ERROR,
   PENDING_QUESTIONS_ERROR,
+  PENDING_QUESTION_ERROR,
+  PENDING_REQUIREMENTS_ERROR,
+  QUESTION_MOVED_ERROR,
   applyChanges,
   buildIdeaGraph,
+  ideaAsEdit,
+  ideaEditChanges,
+  ideaEditProblem,
   ideaNameProblem,
   mapColumns,
   mergePicks,
   newQuestionProblem,
   parseIdea,
+  questionAsNew,
   questionChanges,
+  questionDeleteChanges,
+  questionEditChanges,
+  removeLinkChanges,
+  renameLinkChanges,
   renderIdeaFile,
   renderQuestion,
   requirementChanges,
   requirementCircle,
   sortIdeas,
   togglePick,
+  type IdeaEdit,
   type IdeaFile,
   type NewQuestion,
 } from './idea-map';
@@ -624,7 +637,7 @@ describe('mapColumns', () => {
 });
 
 describe('the questions of an idea', () => {
-  it('lists each question with its type and the first line of its content', () => {
+  it('lists each question with its type and its values as written', () => {
     const idea = parseIdea([
       '---', 'id: 11111111-1111-4111-8111-111111111111', 'priority: high', '---', 'Outcome.', '',
       '## Questions',
@@ -640,19 +653,53 @@ describe('the questions of an idea', () => {
       'options::',
       '- [x] This',
       '- [ ] That',
+      '- The other',
+      'shuffle:: true',
+      'explanation:: Because.',
       '',
       '#### Question',
       'content:: {++Suggested, not there yet++}Old style',
+      'feedback-instructions::',
+      'Be kind.',
+      '',
+      '- And short.',
       '',
       '#### Text',
       'content:: Not a question.',
     ].join('\n'));
     expect(idea.questionList).toEqual([
-      { type: 'Open', content: 'Why would it seek power?' },
-      { type: 'Choice', content: 'Which one is right?' },
-      { type: '', content: 'Old style' },
+      {
+        type: 'Open', id: '22222222-2222-4222-8222-222222222222', content: 'Why would it seek power?\nIt has a second line.',
+        assessment: 'Score out of 100.', feedback: null, options: null, explanation: null, other: [],
+      },
+      {
+        type: 'Choice', id: '33333333-3333-4333-8333-333333333333', content: 'Which one is right?',
+        assessment: null, feedback: null,
+        options: [{ text: 'This', correct: true }, { text: 'That', correct: false }, { text: 'The other', correct: false }],
+        explanation: 'Because.',
+        other: [{ name: 'shuffle', value: 'true' }],
+      },
+      { type: '', id: null, content: 'Old style', assessment: null, feedback: 'Be kind.\n\n- And short.', options: null, explanation: null, other: [] },
     ]);
     expect(idea.questions).toBe(3);
+  });
+
+  it('lists every further field of a question in order, as written', () => {
+    const [question] = parseIdea('Outcome.\n\n## Questions\n#### Question: Open\nmax-words:: 80\nid:: 5\ncontent:: Why?\nforce-feedback:: below 60\nexample-answer::\nLine one.\nLine two.\nmy-own:: x\n').questionList;
+    expect(question.other).toEqual([
+      { name: 'max-words', value: '80' },
+      { name: 'force-feedback', value: 'below 60' },
+      { name: 'example-answer', value: 'Line one.\nLine two.' },
+      { name: 'my-own', value: 'x' },
+    ]);
+  });
+
+  it('has no options for a list it cannot read as options', () => {
+    const options = (lines: string) => parseIdea(`Outcome.\n\n## Questions\n#### Question: Choice\ncontent:: Which?\noptions::\n${lines}\n`).questionList[0].options;
+    expect(options('- [x] A\n- B')).toEqual([{ text: 'A', correct: true }, { text: 'B', correct: false }]);
+    expect(options('- [X] A\n\n-  B  ')).toEqual([{ text: 'A', correct: true }, { text: 'B', correct: false }]);
+    expect(options('- A\nnot a list line')).toBeNull();
+    expect(options('- A\n- freeform:: Other')).toBeNull();
   });
 
   it('is an empty list for a file without questions', () => {
@@ -712,20 +759,24 @@ describe('renderQuestion', () => {
       .toBe(`#### Question: Open\nid:: ${id}\ncontent:: Why would it seek power?\n`);
   });
 
-  it('writes the grading and the tutor text of an open question, each as one paragraph', () => {
+  it('writes the grading and the tutor text of an open question, line breaks kept', () => {
     expect(renderQuestion({
-      id, type: 'Open', content: 'Why?\nSay it in\n\nyour own words.', assessment: 'Score out of 100.\n60: names power.', feedback: ' Point to the lens. ',
+      id, type: 'Open', content: 'Why?', assessment: 'Score out of 100.\r\n- 60: names power.  \n\n- 40: says why.\n', feedback: ' Point to the lens. ',
     })).toBe([
       '#### Question: Open',
       `id:: ${id}`,
-      'content:: Why? Say it in your own words.',
-      'assessment-instructions:: Score out of 100. 60: names power.',
+      'content:: Why?',
+      'assessment-instructions::',
+      'Score out of 100.',
+      '- 60: names power.',
+      '',
+      '- 40: says why.',
       'feedback-instructions:: Point to the lens.',
       '',
     ].join('\n'));
   });
 
-  it('writes a choice question with ticked right answers, shuffled', () => {
+  it('writes a choice question with its right answers ticked and the others plain (the platform refuses "- [ ]"), shuffled', () => {
     expect(renderQuestion({
       id,
       type: 'Choice',
@@ -738,22 +789,41 @@ describe('renderQuestion', () => {
       'content:: Which are sub-goals of most goals?',
       'options::',
       '- [x] More resources',
-      '- [ ] Fewer options',
+      '- Fewer options',
       '- [x] Staying switched on',
       'shuffle:: true',
+      // Several right answers: the platform refuses them without this
+      'multi:: true',
       'explanation:: Both help with nearly any goal.',
       '',
     ].join('\n'));
   });
 
+  it('writes the further fields it is given, and no shuffle of its own then', () => {
+    const options = [{ text: 'A', correct: true }, { text: 'B', correct: false }];
+    expect(renderQuestion({ id, type: 'Choice', content: 'Which?', options, other: [{ name: 'max-select', value: ' 1 ' }, { name: 'optional', value: '' }] }))
+      .toBe(`#### Question: Choice\nid:: ${id}\ncontent:: Which?\noptions::\n- [x] A\n- B\nmax-select:: 1\n`);
+    expect(renderQuestion({ id, type: 'Open', content: 'Why?', feedback: 'Be kind.', other: [{ name: 'max-words', value: '80' }, { name: 'example-answer', value: 'One.\nTwo.' }] }))
+      .toBe(`#### Question: Open\nid:: ${id}\ncontent:: Why?\nmax-words:: 80\nexample-answer::\nOne.\nTwo.\nfeedback-instructions:: Be kind.\n`);
+  });
+
+  it('sets multi to true for several right answers, whatever it was given', () => {
+    const options = [{ text: 'A', correct: true }, { text: 'B', correct: true }];
+    expect(renderQuestion({ id, type: 'Choice', content: 'Which?', options, other: [{ name: 'multi', value: 'false' }] }))
+      .toBe(`#### Question: Choice\nid:: ${id}\ncontent:: Which?\noptions::\n- [x] A\n- [x] B\nmulti:: true\n`);
+  });
+
   it('leaves out an empty explanation', () => {
     const text = renderQuestion({ id, type: 'Choice', content: 'Which?', options: [{ text: 'A', correct: true }, { text: 'B', correct: false }] });
-    expect(text.endsWith('- [ ] B\nshuffle:: true\n')).toBe(true);
+    expect(text.endsWith('- B\nshuffle:: true\n')).toBe(true);
   });
 
   it('is read back as the question it was', () => {
-    const segment = renderQuestion({ id, type: 'Choice', content: 'Which?', options: [{ text: 'A', correct: true }, { text: 'B', correct: false }] });
-    expect(parseIdea(`Outcome.\n\n## Questions\n${segment}`).questionList).toEqual([{ type: 'Choice', content: 'Which?' }]);
+    const choice: NewQuestion = { type: 'Choice', content: 'Which?\nPick all.', options: [{ text: 'A', correct: true }, { text: 'B', correct: false }], explanation: '"Quoted"' };
+    const open: NewQuestion = { type: 'Open', content: 'Why?', assessment: '- 60: a\n- 40: b', feedback: 'Be kind.' };
+    const list = parseIdea(`Outcome.\n\n## Questions\n${renderQuestion({ ...choice, id })}\n${renderQuestion({ ...open, id })}`).questionList;
+    expect(list.map((q) => q.id)).toEqual([id, id]);
+    expect(list.map(questionAsNew)).toEqual([{ ...choice, other: [{ name: 'shuffle', value: 'true' }] }, { ...open, other: [] }]);
   });
 });
 
@@ -820,7 +890,641 @@ describe('questionChanges', () => {
 
   it('gives a file whose questions read back in order', () => {
     const idea = parseIdea(add(`${HEAD}## Questions\n${FIRST}`));
-    expect(idea.questionList).toEqual([{ type: 'Open', content: 'First?' }, { type: 'Open', content: 'New?' }]);
+    expect(idea.questionList.map((q) => [q.type, q.content])).toEqual([['Open', 'First?'], ['Open', 'New?']]);
     expect(idea.requires).toEqual(['Other']);
+  });
+});
+
+describe('questionAsNew', () => {
+  const question = (text: string) => parseIdea(`Outcome.\n\n## Questions\n${text}`).questionList[0];
+
+  it('gives the form an open question with its values as written', () => {
+    expect(questionAsNew(question('#### Question: open\nid:: 5\ncontent:: Why?\nassessment-instructions::\n- 60: a\n- 40: b\n')))
+      .toEqual({ type: 'Open', content: 'Why?', assessment: '- 60: a\n- 40: b', feedback: '', other: [] });
+  });
+
+  it('holds every field but the id: those without a box of their own as further fields', () => {
+    expect(questionAsNew(question('#### Question: Open\nid:: 5\nmax-words:: 80\ncontent:: Why?\nexplanation:: Odd here.\nforce-feedback:: first\n')))
+      .toMatchObject({ other: [{ name: 'explanation', value: 'Odd here.' }, { name: 'max-words', value: '80' }, { name: 'force-feedback', value: 'first' }] });
+    expect(questionAsNew(question('#### Question: Choice\ncontent:: Which?\noptions::\n- [x] A\n- B\nfeedback-instructions:: Be kind.\nmulti:: true\n')))
+      .toMatchObject({ explanation: '', other: [{ name: 'feedback-instructions', value: 'Be kind.' }, { name: 'multi', value: 'true' }] });
+  });
+
+  it('gives the form a choice question with its options', () => {
+    expect(questionAsNew(question('#### Question: Choice\ncontent:: Which?\noptions::\n- [x] A\n- B\n- [ ] C\nshuffle:: true\n')))
+      .toEqual({ type: 'Choice', content: 'Which?', options: [{ text: 'A', correct: true }, { text: 'B', correct: false }, { text: 'C', correct: false }], explanation: '', other: [{ name: 'shuffle', value: 'true' }] });
+  });
+
+  it('is null for a type the form cannot edit, and for options it cannot read', () => {
+    expect(questionAsNew(question('#### Question: Ranking\ncontent:: Order these.\nitems::\n- A\n- B\n'))).toBeNull();
+    expect(questionAsNew(question('#### Question: FillBlank\ncontent:: The ___.\n'))).toBeNull();
+    expect(questionAsNew(question('#### Question\ncontent:: Old style.\n'))).toBeNull();
+    expect(questionAsNew(question('#### Question: Choice\ncontent:: Which?\n'))).toBeNull();
+    expect(questionAsNew(question('#### Question: Choice\ncontent:: Which?\noptions::\n- A\n'))).toBeNull();
+    expect(questionAsNew(question('#### Question: Choice\ncontent:: Which?\noptions::\n- A\nB\n'))).toBeNull();
+  });
+});
+
+describe('questionEditChanges', () => {
+  const HEAD = '---\nid: 11111111-1111-4111-8111-111111111111\npriority: high\n---\nOutcome.\n\n## Requires\n- [[Other]]\n\n## Questions\n';
+  const OPEN = [
+    '#### Question: Open',
+    'id:: 22222222-2222-4222-8222-222222222222',
+    'content:: Why would it seek power?',
+    'max-chars:: 600',
+    'assessment-instructions::',
+    'Score out of 100.',
+    '- 60: more resources make the goal easier to reach.',
+    '- 40: power is a means, not a wish.',
+    'force-feedback:: true',
+    '',
+  ].join('\n');
+  const CHOICE = [
+    '#### Question: Choice',
+    'id:: 33333333-3333-4333-8333-333333333333',
+    'content:: Which would you not expect?',
+    'options::',
+    '- More computing power',
+    '- [x] Making humans happy',
+    '- [ ] Staying switched on',
+    'shuffle:: true',
+    'max-select:: 1',
+    'explanation:: Only some goals need happy humans.',
+    '',
+  ].join('\n');
+  const RANKING = '#### Question: Ranking\nid:: 44444444-4444-4444-8444-444444444444\ncontent:: Order these.\nitems::\n- A\n- B\n';
+  const FILE = `${HEAD}${OPEN}\n${RANKING}\n${CHOICE}`;
+
+  /** The question at `index` as the form gets it, changed by `change`, saved into `text`. */
+  const edit = <T extends NewQuestion>(text: string, index: number, change: (q: T) => NewQuestion, opened = text) => {
+    const before = parseIdea(opened).questionList[index];
+    return questionEditChanges(text, index, before, change(questionAsNew(before) as T));
+  };
+  const saved = <T extends NewQuestion>(text: string, index: number, change: (q: T) => NewQuestion) => {
+    const result = edit(text, index, change);
+    if ('error' in result) throw new Error(result.error);
+    return applyChanges(text, result.changes);
+  };
+  type Open = Extract<NewQuestion, { type: 'Open' }>;
+  type Choice = Extract<NewQuestion, { type: 'Choice' }>;
+
+  it('changes nothing when the form is saved as it was opened', () => {
+    expect(edit(FILE, 0, (q) => q)).toEqual({ changes: [] });
+    expect(edit(FILE, 2, (q) => q)).toEqual({ changes: [] });
+    // Line endings and spaces the textarea added are not a change
+    expect(edit<Open>(FILE, 0, (q) => ({ ...q, assessment: `${q.assessment!.replace(/\n/g, '\r\n')}\n`, content: ` ${q.content} ` }))).toEqual({ changes: [] });
+  });
+
+  it('rewrites one line of a multi-line rubric and nothing else', () => {
+    const out = saved<Open>(FILE, 0, (q) => ({ ...q, assessment: q.assessment!.replace('- 40: power is a means, not a wish.', '- 30: power is a means.\n- 10: gives an example.') }));
+    expect(out).toBe(FILE.replace('- 40: power is a means, not a wish.', '- 30: power is a means.\n- 10: gives an example.'));
+  });
+
+  it('rewrites the question text only', () => {
+    const result = edit<Open>(FILE, 0, (q) => ({ ...q, content: 'Why would it gain power?' }));
+    const from = FILE.indexOf('content:: Why would it seek power?');
+    expect(result).toEqual({ changes: [{ from, to: from + 'content:: Why would it seek power?'.length, insert: 'content:: Why would it gain power?' }] });
+  });
+
+  it('writes a value of several lines under its field name, a value of one line beside it', () => {
+    expect(saved<Open>(FILE, 0, (q) => ({ ...q, content: 'Why would it seek power?\n\nAnswer in two sentences.' })))
+      .toBe(FILE.replace('content:: Why would it seek power?', 'content::\nWhy would it seek power?\n\nAnswer in two sentences.'));
+    expect(saved<Open>(FILE, 0, (q) => ({ ...q, assessment: 'Score out of 100.' })))
+      .toBe(FILE.replace(/assessment-instructions::\n(.*\n){3}/, 'assessment-instructions:: Score out of 100.\n'));
+  });
+
+  it('removes a field that was emptied', () => {
+    expect(saved<Open>(FILE, 0, (q) => ({ ...q, assessment: ' \n' })))
+      .toBe(FILE.replace(/assessment-instructions::\n(.*\n){3}/, ''));
+    expect(saved<Choice>(FILE, 2, (q) => ({ ...q, explanation: '' })))
+      .toBe(FILE.replace('explanation:: Only some goals need happy humans.\n', ''));
+  });
+
+  it('adds a field that was missing after the last of the fields the form holds', () => {
+    expect(saved<Open>(FILE, 0, (q) => ({ ...q, feedback: 'Point to the lens.' })))
+      .toBe(FILE.replace('- 40: power is a means, not a wish.\n', '- 40: power is a means, not a wish.\nfeedback-instructions:: Point to the lens.\n'));
+    // With only the question text there: after it
+    const bare = `${HEAD}#### Question: Open\nid:: 5\ncontent:: Why?\n\n${RANKING}`;
+    expect(saved<Open>(bare, 0, (q) => ({ ...q, assessment: '- 60: a\n- 40: b', feedback: 'Be kind.' })))
+      .toBe(bare.replace('content:: Why?\n', 'content:: Why?\nassessment-instructions::\n- 60: a\n- 40: b\nfeedback-instructions:: Be kind.\n'));
+  });
+
+  it('puts a new field where the last one was when that one is emptied in the same save', () => {
+    expect(saved<Open>(FILE, 0, (q) => ({ ...q, assessment: '', feedback: 'Point to the lens.' })))
+      .toBe(FILE.replace(/assessment-instructions::\n(.*\n){3}/, 'feedback-instructions:: Point to the lens.\n'));
+  });
+
+  it('leaves the options byte for byte when they were not changed, plain and ticked forms alike', () => {
+    const out = saved<Choice>(FILE, 2, (q) => ({ ...q, content: 'Which one?', options: q.options.map((o) => ({ ...o })) }));
+    expect(out).toBe(FILE.replace('content:: Which would you not expect?', 'content:: Which one?'));
+  });
+
+  it('rewrites the whole list when an option was changed: right answers ticked, the others plain', () => {
+    const lines = '- More computing power\n- [x] Making humans happy\n- [ ] Staying switched on\n';
+    expect(saved<Choice>(FILE, 2, (q) => ({ ...q, options: [...q.options, { text: 'Keeping its goal', correct: false }] })))
+      .toBe(FILE.replace(lines, '- More computing power\n- [x] Making humans happy\n- Staying switched on\n- Keeping its goal\n'));
+    expect(saved<Choice>(FILE, 2, (q) => ({ ...q, options: q.options.map((o, i) => ({ ...o, correct: i === 0 })) })))
+      .toBe(FILE.replace(lines, '- [x] More computing power\n- Making humans happy\n- Staying switched on\n'));
+  });
+
+  it('never touches the id, the heading, the other fields or the other questions', () => {
+    const out = saved<Choice>(FILE, 2, (q) => ({
+      ...q, content: 'New?', options: [{ text: 'A', correct: true }, { text: 'B', correct: false }], explanation: 'New.',
+    }));
+    expect(out).toBe(`${HEAD}${OPEN}\n${RANKING}\n${[
+      '#### Question: Choice',
+      'id:: 33333333-3333-4333-8333-333333333333',
+      'content:: New?',
+      'options::',
+      '- [x] A',
+      '- B',
+      'shuffle:: true',
+      'max-select:: 1',
+      'explanation:: New.',
+      '',
+    ].join('\n')}`);
+  });
+
+  it('works on the last segment of a file that ends without a line break', () => {
+    const text = FILE.slice(0, -1);
+    expect(saved<Choice>(text, 2, (q) => ({ ...q, explanation: 'Shorter.' }))).toBe(text.replace('Only some goals need happy humans.', 'Shorter.'));
+    expect(saved<Choice>(text, 2, (q) => ({ ...q, explanation: '' }))).toBe(text.replace('\nexplanation:: Only some goals need happy humans.', '\n'));
+    const open = `${HEAD}#### Question: Open\ncontent:: Why?`;
+    expect(saved<Open>(open, 0, (q) => ({ ...q, feedback: 'Be kind.' }))).toBe(`${open}\nfeedback-instructions:: Be kind.`);
+    expect(saved<Open>(open, 0, (q) => ({ ...q, content: 'Why so?' }))).toBe(`${HEAD}#### Question: Open\ncontent:: Why so?`);
+  });
+
+  it('keeps blank lines and a comment after the question where they are', () => {
+    const text = `${HEAD}#### Question: Open\ncontent:: Why?\n\n\n%%\nHow this file works\nname:: not a field\n%%\n`;
+    expect(saved<Open>(text, 0, (q) => ({ ...q, content: 'Why so?', assessment: 'Score it.' })))
+      .toBe(text.replace('content:: Why?\n', 'content:: Why so?\nassessment-instructions:: Score it.\n'));
+  });
+
+  it('refuses when the question at that place is no longer the one the form was opened with', () => {
+    // Someone changed it meanwhile
+    expect(edit<Open>(FILE.replace('Why would it seek power?', 'Why power?'), 0, (q) => ({ ...q, feedback: 'Be kind.' }), FILE))
+      .toEqual({ error: QUESTION_MOVED_ERROR });
+    // Someone put a question before it
+    expect(edit<Open>(FILE.replace(OPEN, `${RANKING}\n${OPEN}`), 0, (q) => ({ ...q, feedback: 'Be kind.' }), FILE))
+      .toEqual({ error: QUESTION_MOVED_ERROR });
+    // Someone removed it
+    expect(edit<Choice>(`${HEAD}${OPEN}`, 2, (q) => ({ ...q, content: 'New?' }), FILE)).toEqual({ error: QUESTION_MOVED_ERROR });
+    expect(edit<Choice>(HEAD.replace('## Questions\n', ''), 2, (q) => ({ ...q, content: 'New?' }), FILE)).toEqual({ error: QUESTION_MOVED_ERROR });
+    // Even a save that changes nothing says so
+    expect(edit(FILE.replace('Which would you not expect?', 'Which?'), 2, (q) => q, FILE)).toEqual({ error: QUESTION_MOVED_ERROR });
+    // A change to another question is no reason
+    expect(edit(FILE.replace('max-chars:: 600\n', ''), 2, (q) => q, FILE)).toEqual({ changes: [] });
+  });
+
+  it('refuses while the question holds a pending suggestion or a comment', () => {
+    const suggested = FILE.replace('Why would it seek power?', 'Why would it {~~seek~>gain~~} power?');
+    expect(edit<Open>(suggested, 0, (q) => ({ ...q, feedback: 'Be kind.' }))).toEqual({ error: PENDING_QUESTION_ERROR });
+    const remarked = FILE.replace('max-chars:: 600', 'max-chars:: 600{>>too short?<<}');
+    expect(edit<Open>(remarked, 0, (q) => ({ ...q, feedback: 'Be kind.' }))).toEqual({ error: PENDING_QUESTION_ERROR });
+    const noted = FILE.replace('Why would it seek power?', 'Why would it seek power? %%reword%%');
+    expect(edit<Open>(noted, 0, (q) => ({ ...q, feedback: 'Be kind.' }))).toEqual({ error: PENDING_QUESTION_ERROR });
+  });
+
+  it('is not held up by a suggestion in another question or elsewhere in the file', () => {
+    const text = FILE.replace('Outcome.', 'Outcome{++ of it++}.').replace('Why would it seek power?', 'Why would it {~~seek~>gain~~} power?');
+    expect(saved<Choice>(text, 2, (q) => ({ ...q, content: 'Which one?' }))).toBe(text.replace('Which would you not expect?', 'Which one?'));
+  });
+
+  it('says the questions have pending suggestions when one of them hides which question is meant', () => {
+    // A suggested new question before it: not in the list the form was opened from
+    const text = FILE.replace(OPEN, `{++#### Question: Open\ncontent:: Suggested?\n\n++}${OPEN}`);
+    expect(parseIdea(text).questionList).toHaveLength(3);
+    expect(edit<Choice>(text, 2, (q) => ({ ...q, content: 'Which one?' }))).toEqual({ error: PENDING_QUESTIONS_ERROR });
+  });
+
+  it('refuses a changed value that is empty or would break the segment, and says which', () => {
+    expect(edit<Open>(FILE, 0, (q) => ({ ...q, content: ' ' }))).toEqual({ error: 'Write the question.' });
+    expect(edit<Open>(FILE, 0, (q) => ({ ...q, assessment: `${q.assessment}\n#### Question: Open` }))).toMatchObject({ error: expect.stringMatching(/^The grading text cannot/) });
+    expect(edit<Open>(FILE, 0, (q) => ({ ...q, feedback: 'Good.\nid:: 5' }))).toMatchObject({ error: expect.stringMatching(/^The tutor text cannot/) });
+    expect(edit<Choice>(FILE, 2, (q) => ({ ...q, explanation: '# Why' }))).toMatchObject({ error: expect.stringMatching(/^The explanation cannot/) });
+    expect(edit<Choice>(FILE, 2, (q) => ({ ...q, options: q.options.map((o) => ({ ...o, correct: false })) }))).toEqual({ error: 'Tick at least one right answer.' });
+    expect(edit<Choice>(FILE, 2, (q) => ({ ...q, options: q.options.slice(0, 1) }))).toEqual({ error: 'A choice question needs at least 2 options.' });
+    expect(edit<Choice>(FILE, 2, (q) => ({ ...q, options: [...q.options, { text: ' ', correct: false }] }))).toEqual({ error: 'Fill in every option, or remove the empty ones.' });
+  });
+
+  it('does not hold an unchanged value to the rules for new text', () => {
+    // An old value with a "#tag" line, and options without a right answer: left as they are
+    const text = `${HEAD}#### Question: Choice\ncontent:: Which?\n#tag\noptions::\n- A\n- B\n`;
+    expect(saved<Choice>(text, 0, (q) => ({ ...q, explanation: 'Either.' }))).toBe(`${text}explanation:: Either.\n`);
+  });
+
+  it('refuses a question of a type the form cannot edit, and one whose type was changed', () => {
+    const ranking = parseIdea(FILE).questionList[1];
+    expect(questionEditChanges(FILE, 1, ranking, { type: 'Open', content: 'Order these.' })).toMatchObject({ error: expect.stringMatching(/edited in the file/) });
+    const open = parseIdea(FILE).questionList[0];
+    expect(questionEditChanges(FILE, 0, open, { type: 'Choice', content: 'Which?', options: [] })).toMatchObject({ error: expect.stringMatching(/edited in the file/) });
+  });
+
+  it('refuses a question that has one of its fields twice', () => {
+    const text = `${HEAD}#### Question: Open\ncontent:: Why?\ncontent:: Why so?\n`;
+    expect(edit<Open>(text, 0, (q) => ({ ...q, content: 'New?' }))).toMatchObject({ error: expect.stringMatching(/"content::" twice/) });
+  });
+
+  describe('the further fields', () => {
+    const other = (q: NewQuestion, change: Record<string, string | null>): NewQuestion => {
+      const fields = (q.other ?? []).filter(({ name }) => change[name] !== null).map((field) => (change[field.name] === undefined ? field : { ...field, value: change[field.name]! }));
+      const added = Object.entries(change).filter(([name, value]) => value !== null && !fields.some((field) => field.name === name)).map(([name, value]) => ({ name, value: value! }));
+      return { ...q, other: [...fields, ...added] };
+    };
+
+    it('changes one in its place', () => {
+      expect(saved(FILE, 0, (q) => other(q, { 'max-chars': '900' }))).toBe(FILE.replace('max-chars:: 600', 'max-chars:: 900'));
+      expect(saved(FILE, 2, (q) => other(q, { 'max-select': '2', shuffle: 'false' }))).toBe(FILE.replace('shuffle:: true\nmax-select:: 1', 'shuffle:: false\nmax-select:: 2'));
+    });
+
+    it('removes one that was taken out of the form, or emptied', () => {
+      expect(saved(FILE, 0, (q) => other(q, { 'force-feedback': null }))).toBe(FILE.replace('force-feedback:: true\n', ''));
+      expect(saved(FILE, 0, (q) => other(q, { 'max-chars': '  ' }))).toBe(FILE.replace('max-chars:: 600\n', ''));
+    });
+
+    it('adds a new one after the last field of the question', () => {
+      expect(saved(FILE, 0, (q) => other(q, { 'max-words': '80', 'example-answer': 'One.\nTwo.' })))
+        .toBe(FILE.replace('force-feedback:: true\n', 'force-feedback:: true\nmax-words:: 80\nexample-answer::\nOne.\nTwo.\n'));
+      expect(saved(FILE, 2, (q) => other(q, { optional: 'true' }))).toBe(`${FILE.trimEnd()}\noptional:: true\n`);
+    });
+
+    it('puts new fields of both kinds each in their place', () => {
+      expect(saved<Open>(FILE, 0, (q) => ({ ...other(q, { 'max-words': '80' }), feedback: 'Be kind.' } as NewQuestion))).toBe(FILE.replace(
+        'force-feedback:: true\n',
+        'force-feedback:: true\nmax-words:: 80\n',
+      ).replace('- 40: power is a means, not a wish.\n', '- 40: power is a means, not a wish.\nfeedback-instructions:: Be kind.\n'));
+      // The last field is one of the form's own boxes: the box first, then the rest
+      const text = `${HEAD}#### Question: Open\ncontent:: Why?\n`;
+      expect(saved<Open>(text, 0, (q) => ({ ...other(q, { optional: 'true' }), assessment: 'Score it.' } as NewQuestion)))
+        .toBe(`${text}assessment-instructions:: Score it.\noptional:: true\n`);
+    });
+
+    it('edits the grading and the tutor text of a choice question as further fields', () => {
+      const text = `${HEAD}#### Question: Choice\ncontent:: Which?\noptions::\n- [x] A\n- B\nfeedback-instructions:: Be kind.\n`;
+      expect(saved(text, 0, (q) => other(q, { 'feedback-instructions': 'Be kind.\nAnd short.' })))
+        .toBe(text.replace('feedback-instructions:: Be kind.', 'feedback-instructions::\nBe kind.\nAnd short.'));
+    });
+
+    it('adds multi when the options are changed to several right answers', () => {
+      const out = saved<Choice>(FILE, 2, (q) => ({ ...q, options: q.options.map((option) => ({ ...option, correct: true })) }));
+      expect(out).toBe(FILE.replace('- More computing power\n- [x] Making humans happy\n- [ ] Staying switched on', '- [x] More computing power\n- [x] Making humans happy\n- [x] Staying switched on')
+        .replace('explanation:: Only some goals need happy humans.\n', 'explanation:: Only some goals need happy humans.\nmulti:: true\n'));
+      // Options left as they are: nothing is added
+      const several = FILE.replace('- More computing power', '- [x] More computing power');
+      expect(edit(several, 2, (q) => q)).toEqual({ changes: [] });
+    });
+
+    it('refuses a name that cannot be a field, is there twice or has its own box, and a value that breaks the segment', () => {
+      expect(edit(FILE, 0, (q) => other(q, { 'two words': 'x' }))).toEqual({ error: expect.stringMatching(/cannot be the name of a setting/) });
+      expect(edit(FILE, 0, (q) => other(q, { '': 'x' }))).toEqual({ error: 'Give the new setting a name.' });
+      expect(edit(FILE, 0, (q) => other(q, { id: 'x' }))).toEqual({ error: 'This question has "id::" already. Edit it in the file.' });
+      expect(edit(FILE, 0, (q) => other(q, { 'feedback-instructions': 'x' }))).toEqual({ error: '"feedback-instructions" has its own box in this form.' });
+      expect(edit(FILE, 0, (q) => ({ ...q, other: [...(q.other ?? []), { name: 'max-chars', value: '5' }] }))).toEqual({ error: 'The setting "max-chars" is there twice.' });
+      expect(edit(FILE, 0, (q) => other(q, { 'max-chars': '5\nid:: 9' }))).toEqual({ error: expect.stringMatching(/^The setting "max-chars" cannot/) });
+      // An open question that has options: the form does not hold them
+      const odd = `${HEAD}#### Question: Open\ncontent:: Why?\noptions::\n- A\n`;
+      expect(edit(odd, 0, (q) => other(q, { options: '- B' }))).toEqual({ error: 'This question has "options::" already. Edit it in the file.' });
+    });
+
+    it('refuses when a further field was changed in the file meanwhile', () => {
+      expect(edit(FILE.replace('max-chars:: 600', 'max-chars:: 700'), 0, (q) => q, FILE)).toEqual({ error: QUESTION_MOVED_ERROR });
+      expect(edit(FILE.replace('shuffle:: true\n', ''), 2, (q) => q, FILE)).toEqual({ error: QUESTION_MOVED_ERROR });
+    });
+  });
+
+  it('gives a file that reads back as the form was saved', () => {
+    const out = saved<Open>(FILE, 0, (q) => ({ ...q, content: 'A?\nB?', assessment: '- 50: a\n- 50: b', feedback: '"Quoted"' }));
+    const idea = parseIdea(out);
+    expect(questionAsNew(idea.questionList[0])).toEqual({
+      type: 'Open', content: 'A?\nB?', assessment: '- 50: a\n- 50: b', feedback: '"Quoted"',
+      other: [{ name: 'max-chars', value: '600' }, { name: 'force-feedback', value: 'true' }],
+    });
+    expect(idea.questionList.slice(1)).toEqual(parseIdea(FILE).questionList.slice(1));
+    expect(idea.requires).toEqual(['Other']);
+  });
+});
+
+describe('questionDeleteChanges', () => {
+  const HEAD = '---\nid: 11111111-1111-4111-8111-111111111111\n---\nOutcome.\n\n## Questions\n';
+  const A = '#### Question: Open\nid:: a\ncontent:: First?\n';
+  const B = '#### Question: Ranking\nid:: b\ncontent:: Order.\nitems::\n- A\n- B\n';
+  const C = '#### Question: Choice\nid:: c\ncontent:: Which?\noptions::\n- [x] A\n- B\n';
+  const FILE = `${HEAD}${A}\n${B}\n${C}`;
+  const remove = (text: string, index: number, opened = text) => {
+    const result = questionDeleteChanges(text, index, parseIdea(opened).questionList[index]);
+    return 'error' in result ? result : applyChanges(text, result.changes);
+  };
+
+  it('takes a question out with the blank line after it', () => {
+    expect(remove(FILE, 0)).toBe(`${HEAD}${B}\n${C}`);
+    expect(remove(FILE, 1)).toBe(`${HEAD}${A}\n${C}`);
+  });
+
+  it('takes the last question out with the blank line before it', () => {
+    expect(remove(FILE, 2)).toBe(`${HEAD}${A}\n${B}`);
+    expect(remove(FILE.trimEnd(), 2)).toBe(`${HEAD}${A}\n${B}`);
+    expect(remove(`${HEAD}${A}`, 0)).toBe(HEAD);
+  });
+
+  it('keeps the blank line before the section that follows', () => {
+    expect(remove(`${FILE}\n## Notes\nText.\n`, 2)).toBe(`${HEAD}${A}\n${B}\n## Notes\nText.\n`);
+    expect(remove(`${HEAD}${A}\n## Notes\n`, 0)).toBe(`${HEAD}\n## Notes\n`);
+  });
+
+  it('keeps a comment after the question', () => {
+    expect(remove(`${HEAD}${A}\n%% note %%\n\n${C}`, 0)).toBe(`${HEAD}%% note %%\n\n${C}`);
+    expect(remove(`${FILE}\n%% the end %%\n`, 2)).toBe(`${HEAD}${A}\n${B}\n%% the end %%\n`);
+  });
+
+  it('makes one deletion', () => {
+    expect(questionDeleteChanges(FILE, 0, parseIdea(FILE).questionList[0])).toEqual({ changes: [{ from: HEAD.length, to: HEAD.length + A.length + 1, insert: '' }] });
+  });
+
+  it('refuses when the question at that place is no longer the one shown', () => {
+    expect(remove(`${HEAD}${B}\n${C}`, 0, FILE)).toEqual({ error: QUESTION_MOVED_ERROR });
+    expect(remove(FILE.replace('First?', 'Second?'), 0, FILE)).toEqual({ error: QUESTION_MOVED_ERROR });
+    expect(remove(HEAD, 0, FILE)).toEqual({ error: QUESTION_MOVED_ERROR });
+  });
+
+  it('refuses while the question holds a pending suggestion or a comment', () => {
+    const text = FILE.replace('First?', 'First{++ly++}?');
+    expect(remove(text, 0)).toEqual({ error: PENDING_QUESTION_ERROR });
+    expect(remove(text, 1)).toBe(`${HEAD}${A.replace('First?', 'First{++ly++}?')}\n${C}`);
+  });
+});
+
+describe('ideaAsEdit', () => {
+  it('holds every part of the file the form shows', () => {
+    expect(ideaAsEdit('Instrumental convergence', parseIdea(INSTRUMENTAL))).toEqual({
+      name: 'Instrumental convergence',
+      priority: 'high',
+      courses: ['../courses/in-development/Context Accelerator'],
+      outcome: 'Explain why agents with very different final goals would pursue the same sub-goals.',
+      why: parseIdea(INSTRUMENTAL).why,
+      learn: parseIdea(INSTRUMENTAL).learnText,
+      requires: [],
+      helpful: ['Orthogonality thesis'],
+    });
+    expect(parseIdea(INSTRUMENTAL).learnText).toMatch(/^- Start with \[\[/);
+  });
+
+  it('keeps an idea named under both headings as a requirement only', () => {
+    expect(ideaAsEdit('X', parseIdea('O.\n\n## Requires\n- [[A]]\n\n## Helpful first\n- [[a]]\n- [[B]]\n'))).toMatchObject({ requires: ['A'], helpful: ['B'] });
+  });
+});
+
+describe('ideaEditProblem', () => {
+  it('accepts text of several lines and paragraphs', () => {
+    expect(ideaEditProblem({ outcome: 'One.\n\nTwo.', why: 'A.\n### Small heading\nB.', learn: '- [[x]]: y\n- z', courses: ['../courses/A', '[[B]]'] })).toBeNull();
+    expect(ideaEditProblem({})).toBeNull();
+  });
+
+  it('refuses a line that starts a new part of the file, and a course link that breaks its line', () => {
+    expect(ideaEditProblem({ outcome: 'One.\n## Requires' })).toMatch(/^The outcome cannot/);
+    expect(ideaEditProblem({ why: '# Top' })).toMatch(/^Why it matters cannot/);
+    expect(ideaEditProblem({ learn: '- a\n##b' })).toMatch(/^Learn cannot/);
+    expect(ideaEditProblem({ courses: ['A "quoted" course'] })).toBe('A course link cannot contain " [ ] or |.');
+    expect(ideaEditProblem({ courses: ['A|B'] })).toBe('A course link cannot contain " [ ] or |.');
+  });
+});
+
+describe('ideaEditChanges', () => {
+  const FILE = [
+    '---',
+    'id: 11111111-1111-4111-8111-111111111111',
+    'priority: high',
+    'courses:',
+    '  - "[[../courses/in-development/Context Accelerator]]"',
+    'tags: [a, b]',
+    '---',
+    'Explain why it seeks power.',
+    '',
+    '## Requires',
+    '- [[Goals]]',
+    '',
+    '## Helpful first',
+    '',
+    '## Why it matters',
+    'It changes what we expect.',
+    'On two lines.',
+    '',
+    '## Learn',
+    '- [[../Lenses/Power|Power]]: read this first',
+    '',
+    '## Notes',
+    'Kept as it is.',
+    '',
+    '## Questions',
+    '#### Question: Open',
+    'id:: 22222222-2222-4222-8222-222222222222',
+    'content:: Why?',
+    '',
+  ].join('\n');
+  const opened = (text: string) => ideaAsEdit('Power', parseIdea(text));
+  const edit = (text: string, change: Partial<IdeaEdit>, from = text) => ideaEditChanges(text, opened(from), { ...opened(from), ...change });
+  const saved = (text: string, change: Partial<IdeaEdit>) => {
+    const result = edit(text, change);
+    if ('error' in result) throw new Error(result.error);
+    return applyChanges(text, result.changes);
+  };
+
+  it('changes nothing when the form is saved as it was opened', () => {
+    expect(edit(FILE, {})).toEqual({ changes: [] });
+    expect(edit(FILE.replace(/\n/g, '\r\n'), {})).toEqual({ changes: [] });
+    expect(edit(FILE, { name: 'Another name', outcome: ' Explain why it seeks power. \n' })).toEqual({ changes: [] });
+  });
+
+  it('changes the priority line only', () => {
+    expect(edit(FILE, { priority: 'low' })).toEqual({ changes: [{ from: FILE.indexOf('priority'), to: FILE.indexOf('priority') + 'priority: high'.length, insert: 'priority: low' }] });
+  });
+
+  it('adds a priority that was missing after the id, or at the top', () => {
+    expect(saved(FILE.replace('priority: high\n', ''), { priority: 'low' })).toBe(FILE.replace('priority: high', 'priority: low'));
+    expect(saved('---\ntags: [a]\n---\nOutcome.\n', { priority: 'high' })).toBe('---\npriority: high\ntags: [a]\n---\nOutcome.\n');
+    expect(saved('Outcome.\n', { priority: 'high' })).toBe('---\npriority: high\n---\nOutcome.\n');
+  });
+
+  it('rewrites the course list only, whatever way it was written', () => {
+    expect(saved(FILE, { courses: ['../courses/A', ' [[../courses/B]] ', ''] }))
+      .toBe(FILE.replace('  - "[[../courses/in-development/Context Accelerator]]"', '  - "[[../courses/A]]"\n  - "[[../courses/B]]"'));
+    const unquoted = FILE.replace('courses:\n  - "[[../courses/in-development/Context Accelerator]]"', 'courses: [[../courses/Old]]');
+    expect(saved(unquoted, { courses: ['../courses/A'] })).toBe(FILE.replace('in-development/Context Accelerator', 'A'));
+    const flush = FILE.replace('  - "[[', '- "[[');
+    expect(saved(flush, { courses: ['../courses/A'] })).toBe(FILE.replace('in-development/Context Accelerator', 'A'));
+  });
+
+  it('takes the courses key out when the list is emptied, and adds it at the end of the frontmatter when it was missing', () => {
+    const without = FILE.replace('courses:\n  - "[[../courses/in-development/Context Accelerator]]"\n', '');
+    expect(saved(FILE, { courses: [] })).toBe(without);
+    expect(saved(without, { courses: ['../courses/A'] })).toBe(without.replace('tags: [a, b]\n', 'tags: [a, b]\ncourses:\n  - "[[../courses/A]]"\n'));
+    expect(saved('Outcome.\n', { priority: 'low', courses: ['../courses/A'] })).toBe('---\npriority: low\ncourses:\n  - "[[../courses/A]]"\n---\nOutcome.\n');
+  });
+
+  it('rewrites the outcome paragraph only, line breaks kept', () => {
+    expect(saved(FILE, { outcome: 'Explain it.\n\nIn two paragraphs.  ' })).toBe(FILE.replace('Explain why it seeks power.', 'Explain it.\n\nIn two paragraphs.'));
+  });
+
+  it('adds an outcome that was missing, and removes one that was emptied', () => {
+    const without = FILE.replace('Explain why it seeks power.\n', '');
+    expect(saved(FILE, { outcome: ' ' })).toBe(without);
+    expect(saved(without, { outcome: 'Back.' })).toBe(FILE.replace('Explain why it seeks power.', 'Back.'));
+    expect(saved('---\nid: x\n---\n## Requires\n', { outcome: 'New.' })).toBe('---\nid: x\n---\nNew.\n\n## Requires\n');
+    expect(saved('---\nid: x\n---', { outcome: 'New.' })).toBe('---\nid: x\n---\nNew.\n');
+    expect(saved('', { outcome: 'New.' })).toBe('New.\n');
+  });
+
+  it('rewrites the text of a section only', () => {
+    expect(saved(FILE, { why: 'Now one line.' })).toBe(FILE.replace('It changes what we expect.\nOn two lines.', 'Now one line.'));
+    expect(saved(FILE, { learn: '- [[../Lenses/Power|Power]]: read this first\n- [[../Lenses/More]]' }))
+      .toBe(FILE.replace('read this first', 'read this first\n- [[../Lenses/More]]'));
+  });
+
+  it('keeps the heading of a section that was emptied, and fills an empty one under its heading', () => {
+    const empty = FILE.replace('It changes what we expect.\nOn two lines.\n', '');
+    expect(saved(FILE, { why: '' })).toBe(empty);
+    expect(empty).toContain('## Why it matters\n\n## Learn');
+    expect(saved(empty, { why: 'Back.\nAgain.' })).toBe(FILE.replace('It changes what we expect.\nOn two lines.', 'Back.\nAgain.'));
+    // No blank line under the heading: one is kept before the next heading
+    expect(saved('O.\n\n## Learn\n## Questions\n', { learn: '- x' })).toBe('O.\n\n## Learn\n- x\n\n## Questions\n');
+    expect(saved('O.\n\n## Learn', { learn: '- x' })).toBe('O.\n\n## Learn\n- x\n');
+  });
+
+  it('adds a missing section in the order of the format', () => {
+    const text = 'O.\n\n## Requires\n- [[Goals]]\n\n## Questions\n';
+    expect(saved(text, { why: 'W.' })).toBe('O.\n\n## Requires\n- [[Goals]]\n\n## Why it matters\nW.\n\n## Questions\n');
+    expect(saved(text, { why: 'W.', learn: '- l', helpful: ['Other'] }))
+      .toBe('O.\n\n## Requires\n- [[Goals]]\n\n## Helpful first\n- [[Other]]\n\n## Why it matters\nW.\n\n## Learn\n- l\n\n## Questions\n');
+    expect(saved('O.\n', { why: 'W.', learn: '- l', requires: ['A'] })).toBe('O.\n\n## Requires\n- [[A]]\n\n## Why it matters\nW.\n\n## Learn\n- l\n');
+    expect(saved('O.', { learn: '- l' })).toBe('O.\n\n## Learn\n- l\n');
+  });
+
+  it('changes the requirements as "Edit requirements" does', () => {
+    expect(saved(FILE, { requires: ['Goals', 'Agents'], helpful: ['Other'] }))
+      .toBe(FILE.replace('- [[Goals]]\n', '- [[Goals]]\n- [[Agents]]\n').replace('## Helpful first\n', '## Helpful first\n- [[Other]]\n'));
+    expect(saved(FILE, { requires: [] })).toBe(FILE.replace('- [[Goals]]\n', ''));
+  });
+
+  it('makes every change of one save together, and leaves the rest byte for byte', () => {
+    const out = saved(FILE, { priority: 'medium', outcome: 'New outcome.', why: 'New why.', learn: '', requires: ['Agents'], courses: ['../courses/A'] });
+    expect(out).toBe(FILE
+      .replace('priority: high', 'priority: medium')
+      .replace('in-development/Context Accelerator', 'A')
+      .replace('Explain why it seeks power.', 'New outcome.')
+      .replace('- [[Goals]]', '- [[Agents]]')
+      .replace('It changes what we expect.\nOn two lines.', 'New why.')
+      .replace('- [[../Lenses/Power|Power]]: read this first\n', ''));
+    for (const kept of ['id: 11111111-1111-4111-8111-111111111111', 'tags: [a, b]', '## Notes\nKept as it is.\n', '#### Question: Open\nid:: 22222222-2222-4222-8222-222222222222\ncontent:: Why?\n']) {
+      expect(out).toContain(kept);
+    }
+  });
+
+  it('keeps comments and blank lines around a text where they are', () => {
+    const text = FILE.replace('## Why it matters\n', '## Why it matters\n%% for the writer %%\n\n').replace('On two lines.\n', 'On two lines.\n\n\n%% end %%\n');
+    expect(saved(text, { why: 'New.' })).toBe(text.replace('It changes what we expect.\nOn two lines.', 'New.'));
+  });
+
+  it('refuses when the file no longer says what the form was opened with', () => {
+    for (const [from, to] of [['priority: high', 'priority: low'], ['seeks power', 'wants power'], ['- [[Goals]]', '- [[Aims]]'], ['On two lines', 'On 2 lines'], ['read this first', 'read this'], ['Context Accelerator', 'Other']]) {
+      expect(edit(FILE.replace(from, to), { why: 'New.' }, FILE)).toEqual({ error: IDEA_MOVED_ERROR });
+    }
+    // Even with nothing to save
+    expect(edit(FILE.replace('seeks power', 'wants power'), {}, FILE)).toEqual({ error: IDEA_MOVED_ERROR });
+  });
+
+  it('is not held up by a change to a question, to an unknown section or to an unknown frontmatter key', () => {
+    const live = FILE.replace('content:: Why?', 'content:: Why not?').replace('Kept as it is.', 'Changed.').replace('tags: [a, b]', 'tags: [c]');
+    const result = edit(live, { why: 'New.' }, FILE);
+    expect('changes' in result && applyChanges(live, result.changes)).toBe(live.replace('It changes what we expect.\nOn two lines.', 'New.'));
+  });
+
+  it('refuses while a part it would change holds a pending suggestion or a comment', () => {
+    const suggested = FILE.replace('On two lines.', 'On two{++ short++} lines.');
+    expect(edit(suggested, { why: 'New.' })).toEqual({ error: expect.stringMatching(/^"Why it matters" of this file has a pending suggestion or a comment/) });
+    const remarked = FILE.replace('seeks power', 'seeks %%why?%% power');
+    expect(edit(remarked, { outcome: 'New.' })).toEqual({ error: expect.stringMatching(/^The outcome of this file has a pending/) });
+    expect(edit(FILE.replace('- [[Goals]]', '- [[Goals]]\n{++- [[Aims]]++}'), { requires: [] })).toEqual({ error: PENDING_REQUIREMENTS_ERROR });
+    // Another part can still be changed
+    expect(saved(suggested, { outcome: 'New.' })).toBe(suggested.replace('Explain why it seeks power.', 'New.'));
+  });
+
+  it('refuses text that would start a new part of the file, in a changed part only', () => {
+    expect(edit(FILE, { why: 'One.\n## Two' })).toEqual({ error: expect.stringMatching(/^Why it matters cannot/) });
+    expect(edit(FILE, { courses: ['a"b'] })).toEqual({ error: 'A course link cannot contain " [ ] or |.' });
+    const odd = FILE.replace('Explain why it seeks power.', '# Explain why it seeks power.');
+    expect(saved(odd, { why: 'New.' })).toBe(odd.replace('It changes what we expect.\nOn two lines.', 'New.'));
+  });
+
+  it('refuses when the file would not read back as the form says', () => {
+    expect(edit(FILE, { why: 'A {++suggestion++} typed in.' })).toEqual({ error: expect.stringMatching(/cannot change safely/) });
+    const twice = `${FILE}\n## Learn\n- a second list\n`;
+    expect(edit(twice, { learn: '- only this' })).toEqual({ error: expect.stringMatching(/cannot change safely/) });
+  });
+
+  it('gives a file that reads back as the form was saved', () => {
+    const after: IdeaEdit = { name: 'Power', priority: 'low', courses: ['../courses/A', '../courses/B'], outcome: 'O.\nP.', why: 'W.', learn: '- [[../Lenses/L]]: l', requires: ['A', 'B'], helpful: ['C'] };
+    for (const text of [FILE, '', 'Outcome.\n', '---\nid: x\n---\n\n## Questions\n#### Question: Open\ncontent:: Q?\n']) {
+      const result = ideaEditChanges(text, opened(text), after);
+      if ('error' in result) throw new Error(result.error);
+      const idea = parseIdea(applyChanges(text, result.changes));
+      expect(ideaAsEdit('Power', idea)).toEqual(after);
+      expect(idea.questions).toBe(parseIdea(text).questions);
+    }
+  });
+});
+
+describe('renameLinkChanges', () => {
+  const FILE = 'Outcome about [[Old name]].\n\n## Requires\n- [[Old name]]\n- [[Other]]\n\n## Helpful first\n- [[old NAME|shown words]] and [[folder/Old name.md#Part]]\n\n## Learn\n- [[Old name]]\n';
+  const renamed = (text: string) => {
+    const result = renameLinkChanges(text, 'Old name', ' New name ');
+    return 'error' in result ? result : applyChanges(text, result.changes);
+  };
+
+  it('gives the links under Requires and Helpful first the new name, and nothing else', () => {
+    expect(renamed(FILE)).toBe('Outcome about [[Old name]].\n\n## Requires\n- [[New name]]\n- [[Other]]\n\n## Helpful first\n- [[New name|shown words]] and [[folder/New name.md#Part]]\n\n## Learn\n- [[Old name]]\n');
+  });
+
+  it('changes only the name inside each link', () => {
+    expect(renameLinkChanges('O.\n\n## Requires\n- [[Old name]]\n', 'old name', 'New')).toEqual({ changes: [{ from: 20, to: 28, insert: 'New' }] });
+  });
+
+  it('has no changes for a file that does not link to it', () => {
+    expect(renameLinkChanges(FILE, 'Something else', 'New')).toEqual({ changes: [] });
+    expect(renameLinkChanges('## Requires\n%% - [[Old name]] %%\n', 'Old name', 'New')).toEqual({ changes: [] });
+  });
+
+  it('refuses while such a link is inside a pending suggestion', () => {
+    expect(renamed('## Requires\n{++- [[Old name]]++}\n')).toEqual({ error: PENDING_REQUIREMENTS_ERROR });
+    // A suggestion elsewhere in the section does not matter
+    expect(renamed('## Requires\n- [[Old name]]\n{++- [[Other]]++}\n')).toBe('## Requires\n- [[New name]]\n{++- [[Other]]++}\n');
+  });
+
+  it('gives a file the map reads with the new name', () => {
+    expect(parseIdea(renamed(FILE) as string)).toMatchObject({ requires: ['New name', 'Other'], helpful: ['New name'] });
+  });
+});
+
+describe('removeLinkChanges', () => {
+  const FILE = 'Outcome about [[Gone]].\n\n## Requires\n- [[Gone]]\n- [[Other]]\n\n## Helpful first\n- [[Kept]] and [[gone|shown]]\n\n## Learn\n- [[Gone]]\n';
+  const removed = (text: string, name = 'Gone') => {
+    const result = removeLinkChanges(text, name);
+    return 'error' in result ? result : applyChanges(text, result.changes);
+  };
+
+  it('takes its line out, or just the link on a line that says more', () => {
+    expect(removed(FILE)).toBe('Outcome about [[Gone]].\n\n## Requires\n- [[Other]]\n\n## Helpful first\n- [[Kept]] and \n\n## Learn\n- [[Gone]]\n');
+  });
+
+  it('has no changes for a file that does not link to it', () => {
+    expect(removeLinkChanges(FILE, 'Something else')).toEqual({ changes: [] });
+    // Not even when its sections hold a suggestion
+    expect(removeLinkChanges('## Requires\n{++- [[Other]]++}\n', 'Gone')).toEqual({ changes: [] });
+  });
+
+  it('refuses while the section holds a pending suggestion', () => {
+    expect(removed('## Requires\n- [[Gone]]\n{++- [[Other]]++}\n')).toEqual({ error: PENDING_REQUIREMENTS_ERROR });
+  });
+
+  it('gives a file the map reads without it', () => {
+    expect(parseIdea(removed(FILE) as string)).toMatchObject({ requires: ['Other'], helpful: ['Kept'] });
   });
 });

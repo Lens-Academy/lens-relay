@@ -168,12 +168,23 @@ concept and its direct children (backlinkers in `Concepts/` whose parents includ
 file per idea, `## Requires` and `## Helpful first` hold wikilinks to other ideas, a link to a file that does not
 exist is an idea "not written yet". Three views (Map, Order, Table) and a side panel; links that can edit also add an
 idea, create a not-written-yet one, change an idea's two requirement lists (only those lines are rewritten) and add a
-question (one typed `#### Question: Open|Choice` segment appended to `## Questions`). The page never deletes or
-renames a file, and never edits an existing question.
+question (one typed `#### Question: Open|Choice` segment appended to `## Questions`). They also edit every part of an
+idea ("Edit": name, outcome, priority, courses, why, learn, both lists), rename it, delete it, and edit or delete a
+question. Rules of every edit: only the part that changed is rewritten and the rest of the file stays byte for byte;
+the save carries what the form was opened with and writes nothing when the file no longer says that; a part that
+holds a pending suggestion or a comment is refused. An emptied section keeps its heading. A rename is the relay's
+move (`movePath`, which rewrites links in other files; links it left under Requires / Helpful first are rewritten by
+`renameLinkChanges`). A delete takes the idea's links out of the other ideas' two lists, then trashes the file
+(`trashPath`: `Lens Edu/_trash/`, restorable); it stops when a file outside the map links to the idea. Questions of
+types other than Open and Choice are edited in the file. In `options::` a right answer is `- [x] text` and a wrong
+one plain `- text` (the platform's parser reports `- [ ]` as an error), and `multi:: true` is written whenever
+several options are right (the platform refuses them without it).
 
 - `src/lib/idea-map.ts`: file parsing, the graph (steps, circles, problems), sorting, the map's column layout, the
   text of a new file, the changes for a requirements edit, the text of a new question and the change that appends
-  it. Pure. The platform reads the same files for the learner's
+  it, and the changes for editing an idea (`ideaEditChanges`), renaming or removing its links in other files
+  (`renameLinkChanges`, `removeLinkChanges`) and editing or deleting a question (`questionEditChanges`,
+  `questionDeleteChanges`). Pure. The platform reads the same files for the learner's
   tree, so the format is a contract: change it on both sides or not at all.
 - `src/components/ConceptMapPage/`: the page, the three views, the panel, the two forms, and `useIdeaMap.ts` (reads
   the folder through `useSnapshots`, writes through `createDocument` and `withLiveDoc`). Everything but the hook

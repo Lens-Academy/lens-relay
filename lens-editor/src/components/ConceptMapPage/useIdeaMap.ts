@@ -8,21 +8,39 @@ import {
   IDEAS_FOLDER,
   IDEAS_SHARED_FOLDER,
   buildIdeaGraph,
+  ideaEditChanges,
   ideaKey,
+  ideaNameProblem,
   mergePicks,
   newQuestionProblem,
   parseIdea,
   questionChanges,
+  questionDeleteChanges,
+  questionEditChanges,
+  removeLinkChanges,
+  renameLinkChanges,
   renderIdeaFile,
   renderQuestion,
   requirementChanges,
+  type IdeaEdit,
   type IdeaGraph,
+  type IdeaNode,
+  type IdeaQuestion,
   type NewIdea,
   type NewQuestion,
   type Picks,
 } from '../../lib/idea-map';
 import { attachProvenanceRegistration, humanActor } from '../../lib/provenance';
-import { createDocument, createFolder, generateUUID } from '../../lib/relay-api';
+import {
+  TrashRefusedError,
+  createDocument,
+  createFolder,
+  deleteErrorMessage,
+  generateUUID,
+  moveErrorMessage,
+  movePath,
+  trashPath,
+} from '../../lib/relay-api';
 import { useSnapshots } from '../ConceptRowsPanel/useConceptRows';
 
 export interface IdeaMap {
@@ -50,6 +68,37 @@ export interface IdeaMap {
   /** Add a question at the end of an idea's `## Questions`; resolves to an
    *  error to show, or null. */
   addQuestion: (key: string, question: NewQuestion) => Promise<string | null>;
+  /**
+   * Save the "Edit concept" form: `before` is what the form was opened with
+   * (`ideaAsEdit`), `after` what it holds now. Only the parts that differ are
+   * written (ideaEditChanges); a file that no longer says `before` is left
+   * alone (IDEA_MOVED_ERROR). A changed `after.name` renames the file, after
+   * the other changes: the relay's move rewrites the `[[links]]` to it in
+   * other files, and what it left under Requires / Helpful first is rewritten
+   * here. The idea's key is `ideaKey(after.name)` afterwards. Resolves to an
+   * error to show, or null.
+   */
+  editIdea: (key: string, before: IdeaEdit, after: IdeaEdit) => Promise<string | null>;
+  /**
+   * Delete an idea: its links are taken out of the other ideas' Requires /
+   * Helpful first, then its file goes to the folder's `_trash/` (the editor's
+   * normal delete; a move back restores it). Nothing is changed when a file
+   * outside the map links to it, or when a link cannot be taken out safely.
+   * Resolves to an error to show, or null.
+   */
+  deleteIdea: (key: string) => Promise<string | null>;
+  /** What becomes of a deleted idea's file, said before it is deleted. */
+  deleteNote?: string;
+  /**
+   * Save the "Edit question" form for the `index`-th question of an idea
+   * (place in `idea.questionList`): `before` is the question the form was
+   * opened with, `after` what the form holds now. Resolves to an error to
+   * show, or null.
+   */
+  editQuestion: (key: string, index: number, before: IdeaQuestion, after: NewQuestion) => Promise<string | null>;
+  /** Take the `index`-th question out of an idea's file, when it still is
+   *  `before`; resolves to an error to show, or null. */
+  deleteQuestion: (key: string, index: number, before: IdeaQuestion) => Promise<string | null>;
 }
 
 /**
@@ -175,6 +224,98 @@ export function useIdeaMap(folder: string = IDEAS_FOLDER): IdeaMap {
     return editFile(key, (text) => questionChanges(text, segment));
   }, [editFile]);
 
+  const editQuestion = useCallback<IdeaMap['editQuestion']>(
+    (key, index, before, after) => editFile(key, (text) => questionEditChanges(text, index, before, after)),
+    [editFile],
+  );
+
+  const deleteQuestion = useCallback<IdeaMap['deleteQuestion']>(
+    (key, index, before) => editFile(key, (text) => questionDeleteChanges(text, index, before)),
+    [editFile],
+  );
+
+  /** The path the relay knows an idea's file by ("Lens Edu/<folder>/<name>.md"). */
+  const relayPath = useCallback((name: string) => `${IDEAS_SHARED_FOLDER}/${folder}/${name}.md`, [folder]);
+  /** The written ideas that name `node` under Requires or Helpful first. */
+  const linkersOf = useCallback((node: IdeaNode) => [...new Set([...node.neededFor, ...node.helpfulFor])]
+    .map((other) => graph.byKey.get(other))
+    .filter((other): other is IdeaNode & { docId: string } => Boolean(other?.docId)), [graph]);
+
+  const editIdea = useCallback<IdeaMap['editIdea']>(async (key, before, after) => {
+    const node = graph.byKey.get(ideaKey(key));
+    if (!node?.docId) return 'This concept has no file yet.';
+    const name = after.name.trim();
+    const renamed = name !== node.name;
+    if (renamed) {
+      const problem = ideaNameProblem(name, files.map((f) => f.name).filter((other) => other !== node.name));
+      if (problem) return problem;
+    }
+    // An idea is never its own requirement, under the old name or the new
+    const own = new Set([node.key, ideaKey(name)]);
+    const others = (names: string[]) => names.filter((other) => !own.has(ideaKey(other)));
+    const wanted = { ...after, requires: others(after.requires), helpful: others(after.helpful) };
+    const failed = await editFile(key, (text) => ideaEditChanges(text, before, wanted));
+    if (failed || !renamed) return failed;
+
+    try {
+      await movePath(relayPath(node.name), `/${folder}/${name}.md`);
+    } catch (error) {
+      return `The other changes are saved, but the rename failed: ${moveErrorMessage(error, `${name}.md`)}. Close this form and open it again.`;
+    }
+    // The relay rewrites the links to a moved file. Read the files that named
+    // it again, and rewrite here what is still under the old name.
+    const left: IdeaNode[] = [];
+    await Promise.all(linkersOf(node).map(async (linker) => {
+      const text = await refreshSnapshot(`${RELAY_ID}-${linker.docId}`).catch(() => null);
+      const rest = text == null ? null : renameLinkChanges(text, node.name, name);
+      if (!rest || 'error' in rest || rest.changes.length > 0) left.push(linker);
+    }));
+    const unchanged: string[] = [];
+    for (const linker of left) {
+      if (await editFile(linker.key, (text) => renameLinkChanges(text, node.name, name))) unchanged.push(linker.name);
+    }
+    return unchanged.length > 0
+      ? `The concept is renamed, but the link to it in ${unchanged.join(', ')} still has the old name. Change it in the file.`
+      : null;
+  }, [graph, files, folder, editFile, relayPath, linkersOf]);
+
+  const deleteIdea = useCallback<IdeaMap['deleteIdea']>(async (key) => {
+    const node = graph.byKey.get(ideaKey(key));
+    if (!node?.docId) return 'This concept has no file yet.';
+    const linkers = linkersOf(node);
+    // Before anything is written: can every link be taken out?
+    for (const linker of linkers) {
+      const text = texts.get(linker.docId);
+      const check = text === undefined ? null : removeLinkChanges(text, node.name);
+      if (check && 'error' in check) return `Nothing was deleted. In "${linker.name}": ${check.error}`;
+    }
+    // Without force the relay refuses while other files link to this one, and
+    // names them: a file outside the map that links here stops the delete.
+    let trashed = false;
+    try {
+      await trashPath(relayPath(node.name));
+      trashed = true;
+    } catch (error) {
+      if (!(error instanceof TrashRefusedError)) return deleteErrorMessage(error);
+      const known = new Set(linkers.map((linker) => relayPath(linker.name).toLowerCase()));
+      const outside = error.referencing.map((doc) => doc.path).filter((path) => !known.has(path.toLowerCase()));
+      if (outside.length > 0) {
+        return `Nothing was deleted: ${outside.join(', ')} ${outside.length === 1 ? 'links' : 'link'} to this concept too. Take that link out first, or delete the file in the file tree.`;
+      }
+    }
+    for (const linker of linkers) {
+      const failed = await editFile(linker.key, (text) => removeLinkChanges(text, node.name));
+      if (failed) return `${trashed ? 'The concept is deleted, but its link is still in' : 'The concept is not deleted. In'} "${linker.name}": ${failed}`;
+    }
+    if (trashed) return null;
+    try {
+      await trashPath(relayPath(node.name), true);
+    } catch (error) {
+      return `The links to this concept are taken out, but its file is not deleted: ${deleteErrorMessage(error)}`;
+    }
+    return null;
+  }, [graph, texts, editFile, relayPath, linkersOf]);
+
   return {
     folderPath,
     folders,
@@ -188,5 +329,10 @@ export function useIdeaMap(folder: string = IDEAS_FOLDER): IdeaMap {
     createIdea,
     saveRequirements,
     addQuestion,
+    editIdea,
+    deleteIdea,
+    deleteNote: `The file moves to the trash (${IDEAS_SHARED_FOLDER}/_trash) and can be restored from there.`,
+    editQuestion,
+    deleteQuestion,
   };
 }

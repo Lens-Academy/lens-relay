@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthProvider } from '../../contexts/AuthContext';
 import { NavigationContext } from '../../contexts/NavigationContext';
-import { buildIdeaGraph } from '../../lib/idea-map';
+import { buildIdeaGraph, ideaAsEdit } from '../../lib/idea-map';
 import type { UserRole } from '../../../shared/types';
 import { ConceptMapPage } from './ConceptMapPage';
 import { useIdeaMap, type IdeaMap } from './useIdeaMap';
@@ -65,6 +65,11 @@ beforeEach(() => {
     createIdea: vi.fn(async () => {}),
     saveRequirements: vi.fn(async () => null),
     addQuestion: vi.fn(async () => null),
+    editIdea: vi.fn(async () => null),
+    deleteIdea: vi.fn(async () => null),
+    deleteNote: 'The file moves to the trash.',
+    editQuestion: vi.fn(async () => null),
+    deleteQuestion: vi.fn(async () => null),
   };
   vi.mocked(useIdeaMap).mockImplementation(() => map);
 });
@@ -158,7 +163,7 @@ describe('ConceptMapPage', () => {
       expect(panel.getByRole('heading', { name: 'Instrumental convergence' })).toBeTruthy();
       expect(panel.getByText('Explain why agents share sub-goals.')).toBeTruthy();
       expect(panel.getByText('It underlies the risk argument.')).toBeTruthy();
-      expect([...screen.getByTestId('idea-questions').querySelectorAll('li')].map((li) => li.textContent)).toEqual(['OpenWhy?', 'OpenWhy?']);
+      expect([...screen.getByTestId('idea-questions').querySelectorAll('li')].map((li) => li.textContent)).toEqual(['OpenWhy?EditDelete', 'OpenWhy?EditDelete']);
       // Learn lines as written: the alias as a link, a lens with no file marked
       const lens = panel.getByRole('link', { name: 'the first lens' });
       expect(lens.closest('li')!.textContent).toBe('Start with the first lens (11 minutes).');
@@ -190,7 +195,11 @@ describe('ConceptMapPage', () => {
       await userEvent.click(box('Instrumental convergence'));
       expect(screen.getByRole('link', { name: 'Open file' })).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Edit requirements' })).toBeNull();
-      expect(screen.getByTestId('idea-questions')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+      // The questions are listed, with nothing to change them
+      expect([...screen.getByTestId('idea-questions').querySelectorAll('li')].map((li) => li.textContent)).toEqual(['OpenWhy?', 'OpenWhy?']);
+      expect(screen.queryByRole('button', { name: /question/i })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Add question' })).toBeNull();
       await userEvent.click(box('Orthogonality thesis'));
       expect(screen.getByTestId('idea-panel')).toBeTruthy();
@@ -226,9 +235,28 @@ describe('ConceptMapPage', () => {
         outcome: 'Say what a goal is.',
         priority: 'high',
         why: 'Everything else builds on it.',
+        courses: ['../courses/in-development/Context Accelerator'],
+        learn: '',
         requires: ['Power-seeking'],
         helpful: ['Orthogonality thesis', 'Instrumental convergence'],
       });
+    });
+
+    it('adds a concept with its lenses and its courses, and refuses text that would start a new part of the file', async () => {
+      renderPage();
+      await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+      await userEvent.type(screen.getByLabelText('Name'), 'Goals');
+      expect(screen.getByLabelText('Courses')).toHaveProperty('value', '../courses/in-development/Context Accelerator');
+      fireEvent.change(screen.getByLabelText('Courses'), { target: { value: '../courses/A\n\n ../courses/B ' } });
+      fireEvent.change(screen.getByLabelText('Learn'), { target: { value: '- [[../Lenses/A lens]]\n## Questions' } });
+      await userEvent.click(screen.getByRole('button', { name: 'Create concept' }));
+      expect(screen.getByRole('alert').textContent).toMatch(/^Learn cannot/);
+      expect(map.createIdea).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText('Learn'), { target: { value: '- [[../Lenses/A lens]]: first' } });
+      await userEvent.click(screen.getByRole('button', { name: 'Create concept' }));
+      await waitFor(() => expect(map.createIdea).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'Goals', courses: ['../courses/A', '../courses/B'], learn: '- [[../Lenses/A lens]]: first',
+      })));
     });
 
     it('selects the new idea once it is on the map', async () => {
@@ -356,7 +384,7 @@ describe('ConceptMapPage', () => {
       await userEvent.click(form.getByRole('button', { name: 'Add question' }));
       await waitFor(() => expect(screen.queryByTestId('question-form')).toBeNull());
       expect(map.addQuestion).toHaveBeenCalledWith('power-seeking', {
-        type: 'Open', content: 'Why does power help?', assessment: 'Score out of 100.', feedback: '',
+        type: 'Open', content: 'Why does power help?', assessment: 'Score out of 100.', feedback: '', other: [],
       });
       expect(within(screen.getByTestId('idea-panel')).getByRole('heading', { name: 'Power-seeking' })).toBeTruthy();
     });
@@ -393,7 +421,43 @@ describe('ConceptMapPage', () => {
         content: 'Which is a sub-goal of most goals?',
         options: [{ text: 'More resources', correct: true }, { text: 'Fewer options', correct: false }],
         explanation: 'Resources help with nearly any goal.',
+        other: [{ name: 'shuffle', value: 'true' }],
       });
+    });
+
+    it('adds a question with more settings: a known name or a typed one, removed again, empty rows left out', async () => {
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      await userEvent.click(screen.getByRole('button', { name: 'Add question' }));
+      const form = within(screen.getByTestId('question-form'));
+      await userEvent.type(form.getByLabelText('Question'), 'Why?');
+      const settings = within(form.getByTestId('question-settings'));
+      expect(settings.getByText('None')).toBeTruthy();
+      await userEvent.click(settings.getByRole('button', { name: 'Add setting' }));
+      await userEvent.type(settings.getByLabelText('Name of the new setting'), 'max-words');
+      expect(settings.getByText('Longest answer, in words')).toBeTruthy();
+      await userEvent.type(settings.getByLabelText('Value of max-words'), '80');
+      await userEvent.click(settings.getByRole('button', { name: 'Add setting' }));
+      await userEvent.type(settings.getAllByLabelText('Name of the new setting')[1], 'placeholder');
+      await userEvent.type(settings.getByLabelText('Value of placeholder'), 'Type here');
+      await userEvent.click(settings.getByRole('button', { name: 'Remove setting placeholder' }));
+      // A row added and left empty
+      await userEvent.click(settings.getByRole('button', { name: 'Add setting' }));
+      await userEvent.click(form.getByRole('button', { name: 'Add question' }));
+      await waitFor(() => expect(map.addQuestion).toHaveBeenCalledWith('power-seeking', {
+        type: 'Open', content: 'Why?', assessment: '', feedback: '', other: [{ name: 'max-words', value: '80' }],
+      }));
+    });
+
+    it('keeps the settings of each type while the type of a new question is switched', async () => {
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      await userEvent.click(screen.getByRole('button', { name: 'Add question' }));
+      const form = within(screen.getByTestId('question-form'));
+      await userEvent.click(form.getByRole('button', { name: 'Choice' }));
+      expect((form.getByLabelText('Value of shuffle') as HTMLTextAreaElement).value).toBe('true');
+      await userEvent.click(form.getByRole('button', { name: 'Open' }));
+      expect(form.queryByLabelText('Value of shuffle')).toBeNull();
     });
 
     it('offers at most six options', async () => {
@@ -443,6 +507,221 @@ describe('ConceptMapPage', () => {
       // Clicks select again
       await userEvent.click(box('Power-seeking'));
       expect(screen.getByTestId('idea-panel')).toBeTruthy();
+    });
+  });
+
+  describe('editing and deleting', () => {
+    const RANKING = '#### Question: Ranking\nid:: r\ncontent:: Order these.\nitems::\n- A\n- B\n';
+    const CHOICE = '#### Question: Choice\nid:: c\ncontent:: Which?\noptions::\n- [x] A\n- B\nshuffle:: true\nmax-select:: 1\nexplanation:: Because.\n';
+    const OPEN = '#### Question: Open\nid:: o\ncontent:: Why?\nSay it in your words.\nassessment-instructions::\n- 60: a\n- 40: b\nmax-words:: 80\n';
+    const withQuestions = () => buildIdeaGraph([
+      { name: 'Goals', docId: 'go', text: file(1, 'high', `Say what a goal is.\n\n## Questions\n${OPEN}\n${RANKING}\n${CHOICE}`) },
+      { name: 'Plans', docId: 'pl', text: file(2, 'low', 'Plan.\n\n## Requires\n- [[Goals]]\n') },
+      { name: 'Aims', docId: 'ai', text: file(3, 'low', 'Aim.\n\n## Requires\n- [[Goals]]\n\n## Helpful first\n- [[Plans]]\n') },
+      { name: 'Hopes', docId: 'ho', text: file(4, 'low', 'Hope.\n\n## Helpful first\n- [[Goals]]\n') },
+    ]);
+
+    it('edits a concept: every part as the file has it, saved as before and after', async () => {
+      renderPage();
+      await userEvent.click(box('Instrumental convergence'));
+      await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      expect(screen.getByRole('heading', { name: 'Edit concept' })).toBeTruthy();
+      const before = ideaAsEdit('Instrumental convergence', graph.byKey.get('instrumental convergence')!.idea!);
+      expect(screen.getByLabelText('Name')).toHaveProperty('value', 'Instrumental convergence');
+      expect(screen.getByLabelText('Outcome')).toHaveProperty('value', 'Explain why agents share sub-goals.');
+      expect(screen.getByLabelText('Priority')).toHaveProperty('value', 'high');
+      expect(screen.getByLabelText('Why it matters')).toHaveProperty('value', 'It underlies the risk argument.');
+      expect(screen.getByLabelText('Learn')).toHaveProperty('value', '- Start with [[../Lenses/A lens|the first lens]] (11 minutes).\n- [[../Lenses/Not there]]');
+      expect(screen.getByLabelText('Courses')).toHaveProperty('value', '');
+      expect(names('helpful')).toEqual(['Orthogonality thesis']);
+      expect(box('Instrumental convergence').textContent).toBe('Instrumental convergenceThis concept');
+      expect(screen.getByText('The name is the file name.')).toBeTruthy();
+
+      fireEvent.change(screen.getByLabelText('Outcome'), { target: { value: 'Explain it.\nIn two lines.' } });
+      await userEvent.selectOptions(screen.getByLabelText('Priority'), 'low');
+      fireEvent.change(screen.getByLabelText('Courses'), { target: { value: '../courses/A' } });
+      // Requirements are picked in the map, as in "Edit requirements"; itself cannot be
+      await userEvent.click(box('Corrigibility'));
+      await userEvent.click(box('Instrumental convergence'));
+      expect(names('requires')).toEqual(['Corrigibility']);
+      expect(screen.getByRole('status').textContent).toMatch(/^This makes a circle of requirements/);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(screen.queryByTestId('idea-form')).toBeNull());
+      expect(map.editIdea).toHaveBeenCalledWith('instrumental convergence', before, {
+        ...before,
+        outcome: 'Explain it.\nIn two lines.',
+        priority: 'low',
+        courses: ['../courses/A'],
+        requires: ['Corrigibility'],
+      });
+      expect(within(screen.getByTestId('idea-panel')).getByRole('heading', { name: 'Instrumental convergence' })).toBeTruthy();
+    });
+
+    it('renames a concept: said before saving, a taken name refused, the idea selected under its new name', async () => {
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      const name = screen.getByLabelText('Name');
+      fireEvent.change(name, { target: { value: 'corrigibility' } });
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect(screen.getByText('A file with this name already exists.')).toBeTruthy();
+      expect(map.editIdea).not.toHaveBeenCalled();
+      // Its own name in other letters is a rename like any other
+      fireEvent.change(name, { target: { value: 'Power-Seeking' } });
+      expect(screen.getByText('Saving renames the file. Links to it in other concepts get the new name.')).toBeTruthy();
+      fireEvent.change(name, { target: { value: ' Orthogonality thesis ' } });
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(screen.queryByTestId('idea-form')).toBeNull());
+      expect(map.editIdea).toHaveBeenCalledWith('power-seeking', expect.objectContaining({ name: 'Power-seeking' }), expect.objectContaining({ name: 'Orthogonality thesis', requires: ['Instrumental convergence'] }));
+      expect(within(screen.getByTestId('idea-panel')).getByRole('heading', { name: 'Orthogonality thesis' })).toBeTruthy();
+    });
+
+    it('keeps the form open and says why when a concept could not be saved', async () => {
+      map.editIdea = vi.fn(async () => 'This concept was changed in the file meanwhile.');
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      fireEvent.change(screen.getByLabelText('Why it matters'), { target: { value: 'New.' } });
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect((await screen.findByRole('alert')).textContent).toBe('This concept was changed in the file meanwhile.');
+      expect(screen.getByLabelText('Why it matters')).toHaveProperty('value', 'New.');
+    });
+
+    it('deletes a concept after a step that names it and the concepts that list it', async () => {
+      map.graph = withQuestions();
+      renderPage();
+      await userEvent.click(box('Goals'));
+      const panel = within(screen.getByTestId('idea-panel'));
+      await userEvent.click(panel.getByRole('button', { name: 'Delete' }));
+      const confirm = within(panel.getByRole('group', { name: 'Delete concept' }));
+      expect([...screen.getByTestId('idea-confirm').querySelectorAll('p')].map((p) => p.textContent)).toEqual([
+        'Delete the concept "Goals"?',
+        'Aims and Plans list it as required; those links are removed too.',
+        'Hopes lists it as helpful first; that link is removed too.',
+        'Its 3 questions go with it.',
+        'The file moves to the trash.',
+      ]);
+      await userEvent.click(confirm.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByTestId('idea-confirm')).toBeNull();
+      expect(map.deleteIdea).not.toHaveBeenCalled();
+
+      await userEvent.click(panel.getByRole('button', { name: 'Delete' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Delete concept' }));
+      await waitFor(() => expect(screen.queryByTestId('idea-panel')).toBeNull());
+      expect(map.deleteIdea).toHaveBeenCalledWith('goals');
+    });
+
+    it('keeps the concept and says why when it could not be deleted', async () => {
+      map.deleteIdea = vi.fn(async () => 'Nothing was deleted: Lens Edu/courses/X.md links to this concept too.');
+      renderPage();
+      await userEvent.click(box('Corrigibility'));
+      await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+      expect(screen.getByTestId('idea-confirm').textContent).toContain('Delete the concept "Corrigibility"?');
+      await userEvent.click(screen.getByRole('button', { name: 'Delete concept' }));
+      expect((await screen.findByRole('alert')).textContent).toBe('Nothing was deleted: Lens Edu/courses/X.md links to this concept too.');
+      expect(screen.getByTestId('idea-panel')).toBeTruthy();
+      // The step does not follow to another concept
+      await userEvent.click(box('Power-seeking'));
+      expect(screen.queryByTestId('idea-confirm')).toBeNull();
+    });
+
+    it('lists each question by its first line, with what can be done with it', async () => {
+      map.graph = withQuestions();
+      renderPage();
+      await userEvent.click(box('Goals'));
+      const rows = [...screen.getByTestId('idea-questions').querySelectorAll(':scope > li')];
+      expect(rows.map((li) => li.querySelector('[data-testid="idea-question-text"]')!.textContent)).toEqual(['Why? …', 'Order these.', 'Which?']);
+      expect(rows.map((li) => li.querySelector('[data-testid="idea-question-actions"]')!.textContent)).toEqual([
+        'EditDelete',
+        'Open fileThis kind of question is edited in the file.Delete',
+        'EditDelete',
+      ]);
+      await userEvent.click(within(rows[1] as HTMLElement).getByRole('link', { name: 'Open file' }));
+      expect(onNavigate).toHaveBeenLastCalledWith(expect.stringMatching(/-go$/));
+    });
+
+    it('edits an open question: every field as written, the type fixed, saved with what it was', async () => {
+      map.graph = withQuestions();
+      renderPage();
+      await userEvent.click(box('Goals'));
+      const before = map.graph.byKey.get('goals')!.idea!.questionList[0];
+      await userEvent.click(screen.getByRole('button', { name: 'Edit question 1' }));
+      const form = within(screen.getByTestId('question-form'));
+      expect(form.getByRole('heading', { name: 'Edit question' })).toBeTruthy();
+      expect(form.getByText('of Goals')).toBeTruthy();
+      expect(form.getByTestId('question-type').textContent).toBe('Open');
+      expect(form.queryByRole('button', { name: 'Choice' })).toBeNull();
+      expect(form.getByLabelText('Question')).toHaveProperty('value', 'Why?\nSay it in your words.');
+      expect(form.getByLabelText('How to grade it')).toHaveProperty('value', '- 60: a\n- 40: b');
+      expect(form.getByLabelText('How the tutor should respond')).toHaveProperty('value', '');
+      expect(form.getByLabelText('Value of max-words')).toHaveProperty('value', '80');
+
+      fireEvent.change(form.getByLabelText('How to grade it'), { target: { value: '- 70: a\n- 30: b' } });
+      fireEvent.change(form.getByLabelText('Value of max-words'), { target: { value: '120' } });
+      await userEvent.click(form.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(screen.queryByTestId('question-form')).toBeNull());
+      expect(map.editQuestion).toHaveBeenCalledWith('goals', 0, before, {
+        type: 'Open', content: 'Why?\nSay it in your words.', assessment: '- 70: a\n- 30: b', feedback: '', other: [{ name: 'max-words', value: '120' }],
+      });
+      expect(map.addQuestion).not.toHaveBeenCalled();
+      expect(within(screen.getByTestId('idea-panel')).getByRole('heading', { name: 'Goals' })).toBeTruthy();
+    });
+
+    it('edits a choice question: options, right answers, explanation and settings', async () => {
+      map.graph = withQuestions();
+      renderPage();
+      await userEvent.click(box('Goals'));
+      const before = map.graph.byKey.get('goals')!.idea!.questionList[2];
+      await userEvent.click(screen.getByRole('button', { name: 'Edit question 3' }));
+      const form = within(screen.getByTestId('question-form'));
+      expect(form.getByLabelText('Option 1')).toHaveProperty('value', 'A');
+      expect(form.getByLabelText('Option 1 is a right answer')).toHaveProperty('checked', true);
+      expect(form.getByLabelText('Option 2 is a right answer')).toHaveProperty('checked', false);
+      expect(form.getByLabelText('Explanation')).toHaveProperty('value', 'Because.');
+      await userEvent.click(form.getByLabelText('Option 2 is a right answer'));
+      await userEvent.click(form.getByRole('button', { name: 'Remove setting max-select' }));
+      await userEvent.click(form.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(map.editQuestion).toHaveBeenCalledWith('goals', 2, before, {
+        type: 'Choice',
+        content: 'Which?',
+        options: [{ text: 'A', correct: true }, { text: 'B', correct: true }],
+        explanation: 'Because.',
+        other: [{ name: 'shuffle', value: 'true' }],
+      }));
+    });
+
+    it('does not check an existing question in the form, and shows why it could not be saved', async () => {
+      map.graph = withQuestions();
+      map.editQuestion = vi.fn(async () => 'This question was changed in the file meanwhile.');
+      renderPage();
+      await userEvent.click(box('Goals'));
+      await userEvent.click(screen.getByRole('button', { name: 'Edit question 1' }));
+      const form = within(screen.getByTestId('question-form'));
+      fireEvent.change(form.getByLabelText('Question'), { target: { value: '' } });
+      await userEvent.click(form.getByRole('button', { name: 'Save' }));
+      expect((await form.findByRole('alert')).textContent).toBe('This question was changed in the file meanwhile.');
+      expect(map.editQuestion).toHaveBeenCalled();
+    });
+
+    it('deletes a question after a confirm step, with what it said', async () => {
+      map.graph = withQuestions();
+      map.deleteQuestion = vi.fn(async () => (vi.mocked(map.deleteQuestion).mock.calls.length === 1 ? 'This question has a pending suggestion.' : null));
+      renderPage();
+      await userEvent.click(box('Goals'));
+      const before = map.graph.byKey.get('goals')!.idea!.questionList[1];
+      await userEvent.click(screen.getByRole('button', { name: 'Delete question 2' }));
+      const confirm = within(screen.getByRole('group', { name: 'Delete question' }));
+      expect(confirm.getByText('Delete question 2 from the file?')).toBeTruthy();
+      await userEvent.click(confirm.getByRole('button', { name: 'Cancel' }));
+      expect(map.deleteQuestion).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Delete question 2' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Delete question' }));
+      expect((await screen.findByRole('alert')).textContent).toBe('This question has a pending suggestion.');
+      await userEvent.click(screen.getByRole('button', { name: 'Delete question' }));
+      await waitFor(() => expect(screen.queryByTestId('idea-confirm')).toBeNull());
+      expect(map.deleteQuestion).toHaveBeenLastCalledWith('goals', 1, before);
     });
   });
 });
