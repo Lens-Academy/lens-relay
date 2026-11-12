@@ -37,9 +37,9 @@ export function IdeaOrderView({ graph, selected, marks, matches, onPick }: {
                     aria-pressed={marks ? word !== null : node.key === selected}
                     title={ideaTitle(node)}
                     onClick={(e) => onPick(node.key, e.shiftKey)}
-                    className={`flex max-w-full items-center gap-1.5 rounded border px-2 py-1 text-xs hover:brightness-95 ${ideaLook(node)} ${ring}`}
+                    className={`flex max-w-full items-center gap-1.5 rounded border px-2 py-1 text-left text-xs hover:brightness-95 ${ideaLook(node)} ${ring}`}
                   >
-                    <span className="truncate">{node.name}</span>
+                    <span className="min-w-0 break-words">{node.name}</span>
                     {word && <span className="shrink-0 rounded bg-indigo-600 px-1 py-px text-[9px] font-medium leading-none text-white">{word}</span>}
                   </button>
                 );

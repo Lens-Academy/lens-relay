@@ -7,6 +7,7 @@ import {
   type NewQuestion,
   type QuestionField,
 } from '../../lib/idea-map';
+import { GrowingTextarea } from './GrowingTextarea';
 import { BUTTON, PRIMARY_BUTTON } from './ideaLook';
 
 const LABEL = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400';
@@ -29,8 +30,6 @@ interface Setting extends QuestionField {
 
 /** What a new question starts with besides its boxes. */
 const START_SETTINGS: Record<QuestionType, QuestionField[]> = { Open: [], Choice: [{ name: 'shuffle', value: 'true' }] };
-
-const rowsFor = (value: string, least: number) => Math.min(12, Math.max(least, value.split('\n').length));
 
 /**
  * The creator's form for one question of an idea, in the side panel: a new
@@ -153,17 +152,17 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
         </div>
         <div className="mt-4">
           <label htmlFor="question-content" className={LABEL}>Question</label>
-          <textarea id="question-content" className="lens-input w-full" rows={rowsFor(content, 3)} autoFocus={!editing} value={content} onChange={(e) => setContent(e.target.value)} />
+          <GrowingTextarea id="question-content" className="lens-input w-full" rows={3} autoFocus={!editing} value={content} onChange={(e) => setContent(e.target.value)} />
         </div>
 
         {type === 'Open' ? (
           <>
             <div className="mt-4">
               <label htmlFor="question-assessment" className={LABEL}>How to grade it</label>
-              <textarea
+              <GrowingTextarea
                 id="question-assessment"
                 className="lens-input w-full"
-                rows={rowsFor(assessment, 3)}
+                rows={3}
                 placeholder="Optional. For example: Score out of 100. 60: …; 40: …"
                 value={assessment}
                 onChange={(e) => setAssessment(e.target.value)}
@@ -171,10 +170,10 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
             </div>
             <div className="mt-4">
               <label htmlFor="question-feedback" className={LABEL}>How the tutor should respond</label>
-              <textarea
+              <GrowingTextarea
                 id="question-feedback"
                 className="lens-input w-full"
-                rows={rowsFor(feedback, 3)}
+                rows={3}
                 placeholder="Optional"
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
@@ -235,10 +234,10 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
             </fieldset>
             <div className="mt-4">
               <label htmlFor="question-explanation" className={LABEL}>Explanation</label>
-              <textarea
+              <GrowingTextarea
                 id="question-explanation"
                 className="lens-input w-full"
-                rows={rowsFor(explanation, 2)}
+                rows={2}
                 placeholder="Optional"
                 value={explanation}
                 onChange={(e) => setExplanation(e.target.value)}
@@ -279,10 +278,10 @@ export function QuestionForm({ ideaName, initial, onCancel, onSubmit }: {
                       Remove
                     </button>
                   </div>
-                  <textarea
+                  <GrowingTextarea
                     className="lens-input mt-1 w-full"
                     aria-label={`Value of ${label}`}
-                    rows={rowsFor(setting.value, 1)}
+                    rows={1}
                     value={setting.value}
                     onChange={(e) => setSetting(setting.key, { value: e.target.value })}
                   />

@@ -12,6 +12,7 @@ import {
   type Priority,
 } from '../../lib/idea-map';
 import { BUTTON, FIELD_LABEL, LIST_LABEL, PRIMARY_BUTTON, PRIORITY_LABEL } from './ideaLook';
+import { GrowingTextarea } from './GrowingTextarea';
 import { PickList } from './PickList';
 
 /** What the form is for: a new idea, every part of an existing one, or only
@@ -137,7 +138,7 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clic
             </div>
             <div className="mt-4">
               <label htmlFor="idea-outcome" className={LABEL}>Outcome</label>
-              <textarea
+              <GrowingTextarea
                 id="idea-outcome"
                 className="lens-input w-full"
                 rows={mode.kind === 'edit' ? 4 : 3}
@@ -154,7 +155,7 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clic
             </div>
             <div className="mt-4">
               <label htmlFor="idea-why" className={LABEL}>Why it matters</label>
-              <textarea id="idea-why" className="lens-input w-full" rows={mode.kind === 'edit' ? 4 : 2} placeholder="One or two sentences" value={why} onChange={(e) => setWhy(e.target.value)} />
+              <GrowingTextarea id="idea-why" className="lens-input w-full" rows={mode.kind === 'edit' ? 4 : 2} placeholder="One or two sentences" value={why} onChange={(e) => setWhy(e.target.value)} />
             </div>
           </>
         )}
@@ -167,7 +168,7 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clic
           <>
             <div className="mt-4">
               <label htmlFor="idea-learn" className={LABEL}>Learn</label>
-              <textarea
+              <GrowingTextarea
                 id="idea-learn"
                 className="lens-input w-full font-mono text-xs"
                 rows={mode.kind === 'edit' ? 4 : 2}
@@ -180,7 +181,7 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clic
             </div>
             <div className="mt-4">
               <label htmlFor="idea-courses" className={LABEL}>Courses</label>
-              <textarea
+              <GrowingTextarea
                 id="idea-courses"
                 className="lens-input w-full font-mono text-xs"
                 rows={2}

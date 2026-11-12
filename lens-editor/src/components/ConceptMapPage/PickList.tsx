@@ -88,7 +88,7 @@ export function PickList({ list, picks, graph, ownNames, onToggle }: {
                 title={written ? undefined : 'Not written yet'}
                 className={`flex max-w-full items-center gap-1 rounded border py-0.5 pl-2 pr-1 text-xs ${written ? 'border-indigo-200 bg-indigo-50 text-indigo-900' : 'border-dashed border-gray-400 bg-white text-gray-600'}`}
               >
-                <span className="truncate">{name}</span>
+                <span className="min-w-0 break-words">{name}</span>
                 <button
                   type="button"
                   className={`rounded px-1 ${written ? 'text-indigo-700 hover:bg-indigo-100' : 'text-gray-500 hover:bg-gray-100'}`}
@@ -140,7 +140,7 @@ export function PickList({ list, picks, graph, ownNames, onToggle }: {
               role="option"
               aria-selected={i === at}
               data-new={option.kind === 'new' || undefined}
-              className={`cursor-pointer truncate px-2 py-1 ${option.kind === 'new' && i > 0 ? 'border-t border-dashed border-gray-300' : ''} ${i === at ? 'bg-blue-600 text-white' : 'text-gray-700'}`}
+              className={`cursor-pointer break-words px-2 py-1 ${option.kind === 'new' && i > 0 ? 'border-t border-dashed border-gray-300' : ''} ${i === at ? 'bg-blue-600 text-white' : 'text-gray-700'}`}
               // The box keeps the focus: a press on a row must not blur it
               onMouseDown={(e) => e.preventDefault()}
               onMouseMove={() => { if (i !== at) setActive(i); }}

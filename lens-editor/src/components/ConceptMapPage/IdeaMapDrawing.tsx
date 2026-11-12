@@ -1,94 +1,26 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { mapColumns, type IdeaGraph, type IdeaNode } from '../../lib/idea-map';
+import { flushSync } from 'react-dom';
+import { mapColumns, type IdeaGraph } from '../../lib/idea-map';
+import { layoutMap, wrappedLines, type MapEdge, type MapSizes } from '../../lib/idea-map-layout';
 import { BUTTON, PRIORITY_LABEL, PRIORITY_LOOK, UNWRITTEN_LOOK, ideaLook, ideaTitle, pickWord, type PickMarks } from './ideaLook';
 
-// A box holds a name on two lines; columns stand close enough that 150
-// ideas (about ten columns of twenty) stay readable on one screen width or two.
-const NODE_W = 156;
+// Every box is as wide as the others and as tall as its name needs: a long
+// name wraps onto more lines. Columns stand close enough that 150 ideas
+// (about ten columns) stay readable on one screen width or two.
+const NODE_W = 176;
+/** The least height of a box: a name of two lines. */
 const NODE_H = 36;
-const GAP_X = 56;
-const GAP_Y = 8;
-const MARGIN = 16;
-const ROW = NODE_H + GAP_Y;
+const LINE_H = 14;
+const SIZES: MapSizes = { nodeWidth: NODE_W, gapX: 56, gapY: 8, margin: 16 };
 const MIN_ZOOM = 0.15;
 const MAX_ZOOM = 2;
 /** The zoom below which names are too small to read. */
 const READABLE_ZOOM = 0.75;
+/** About how many letters fit on a line of a box, until the box is measured. */
+const LETTERS_PER_LINE = 24;
 
-interface Placed { node: IdeaNode; x: number; y: number }
-interface Line { from: string; to: string; helpful: boolean; d: string }
-
-/** A curve that leaves and arrives level. */
-const bend = (x1: number, y1: number, x2: number, y2: number) => {
-  const reach = (x2 - x1) / 2;
-  return ` C${x1 + reach},${y1} ${x2 - reach},${y2} ${x2},${y2}`;
-};
-
-/**
- * Where every idea and line goes: columns from lib/idea-map (what comes
- * first on the left), each centred on the tallest. A line between
- * neighbouring columns is one curve; a longer one passes the columns between
- * through the nearest gap between two boxes, never behind a box.
- */
-function layout(graph: IdeaGraph) {
-  const columns = mapColumns(graph);
-  const tallest = Math.max(0, ...columns.map((keys) => keys.length));
-  const top = (count: number) => MARGIN + ((tallest - count) * ROW) / 2;
-  const left = (column: number) => MARGIN + column * (NODE_W + GAP_X);
-  const at = new Map<string, { column: number; x: number; y: number }>();
-  const placed: Placed[] = [];
-  columns.forEach((keys, column) => keys.forEach((key, row) => {
-    const spot = { column, x: left(column), y: top(keys.length) + row * ROW };
-    at.set(key, spot);
-    placed.push({ node: graph.byKey.get(key)!, ...spot });
-  }));
-
-  /** The gap of `column` nearest to height `y`: between two boxes, or free space above or below them. */
-  const gapNear = (column: number, y: number) => {
-    const first = top(columns[column].length) - GAP_Y / 2;
-    const last = first + columns[column].length * ROW;
-    if (y <= first || y >= last) return y;
-    return first + Math.round((y - first) / ROW) * ROW;
-  };
-
-  const line = (from: string, to: string): string => {
-    const a = at.get(from)!;
-    const b = at.get(to)!;
-    const ay = a.y + NODE_H / 2;
-    const by = b.y + NODE_H / 2;
-    const right = a.x + NODE_W;
-    if (a.column >= b.column) {
-      // Only inside a circle of requirements: round the right-hand side
-      const out = right + GAP_X / 2;
-      return from === to
-        ? `M${right},${ay - 6} C${out},${ay - 14} ${out},${ay + 14} ${right},${ay + 6}`
-        : `M${right},${ay} C${out},${ay} ${out},${by} ${b.x + NODE_W},${by}`;
-    }
-    let d = `M${right},${ay}`;
-    let x = right;
-    let y = ay;
-    for (let column = a.column + 1; column < b.column; column++) {
-      const passX = left(column);
-      const passY = gapNear(column, ay + ((by - ay) * (passX + NODE_W / 2 - right)) / (b.x - right));
-      d += `${bend(x, y, passX, passY)} L${passX + NODE_W},${passY}`;
-      x = passX + NODE_W;
-      y = passY;
-    }
-    return d + bend(x, y, b.x, by);
-  };
-
-  const lines: Line[] = [];
-  for (const node of graph.nodes) {
-    for (const from of node.requires) lines.push({ from, to: node.key, helpful: false, d: line(from, node.key) });
-    for (const from of node.helpful) lines.push({ from, to: node.key, helpful: true, d: line(from, node.key) });
-  }
-  return {
-    placed,
-    lines,
-    width: columns.length === 0 ? 0 : left(columns.length - 1) + NODE_W + MARGIN,
-    height: tallest * ROW - GAP_Y + 2 * MARGIN,
-  };
-}
+/** The height a box is given before it is measured. */
+const guessedHeight = (name: string) => Math.max(NODE_H, wrappedLines(name, LETTERS_PER_LINE) * LINE_H + 10);
 
 interface View { x: number; y: number; k: number }
 const clampZoom = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
@@ -142,9 +74,41 @@ export function IdeaMapDrawing({ graph, selected, marks, matches, onPick }: {
   matches: ReadonlySet<string> | null;
   onPick: (key: string, shift: boolean) => void;
 }) {
-  const { placed, lines, width, height } = useMemo(() => layout(graph), [graph]);
+  const columns = useMemo(() => mapColumns(graph), [graph]);
+  const edges = useMemo<MapEdge[]>(() => graph.nodes.flatMap((node) => [
+    ...node.requires.map((from) => ({ from, to: node.key, helpful: false })),
+    ...node.helpful.map((from) => ({ from, to: node.key, helpful: true })),
+  ]), [graph]);
+  /** The heights the boxes really have (by key), once they are drawn. */
+  const [measured, setMeasured] = useState<ReadonlyMap<string, number>>(new Map());
+  const { boxes, lines, width, height } = useMemo(
+    () => layoutMap(columns, edges, (key) => measured.get(key) ?? guessedHeight(graph.byKey.get(key)?.name ?? ''), SIZES),
+    [columns, edges, measured, graph],
+  );
+  const placed = useMemo(() => boxes.map((box) => ({ ...box, node: graph.byKey.get(box.key)! })), [boxes, graph]);
   const frame = useRef<HTMLDivElement>(null);
+  const layer = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
+
+  // A box is as tall as its name makes it. The browser tells the heights
+  // once the boxes are drawn, and again when one changes (a font arrives, a
+  // name is edited); the map is laid out again with them before it paints.
+  useEffect(() => {
+    const el = layer.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      const next = new Map<string, number>();
+      for (const box of el.querySelectorAll<HTMLElement>('[data-key]')) {
+        // 0: not laid out (the page is hidden): the guess stays
+        if (box.offsetHeight > 0) next.set(box.dataset.key!, box.offsetHeight);
+      }
+      flushSync(() => setMeasured((now) => (
+        next.size === now.size && [...next].every(([key, tall]) => now.get(key) === tall) ? now : next
+      )));
+    });
+    for (const box of el.querySelectorAll('[data-key]')) observer.observe(box);
+    return () => observer.disconnect();
+  }, [graph]);
 
   const fit = useCallback(() => {
     const el = frame.current;
@@ -204,10 +168,10 @@ export function IdeaMapDrawing({ graph, selected, marks, matches, onPick }: {
     setView((v) => {
       const left = at.x * v.k + v.x;
       const top = at.y * v.k + v.y;
-      const inside = left >= 0 && top >= 0 && left + NODE_W * v.k <= el.clientWidth && top + NODE_H * v.k <= el.clientHeight;
+      const inside = left >= 0 && top >= 0 && left + NODE_W * v.k <= el.clientWidth && top + at.height * v.k <= el.clientHeight;
       if (inside) return v;
       return centred(
-        { ...v, x: el.clientWidth / 2 - (at.x + NODE_W / 2) * v.k, y: el.clientHeight / 2 - (at.y + NODE_H / 2) * v.k },
+        { ...v, x: el.clientWidth / 2 - (at.x + NODE_W / 2) * v.k, y: el.clientHeight / 2 - (at.y + at.height / 2) * v.k },
         el, width, height,
       );
     });
@@ -272,6 +236,7 @@ export function IdeaMapDrawing({ graph, selected, marks, matches, onPick }: {
       }}
     >
       <div
+        ref={layer}
         className="absolute left-0 top-0 origin-top-left"
         style={{ width, height, transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}
       >
@@ -308,14 +273,16 @@ export function IdeaMapDrawing({ graph, selected, marks, matches, onPick }: {
               key={node.key}
               type="button"
               data-idea={node.name}
+              data-key={node.key}
               data-written={node.written}
               aria-pressed={marks ? word !== null : node.key === selected}
               title={ideaTitle(node)}
               onClick={(e) => onPick(node.key, e.shiftKey)}
-              className={`absolute flex items-center rounded border px-2 text-left text-xs leading-[14px] hover:brightness-95 ${ideaLook(node)} ${ring} ${dimmed(node.key) ? 'opacity-30' : ''}`}
-              style={{ left: x, top: y, width: NODE_W, height: NODE_H }}
+              className={`absolute flex items-center rounded border px-2 py-1 text-left text-xs leading-[14px] hover:brightness-95 ${ideaLook(node)} ${ring} ${dimmed(node.key) ? 'opacity-30' : ''}`}
+              // As tall as the name needs; the layout is made with the height it then has
+              style={{ left: x, top: y, width: NODE_W, minHeight: NODE_H }}
             >
-              <span className="line-clamp-2 min-w-0 flex-1 break-words">{node.name}</span>
+              <span className="min-w-0 flex-1 break-words">{node.name}</span>
               {word && (
                 <span className="absolute -top-2 right-1 rounded bg-indigo-600 px-1 py-px text-[9px] font-medium leading-none text-white">{word}</span>
               )}
