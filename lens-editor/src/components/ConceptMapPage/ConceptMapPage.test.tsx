@@ -249,6 +249,132 @@ describe('ConceptMapPage', () => {
         learn: '',
         requires: ['Power-seeking'],
         helpful: ['Orthogonality thesis', 'Instrumental convergence'],
+        neededFor: [],
+        helpfulFor: [],
+      });
+    });
+
+    describe('needed for', () => {
+      const clickSwitch = () => within(screen.getByRole('group', { name: 'A click on a concept adds it to' }));
+      const here = () => [...screen.getByTestId('idea-form').querySelectorAll('[data-list][data-active]')].map((el) => el.getAttribute('data-list'));
+
+      it('adds a concept with what it is needed for: typed, clicked in the map, shift-click for helpful for', async () => {
+        renderPage();
+        await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+        await userEvent.type(screen.getByLabelText('Name'), 'Goal-directedness');
+        // The list that map clicks go to is marked, and can be switched
+        expect(clickSwitch().getAllByRole('button').map((b) => b.textContent)).toEqual(['Requires', 'Helpful first', 'Needed for', 'Helpful for']);
+        expect(here()).toEqual(['requires']);
+        expect(screen.getByText('Shift-click adds to Helpful first.', { exact: false })).toBeTruthy();
+
+        // Typed: only written concepts are offered, and a name no file has is not a new concept here
+        await userEvent.type(screen.getByLabelText('Needed for'), 'o');
+        expect(offered('Needed for')).toEqual(['[Corrigibility]', 'Instrumental convergence', 'Power-seeking']);
+        await userEvent.type(screen.getByLabelText('Needed for'), 'rthogonality thesis');
+        expect(offered('Needed for')).toBeNull();
+        expect(screen.getByText('"Orthogonality thesis" is not written yet. Write that concept first, or add this one to its Requires later.')).toBeTruthy();
+        await userEvent.clear(screen.getByLabelText('Needed for'));
+        await userEvent.type(screen.getByLabelText('Needed for'), 'Mesa');
+        expect(offered('Needed for')).toBeNull();
+        expect(screen.getByText('No written concept has this name. Write that concept first, or add this one to its Requires later.')).toBeTruthy();
+        await userEvent.clear(screen.getByLabelText('Needed for'));
+        await userEvent.type(screen.getByLabelText('Needed for'), 'corr{Enter}');
+        expect(names('neededFor')).toEqual(['Corrigibility']);
+
+        // A click into the box of a list makes it the one map clicks go to
+        expect(here()).toEqual(['neededFor']);
+        expect(clickSwitch().getByRole('button', { name: 'Needed for' }).getAttribute('aria-pressed')).toBe('true');
+        expect(screen.getByText('Shift-click adds to Helpful for.', { exact: false })).toBeTruthy();
+        await userEvent.click(box('Power-seeking'));
+        fireEvent.click(box('Instrumental convergence'), { shiftKey: true });
+        expect(names('neededFor')).toEqual(['Corrigibility', 'Power-seeking']);
+        expect(names('helpfulFor')).toEqual(['Instrumental convergence']);
+        expect(box('Power-seeking').textContent).toBe('Power-seekingNeeded for');
+        expect(box('Instrumental convergence').textContent).toBe('Instrumental convergenceHelpful for');
+
+        // One that is not written yet has no file for the link: said, not added
+        await userEvent.click(box('Orthogonality thesis'));
+        expect(screen.getByTestId('idea-click-note').textContent).toBe('"Orthogonality thesis" is not written yet, so it cannot go under Needed for. Write that concept first, or add this one to its Requires later.');
+        expect(names('neededFor')).toEqual(['Corrigibility', 'Power-seeking']);
+        // A concept is in one list only: picked elsewhere, it moves
+        await userEvent.click(clickSwitch().getByRole('button', { name: 'Requires' }));
+        expect(screen.queryByTestId('idea-click-note')).toBeNull();
+        await userEvent.click(box('Power-seeking'));
+        expect(names('requires')).toEqual(['Power-seeking']);
+        expect(names('neededFor')).toEqual(['Corrigibility']);
+
+        await userEvent.click(screen.getByRole('button', { name: 'Create concept' }));
+        await waitFor(() => expect(screen.queryByTestId('idea-form')).toBeNull());
+        expect(map.createIdea).toHaveBeenCalledWith(expect.objectContaining({
+          name: 'Goal-directedness',
+          requires: ['Power-seeking'],
+          helpful: [],
+          neededFor: ['Corrigibility'],
+          helpfulFor: ['Instrumental convergence'],
+        }));
+      });
+
+      it('refuses a circle that "Needed for" would make, and saves nothing', async () => {
+        renderPage();
+        await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+        await userEvent.type(screen.getByLabelText('Name'), 'Goals');
+        // Goals requires Corrigibility, which requires Power-seeking, which would require Goals
+        await userEvent.click(box('Corrigibility'));
+        await userEvent.click(screen.getByLabelText('Needed for'));
+        await userEvent.click(box('Power-seeking'));
+        expect(screen.getByTestId('idea-needed-circle').textContent).toBe(
+          'This makes a circle of requirements: Goals → Corrigibility → Power-seeking → Goals. Take Power-seeking out of Needed for, or change Requires: it cannot be saved like this.',
+        );
+        await userEvent.click(screen.getByRole('button', { name: 'Create concept' }));
+        expect(map.createIdea).not.toHaveBeenCalled();
+        expect(screen.getByTestId('idea-form')).toBeTruthy();
+        // Taken out, it saves
+        await userEvent.click(screen.getByRole('button', { name: 'Remove Power-seeking from Needed for' }));
+        expect(screen.queryByTestId('idea-needed-circle')).toBeNull();
+        await userEvent.click(screen.getByRole('button', { name: 'Create concept' }));
+        await waitFor(() => expect(map.createIdea).toHaveBeenCalledWith(expect.objectContaining({ requires: ['Corrigibility'], neededFor: [] })));
+      });
+
+      it('says who names a concept already when one that is not written yet is created', async () => {
+        renderPage();
+        await userEvent.click(box('Orthogonality thesis'));
+        await userEvent.click(screen.getByRole('button', { name: 'Create this concept' }));
+        expect(screen.getByTestId('idea-list-footnote').textContent).toBe('Already helpful for Instrumental convergence: it names this concept under Helpful first.');
+        expect(screen.getByTestId('idea-list-footnote').closest('[data-list]')!.getAttribute('data-list')).toBe('helpfulFor');
+      });
+
+      it('edits what a concept is needed for: filled from the map, a chip taken out and one added, saved as before and after', async () => {
+        renderPage();
+        await userEvent.click(box('Power-seeking'));
+        await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+        expect(names('requires')).toEqual(['Instrumental convergence']);
+        expect(names('neededFor')).toEqual(['Corrigibility']);
+        expect(names('helpfulFor')).toEqual([]);
+        expect(box('Corrigibility').textContent).toBe('CorrigibilityNeeded for');
+
+        await userEvent.click(screen.getByRole('button', { name: 'Remove Corrigibility from Needed for' }));
+        await userEvent.type(screen.getByLabelText('Helpful for'), 'corr{Enter}');
+        // What it requires cannot need it too: picked there, it moves out of Requires
+        await userEvent.type(screen.getByLabelText('Needed for'), 'Instrumental convergence');
+        expect(screen.getByText('This concept is under Requires already.')).toBeTruthy();
+        await userEvent.clear(screen.getByLabelText('Needed for'));
+        // Itself is never offered
+        await userEvent.type(screen.getByLabelText('Needed for'), 'power-seeking');
+        expect(screen.getByText('A concept cannot be needed for itself.')).toBeTruthy();
+        await userEvent.clear(screen.getByLabelText('Needed for'));
+
+        await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+        await waitFor(() => expect(screen.queryByTestId('idea-form')).toBeNull());
+        const before = ideaAsEdit('Power-seeking', graph.byKey.get('power-seeking')!.idea!, { neededFor: ['Corrigibility'], helpfulFor: [] });
+        expect(map.editIdea).toHaveBeenCalledWith('power-seeking', before, { ...before, neededFor: [], helpfulFor: ['Corrigibility'] });
+      });
+
+      it('leaves "Needed for" out of "Edit requirements"', async () => {
+        renderPage();
+        await userEvent.click(box('Power-seeking'));
+        await userEvent.click(screen.getByRole('button', { name: 'Edit requirements' }));
+        expect(screen.queryByLabelText('Needed for')).toBeNull();
+        expect(clickSwitch().getAllByRole('button').map((b) => b.textContent)).toEqual(['Requires', 'Helpful first']);
       });
     });
 
@@ -640,7 +766,7 @@ describe('ConceptMapPage', () => {
       await userEvent.click(box('Instrumental convergence'));
       await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
       expect(screen.getByRole('heading', { name: 'Edit concept' })).toBeTruthy();
-      const before = ideaAsEdit('Instrumental convergence', graph.byKey.get('instrumental convergence')!.idea!);
+      const before = ideaAsEdit('Instrumental convergence', graph.byKey.get('instrumental convergence')!.idea!, { neededFor: ['Power-seeking'], helpfulFor: [] });
       expect(screen.getByLabelText('Name')).toHaveProperty('value', 'Instrumental convergence');
       expect(screen.getByLabelText('Outcome')).toHaveProperty('value', 'Explain why agents share sub-goals.');
       expect(screen.getByLabelText('Priority')).toHaveProperty('value', 'high');

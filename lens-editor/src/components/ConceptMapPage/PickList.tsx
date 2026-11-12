@@ -1,21 +1,34 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
-import { ideaKey, pickChoices, type IdeaGraph, type PickOption, type Picks } from '../../lib/idea-map';
-import { FIELD_LABEL, LIST_LABEL } from './ideaLook';
+import { ideaKey, pickChoices, type Dependents, type IdeaGraph, type PickOption, type Picks } from '../../lib/idea-map';
+import { LIST_LABEL, type LinkList } from './ideaLook';
+
+/** What "Needed for" and "Helpful for" do, said under their names. */
+const LIST_NOTE: Partial<Record<LinkList, string>> = {
+  neededFor: 'This concept goes into the Requires of each.',
+  helpfulFor: 'This concept goes into the Helpful first of each.',
+};
 
 /**
  * One list of picked ideas: its names as chips, and a combobox to add by
  * typing. The list under the box opens while typing (or with an arrow key);
  * the arrows move the highlight, Enter picks it, Escape closes the list,
- * Backspace in the empty box takes the last chip out. A name no idea has is
- * offered as a new idea: the link is written, and the map shows it as "not
- * written yet".
+ * Backspace in the empty box takes the last chip out. Under "Requires" and
+ * "Helpful first" a name no idea has is offered as a new idea: the link is
+ * written, and the map shows it as "not written yet". "Needed for" and
+ * "Helpful for" take written ideas only: the link goes into their file.
  */
-export function PickList({ list, picks, graph, ownNames, onToggle }: {
-  list: keyof Picks;
-  picks: Picks;
+export function PickList({ list, picks, graph, ownNames, clicksHere = false, footnote, onActivate, onToggle }: {
+  list: LinkList;
+  picks: Picks & Partial<Dependents>;
   graph: IdeaGraph;
   /** The names of the idea the lists belong to: it is never offered. */
   ownNames: readonly string[];
+  /** A click on an idea in the view next to the form adds to this list. */
+  clicksHere?: boolean;
+  /** One more grey line under the box. */
+  footnote?: string | null;
+  /** Make this the list such clicks add to (a click into its box does). */
+  onActivate?: () => void;
   /** Add a name to this list, or take it out. */
   onToggle: (name: string) => void;
 }) {
@@ -25,8 +38,10 @@ export function PickList({ list, picks, graph, ownNames, onToggle }: {
   const [typed, setTyped] = useState('');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const names = picks[list];
-  const { options, problem } = pickChoices(typed, graph.nodes, picks, ownNames);
+  const names = picks[list] ?? [];
+  // The link to a picked idea goes into this idea's file, the other way into theirs
+  const writtenOnly = list === 'neededFor' || list === 'helpfulFor';
+  const { options, problem } = pickChoices(typed, graph.nodes, picks, ownNames, 50, writtenOnly);
   const shown = open ? options : [];
   const at = Math.min(active, shown.length - 1);
 
@@ -72,11 +87,20 @@ export function PickList({ list, picks, graph, ownNames, onToggle }: {
     }
   };
 
-  const said = typed.trim() !== '' ? problem : open && options.length === 0 ? 'No concept left to pick. Type a name to add a new one.' : null;
+  const said = typed.trim() !== '' ? problem
+    : open && options.length === 0 ? (writtenOnly ? 'No written concept left to pick.' : 'No concept left to pick. Type a name to add a new one.')
+    : null;
+  const note = LIST_NOTE[list];
 
   return (
-    <div className="mt-4" data-list={list}>
-      <label htmlFor={id} className={FIELD_LABEL}>{LIST_LABEL[list]}</label>
+    <div className="mt-4" data-list={list} data-active={clicksHere || undefined}>
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2">
+        <label htmlFor={id} className="text-xs font-semibold uppercase tracking-wide text-gray-400">{LIST_LABEL[list]}</label>
+        {clicksHere && (
+          <span className="rounded bg-indigo-600 px-1.5 py-px text-[10px] font-medium text-white" data-testid="idea-click-here">Map clicks add here</span>
+        )}
+      </div>
+      {note && <p id={`${id}-note`} className="mb-1.5 text-xs text-gray-400">{note}</p>}
       {names.length > 0 && (
         <ul className="mb-1.5 flex flex-wrap gap-1" aria-label={`${LIST_LABEL[list]}: picked`}>
           {names.map((name) => {
@@ -111,8 +135,8 @@ export function PickList({ list, picks, graph, ownNames, onToggle }: {
         aria-controls={`${id}-rows`}
         aria-activedescendant={shown[at] ? `${id}-row-${at}` : undefined}
         aria-invalid={typed.trim() !== '' && problem !== null}
-        aria-describedby={said ? `${id}-said` : undefined}
-        className="lens-input w-full"
+        aria-describedby={[said ? `${id}-said` : '', note ? `${id}-note` : ''].filter(Boolean).join(' ') || undefined}
+        className={`lens-input w-full ${clicksHere ? '!border-indigo-400' : ''}`}
         placeholder="Type a name, or click a concept"
         autoComplete="off"
         value={typed}
@@ -121,7 +145,10 @@ export function PickList({ list, picks, graph, ownNames, onToggle }: {
           setOpen(e.target.value.trim() !== '');
           setActive(0);
         }}
-        onClick={() => { if (typed.trim()) setOpen(true); }}
+        onClick={() => {
+          if (typed.trim()) setOpen(true);
+          onActivate?.();
+        }}
         onBlur={() => setOpen(false)}
         onKeyDown={onKeyDown}
       />
@@ -161,6 +188,7 @@ export function PickList({ list, picks, graph, ownNames, onToggle }: {
       {said && (
         <p id={`${id}-said`} role="status" className={`mt-1 text-xs ${typed.trim() !== '' ? 'text-red-700' : 'text-gray-400'}`}>{said}</p>
       )}
+      {footnote && <p className="mt-1 break-words text-xs text-gray-400" data-testid="idea-list-footnote">{footnote}</p>}
     </div>
   );
 }

@@ -658,17 +658,28 @@ export interface Picks {
   helpful: string[];
 }
 
-/** Toggle `name` in one list; an idea is never in both. */
-export function togglePick(picks: Picks, name: string, list: keyof Picks): Picks {
+/**
+ * The other direction of `Picks`: the ideas that name one idea in their own
+ * file, by name. `neededFor` have it under `## Requires`, `helpfulFor` under
+ * `## Helpful first`.
+ */
+export interface Dependents {
+  neededFor: string[];
+  helpfulFor: string[];
+}
+
+/** The four lists the form of an idea holds. */
+export interface IdeaLinks extends Picks, Dependents {}
+
+/** Toggle `name` in one list; an idea is never in two of the lists. */
+export function togglePick<T extends Picks>(picks: T, name: string, list: keyof T & string): T {
   const key = ideaKey(name);
-  const without = (names: string[]) => names.filter((n) => ideaKey(n) !== key);
-  const other = list === 'requires' ? 'helpful' : 'requires';
-  const had = picks[list].some((n) => ideaKey(n) === key);
-  return {
-    ...picks,
-    [other]: without(picks[other]),
-    [list]: had ? without(picks[list]) : [...picks[list], name],
-  } as Picks;
+  const lists = picks as unknown as Record<string, string[]>;
+  const had = lists[list].some((n) => ideaKey(n) === key);
+  const next: Record<string, string[]> = {};
+  for (const [other, names] of Object.entries(lists)) next[other] = names.filter((n) => ideaKey(n) !== key);
+  if (!had) next[list] = [...next[list], name];
+  return next as unknown as T;
 }
 
 /**
@@ -717,19 +728,37 @@ function matchRank(key: string, wanted: string): number {
   return 3;
 }
 
+/** The names of the four lists, as the form shows them. */
+const LIST_NAMES = { requires: 'Requires', helpful: 'Helpful first', neededFor: 'Needed for', helpfulFor: 'Helpful for' } as const;
+
+/** Why an idea with no file cannot be picked under "Needed for" / "Helpful for". */
+export const WRITE_IT_FIRST = 'Write that concept first, or add this one to its Requires later.';
+
 /**
  * What a requirements box offers for `typed`: the ideas of the map whose name
  * holds it (not the idea itself, `ownNames`: the name of its file and the one
- * typed for it, and not what is in one of the two lists already), best match first, and, when no idea has exactly this name,
+ * typed for it, and not what is in one of the lists already), best match first, and, when no idea has exactly this name,
  * the name itself as a new idea: a link to it makes a "not written yet" idea
  * on the map. The name follows the rules of a file name (ideaNameProblem).
  * With nothing typed: every idea that can still be picked.
+ *
+ * `writtenOnly` is for "Needed for" and "Helpful for": the link goes into the
+ * picked idea's own file, so only ideas that have one are offered, and a name
+ * no file has is a problem instead of a new idea.
  */
-export function pickChoices(typed: string, nodes: readonly IdeaNode[], picks: Picks, ownNames: readonly string[], limit = 50): PickChoices {
+export function pickChoices(
+  typed: string,
+  nodes: readonly IdeaNode[],
+  picks: Picks & Partial<Dependents>,
+  ownNames: readonly string[],
+  limit = 50,
+  writtenOnly = false,
+): PickChoices {
   const wanted = ideaKey(typed);
   const own = new Set(ownNames.map(ideaKey).filter(Boolean));
-  const inList = (list: keyof Picks, key: string) => picks[list].some((name) => ideaKey(name) === key);
-  const free = nodes.filter((node) => !own.has(node.key) && !inList('requires', node.key) && !inList('helpful', node.key));
+  const lists = Object.keys(LIST_NAMES) as Array<keyof typeof LIST_NAMES>;
+  const listOf = (key: string) => lists.find((list) => (picks[list] ?? []).some((name) => ideaKey(name) === key));
+  const free = nodes.filter((node) => !own.has(node.key) && !listOf(node.key) && (node.written || !writtenOnly));
   const option = (node: IdeaNode): PickOption => ({ kind: 'idea', key: node.key, name: node.name, written: node.written });
   if (!wanted) return { options: free.slice(0, limit).map(option), problem: null };
 
@@ -739,41 +768,78 @@ export function pickChoices(typed: string, nodes: readonly IdeaNode[], picks: Pi
     .sort((a, b) => a.rank - b.rank)
     .slice(0, limit)
     .map((found) => option(found.node));
-  if (own.has(wanted)) return { options, problem: 'A concept cannot be its own requirement.' };
-  if (inList('requires', wanted)) return { options, problem: 'This concept is under Requires already.' };
-  if (inList('helpful', wanted)) return { options, problem: 'This concept is under Helpful first already.' };
-  if (nodes.some((node) => node.key === wanted)) return { options, problem: null };
+  if (own.has(wanted)) return { options, problem: writtenOnly ? 'A concept cannot be needed for itself.' : 'A concept cannot be its own requirement.' };
+  const taken = listOf(wanted);
+  if (taken) return { options, problem: `This concept is under ${LIST_NAMES[taken]} already.` };
+  const exact = nodes.find((node) => node.key === wanted);
+  if (writtenOnly) {
+    if (exact && !exact.written) return { options, problem: `"${exact.name}" is not written yet. ${WRITE_IT_FIRST}` };
+    // While a name is being typed, what matches so far says enough
+    return { options, problem: exact || options.length > 0 ? null : `No written concept has this name. ${WRITE_IT_FIRST}` };
+  }
+  if (exact) return { options, problem: null };
   // A link to a file that exists is fine, so no name counts as taken here
   const problem = ideaNameProblem(typed, []);
   if (problem) return { options, problem };
   return { options: [...options, { kind: 'new', name: typed.trim() }], problem: null };
 }
 
-/**
- * The circle that giving the idea `name` the requirements `requires` would
- * make, as names from the idea back to itself, or null: a requirement that
- * already needs the idea, directly or through others.
- */
-export function requirementCircle(graph: IdeaGraph, name: string, requires: readonly string[]): string[] | null {
-  const target = graph.byKey.get(ideaKey(name));
-  if (!target) return null;
-  for (const start of requires.map(ideaKey)) {
-    // Breadth first, so the circle shown is a shortest one
+/** The shortest way from one of `starts` to `goal` along `next`, as keys, or null. */
+function wayTo(starts: readonly string[], goal: string, next: (key: string) => readonly string[]): string[] | null {
+  for (const start of starts) {
+    // Breadth first, so the way shown is a shortest one
     const cameFrom = new Map<string, string | null>([[start, null]]);
     const queue = [start];
     for (let key = queue.shift(); key !== undefined; key = queue.shift()) {
-      if (key === target.key) {
+      if (key === goal) {
         const path: string[] = [];
         for (let at: string | null = key; at !== null; at = cameFrom.get(at) ?? null) path.unshift(at);
-        return [target.name, ...path.map((k) => graph.byKey.get(k)?.name ?? k)];
+        return path;
       }
-      for (const next of graph.byKey.get(key)?.requires ?? []) {
-        if (!cameFrom.has(next)) {
-          cameFrom.set(next, key);
-          queue.push(next);
+      for (const other of next(key)) {
+        if (!cameFrom.has(other)) {
+          cameFrom.set(other, key);
+          queue.push(other);
         }
       }
     }
+  }
+  return null;
+}
+
+/**
+ * The circle that giving the idea `name` the requirements `requires` would
+ * make, as names from the idea back to itself, or null: a requirement that
+ * already needs the idea, directly or through others. `released` are ideas
+ * whose own requirement of this one is being taken out (dropped from "Needed
+ * for" in the same form): their link to it does not count.
+ */
+export function requirementCircle(graph: IdeaGraph, name: string, requires: readonly string[], released: readonly string[] = []): string[] | null {
+  const target = graph.byKey.get(ideaKey(name));
+  if (!target) return null;
+  const free = new Set(released.map(ideaKey));
+  const path = wayTo(requires.map(ideaKey), target.key, (key) => {
+    const own = graph.byKey.get(key)?.requires ?? [];
+    return free.has(key) ? own.filter((other) => other !== target.key) : own;
+  });
+  return path && [target.name, ...path.map((k) => graph.byKey.get(k)?.name ?? k)];
+}
+
+/**
+ * The circle that putting the idea `name` (with the requirements `requires`)
+ * under the `## Requires` of the ideas `neededFor` would make, as names from
+ * the idea back to itself, or null: one of them is already required by the
+ * idea, directly or through others. The idea needs no file yet.
+ */
+export function neededForCircle(graph: IdeaGraph, name: string, requires: readonly string[], neededFor: readonly string[]): string[] | null {
+  const self = ideaKey(name);
+  const starts = requires.map(ideaKey).filter((key) => key !== self);
+  const named = (key: string) => graph.byKey.get(key)?.name ?? key;
+  for (const dependent of neededFor.map(ideaKey)) {
+    if (dependent === self) continue;
+    // Not back through the idea itself: that would be another circle
+    const path = wayTo(starts, dependent, (key) => (key === self ? [] : graph.byKey.get(key)?.requires ?? []));
+    if (path) return [graph.byKey.get(self)?.name ?? name.trim(), ...path.map(named), graph.byKey.get(self)?.name ?? name.trim()];
   }
   return null;
 }
@@ -1365,6 +1431,10 @@ export interface IdeaEdit {
   /** Names of the ideas that must come first. */
   requires: string[];
   helpful: string[];
+  /** Names of the ideas that have this one under their `## Requires` /
+   *  `## Helpful first`: kept in their files, not in this one's. */
+  neededFor: string[];
+  helpfulFor: string[];
 }
 
 export const IDEA_MOVED_ERROR =
@@ -1373,8 +1443,9 @@ const UNSAFE_IDEA_ERROR = 'This file is written in a way the form cannot change 
 const pendingPartError = (part: string) =>
   `${part} of this file has a pending suggestion or a comment in it. Open the file and accept, reject or remove it first.`;
 
-/** An idea as the form holds it. */
-export function ideaAsEdit(name: string, idea: ParsedIdea): IdeaEdit {
+/** An idea as the form holds it; `dependents` are the ideas that name it
+ *  (the graph knows them, its own file does not). */
+export function ideaAsEdit(name: string, idea: ParsedIdea, dependents?: Dependents): IdeaEdit {
   const required = new Set(idea.requires.map(ideaKey));
   return {
     name,
@@ -1385,6 +1456,8 @@ export function ideaAsEdit(name: string, idea: ParsedIdea): IdeaEdit {
     learn: idea.learnText,
     requires: [...idea.requires],
     helpful: idea.helpful.filter((other) => !required.has(ideaKey(other))),
+    neededFor: [...(dependents?.neededFor ?? [])],
+    helpfulFor: [...(dependents?.helpfulFor ?? [])],
   };
 }
 
@@ -1602,6 +1675,111 @@ export function removeLinksChanges(text: string, names: readonly string[]): Chan
 /** `removeLinksChanges` for one idea. */
 export function removeLinkChanges(text: string, name: string): Changes {
   return removeLinksChanges(text, [name]);
+}
+
+/** Where another idea's file should name an idea: under `## Requires`,
+ *  under `## Helpful first`, or (null) in neither. */
+export type DependentList = keyof Picks | null;
+
+/**
+ * What changed between the "Needed for" / "Helpful for" lists a form was
+ * opened with and the ones it holds now: every idea whose file must change,
+ * with the list it should name this idea under afterwards (`requires` for one
+ * now under "Needed for", `helpful` for "Helpful for", null for one taken out
+ * of both). An idea whose place did not change is left out. In `after`, an
+ * idea under both counts as "Needed for".
+ */
+export function dependentsDiff(before: Dependents, after: Dependents): Array<{ name: string; list: DependentList }> {
+  const place = (lists: Dependents) => {
+    const found = new Map<string, { name: string; list: keyof Picks }>();
+    for (const name of lists.helpfulFor) found.set(ideaKey(name), { name, list: 'helpful' });
+    for (const name of lists.neededFor) found.set(ideaKey(name), { name, list: 'requires' });
+    found.delete('');
+    return found;
+  };
+  const was = place(before);
+  const is = place(after);
+  const diff: Array<{ name: string; list: DependentList }> = [];
+  for (const [key, { name, list }] of is) {
+    if (was.get(key)?.list !== list) diff.push({ name, list });
+  }
+  for (const [key, { name }] of was) {
+    if (!is.has(key)) diff.push({ name, list: null });
+  }
+  return diff;
+}
+
+/**
+ * The changes that make `text` (another idea's file, as stored) name the idea
+ * `name` under `list` and nowhere else: a `- [[name]]` line under
+ * `## Requires` or `## Helpful first` (`requirementChanges`: the heading is
+ * added when the file has none), its link in the other of the two taken out;
+ * with null, taken out of both. Links to `formerNames` (a name the idea went
+ * by) count as links to it and are replaced. A file that says so already
+ * gets no changes. Refuses while a section it changes holds a pending
+ * suggestion (a link that is only suggested counts as one to write).
+ */
+export function dependentLinkChanges(text: string, name: string, list: DependentList, formerNames: readonly string[] = []): Changes {
+  const own = new Set([name, ...formerNames].map(ideaKey));
+  const live = parseIdea(text);
+  const others = (names: readonly string[]) => names.filter((other) => !own.has(ideaKey(other)));
+  const wanted = { requires: others(live.requires), helpful: others(live.helpful) };
+  // A link that is there under this very name stays as it is written; one
+  // under a former name goes, and a line with the name of today is added
+  if (list) wanted[list] = [...wanted[list], name.trim()];
+  return requirementChanges(text, wanted.requires, wanted.helpful);
+}
+
+/** One file a save of "Needed for" / "Helpful for" changes. */
+export interface DependentEdit {
+  /** The idea whose file changes. */
+  node: IdeaNode;
+  list: DependentList;
+}
+
+/**
+ * Everything to check before a save writes "Needed for" / "Helpful for" into
+ * other ideas' files, and what it then writes: `idea` is the idea being
+ * created or edited (the name its file has or gets, and the requirements the
+ * form holds), `before` and `after` its two lists (`before` empty for a new
+ * idea). An error means nothing should be saved: an idea under both lists,
+ * the idea itself, one that is not written yet (it has no file for the
+ * link), a circle of requirements, or a file that cannot be changed safely
+ * (`textOf`; a file with no text at hand is checked when it is written).
+ * An idea taken out that the map no longer has is left out.
+ */
+export function dependentEdits(
+  graph: IdeaGraph,
+  idea: { name: string; requires: readonly string[] },
+  before: Dependents,
+  after: Dependents,
+  textOf: (node: IdeaNode) => string | null | undefined,
+): { edits: DependentEdit[] } | { error: string } {
+  const self = ideaKey(idea.name);
+  const needed = new Set(after.neededFor.map(ideaKey));
+  const both = after.helpfulFor.find((name) => needed.has(ideaKey(name)));
+  if (both) return { error: `"${both}" is under both Needed for and Helpful for. Take it out of one.` };
+  if ([...after.neededFor, ...after.helpfulFor].some((name) => ideaKey(name) === self)) return { error: 'A concept cannot be needed for itself.' };
+
+  const diff = dependentsDiff(before, after);
+  const edits: DependentEdit[] = [];
+  for (const { name, list } of diff) {
+    const node = graph.byKey.get(ideaKey(name));
+    if (!node?.docId) {
+      if (list === null) continue;
+      return { error: `"${node?.name ?? name}" is not written yet, so it has no file to put the link in. ${WRITE_IT_FIRST}` };
+    }
+    edits.push({ node, list });
+  }
+  const circle = neededForCircle(graph, idea.name, idea.requires, edits.filter((edit) => edit.list === 'requires').map((edit) => edit.node.name));
+  if (circle) return { error: `This makes a circle of requirements: ${circle.join(' → ')}` };
+  for (const { node, list } of edits) {
+    const text = textOf(node);
+    if (text == null) continue;
+    const result = dependentLinkChanges(text, idea.name, list);
+    if ('error' in result) return { error: `In "${node.name}": ${result.error}` };
+  }
+  return { edits };
 }
 
 /** What deleting a set of ideas does to the map. */

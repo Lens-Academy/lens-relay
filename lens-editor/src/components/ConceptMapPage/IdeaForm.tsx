@@ -1,17 +1,20 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import {
   IDEA_COURSE_LINK,
   PRIORITIES,
   ideaEditProblem,
+  ideaKey,
   ideaNameProblem,
+  neededForCircle,
   requirementCircle,
   togglePick,
+  type Dependents,
   type IdeaEdit,
   type IdeaGraph,
-  type Picks,
+  type IdeaLinks,
   type Priority,
 } from '../../lib/idea-map';
-import { BUTTON, FIELD_LABEL, LIST_LABEL, PRIMARY_BUTTON, PRIORITY_LABEL } from './ideaLook';
+import { BUTTON, FIELD_LABEL, LIST_LABEL, PRIMARY_BUTTON, PRIORITY_LABEL, SHIFT_LIST, listed, type LinkList } from './ideaLook';
 import { GrowingTextarea } from './GrowingTextarea';
 import { PickList } from './PickList';
 
@@ -19,7 +22,7 @@ import { PickList } from './PickList';
  *  the requirements of an existing one. */
 export type FormMode = { kind: 'add'; name: string } | { kind: 'edit'; key: string } | { kind: 'requirements'; key: string };
 
-/** What the form holds besides the two lists of requirements. */
+/** What the form holds besides its lists of other ideas. */
 export interface IdeaFields {
   name: string;
   outcome: string;
@@ -35,24 +38,35 @@ const TITLE: Record<FormMode['kind'], string> = { add: 'Add concept', edit: 'Edi
 
 const LABEL = FIELD_LABEL;
 
+const REQUIREMENT_LISTS: readonly LinkList[] = ['requires', 'helpful'];
+const ALL_LISTS: readonly LinkList[] = ['requires', 'helpful', 'neededFor', 'helpfulFor'];
+const NO_DEPENDENTS: Dependents = { neededFor: [], helpfulFor: [] };
+
 /**
  * The creator's form, in the side panel so the map stays in view: "Add
  * concept" (a new file), "Edit concept" (every part of an existing file, its
  * name included) or "Edit requirements" (only the two lists). Requirements
  * are picked by typing here or by clicking ideas in the view next to it.
+ * "Add concept" and "Edit concept" also have the other direction: "Needed
+ * for" and "Helpful for", the ideas whose own Requires / Helpful first get
+ * this one.
  */
-export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clickList, onClickList, onCancel, onSubmit }: {
+export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, before = NO_DEPENDENTS, clickList, onClickList, note, onCancel, onSubmit }: {
   mode: FormMode;
   /** "Edit concept": what the file says now (its lists are in `picks`). */
   initial?: IdeaEdit;
   graph: IdeaGraph;
   /** Names of the files in the folder: an idea cannot take another one's. */
   fileNames: readonly string[];
-  picks: Picks;
-  onPicks: (picks: Picks) => void;
-  /** The list a plain click on an idea adds to (a shift-click always adds to "helpful first"). */
-  clickList: keyof Picks;
-  onClickList: (list: keyof Picks) => void;
+  picks: IdeaLinks;
+  onPicks: (picks: IdeaLinks) => void;
+  /** "Needed for" / "Helpful for" as they were when the form opened. */
+  before?: Dependents;
+  /** The list a plain click on an idea adds to (a shift-click adds to the "helpful" one of its pair). */
+  clickList: LinkList;
+  onClickList: (list: LinkList) => void;
+  /** Why the last click on an idea added nothing. */
+  note?: string | null;
   onCancel: () => void;
   /** Create or save (with the fields), or save the requirements (null);
    *  resolves to an error to show, or null. */
@@ -85,12 +99,34 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clic
   });
   // Never offered as its own requirement: the name of its file, and the one typed for it
   const ownNames = [ownName, name];
-  const circle = requirementCircle(graph, self?.name ?? name, picks.requires);
+  const lists = mode.kind === 'requirements' ? REQUIREMENT_LISTS : ALL_LISTS;
+  const has = (names: readonly string[], other: string) => names.some((n) => ideaKey(n) === ideaKey(other));
+  // A circle through what the file of another idea says already is said, not
+  // refused (it can be the way out of one); a circle a new "Needed for" makes
+  // is refused: nothing is saved.
+  const circle = requirementCircle(graph, self?.name ?? name, picks.requires, before.neededFor.filter((other) => !has(picks.neededFor, other)));
+  const blocked = mode.kind === 'requirements' ? null
+    : neededForCircle(graph, self?.name ?? name, picks.requires, picks.neededFor.filter((other) => !has(before.neededFor, other)));
+  const blockedNote = useRef<HTMLParagraphElement>(null);
+  // A new idea under a name other ideas link to already: say who does
+  const named = mode.kind === 'add' ? graph.byKey.get(ideaKey(name)) : undefined;
+  const already = (keys: readonly string[], shown: readonly string[], word: string, section: string) => {
+    const names = keys.map((key) => graph.byKey.get(key)?.name ?? key).filter((other) => !has(shown, other));
+    return names.length > 0 ? `Already ${word} ${listed(names)}: ${names.length === 1 ? 'it names' : 'they name'} this concept under ${section}.` : null;
+  };
+  const footnotes: Partial<Record<LinkList, string | null>> = named ? {
+    neededFor: already(named.neededFor, picks.neededFor, 'needed for', 'Requires'),
+    helpfulFor: already(named.helpfulFor, picks.helpfulFor, 'helpful for', 'Helpful first'),
+  } : {};
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setTried(true);
     if (nameProblem || busy) return;
+    if (blocked) {
+      blockedNote.current?.scrollIntoView?.({ block: 'nearest' });
+      return;
+    }
     // A changed file is checked part by part when it is saved (ideaEditChanges)
     const problem = mode.kind === 'add' ? ideaEditProblem(fields()) : null;
     if (problem) {
@@ -160,9 +196,47 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clic
           </>
         )}
 
-        {(['requires', 'helpful'] as const).map((list) => (
-          <PickList key={list} list={list} picks={picks} graph={graph} ownNames={ownNames} onToggle={(n) => onPicks(togglePick(picks, n, list))} />
+        <div className="mt-4 rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span id="idea-click-list">A click on a concept adds it to</span>
+            <div role="group" aria-labelledby="idea-click-list" className="inline-flex flex-wrap items-center rounded bg-gray-200 p-0.5">
+              {lists.map((list) => (
+                <button
+                  key={list}
+                  type="button"
+                  aria-pressed={clickList === list}
+                  onClick={() => onClickList(list)}
+                  className={`rounded px-2 py-0.5 text-xs font-medium ${clickList === list ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                  {LIST_LABEL[list]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="mt-1.5 text-gray-500">
+            Click it again to take it out.{SHIFT_LIST[clickList] !== clickList && ` Shift-click adds to ${LIST_LABEL[SHIFT_LIST[clickList]]}.`}
+          </p>
+          {note && <p className="mt-1.5 text-amber-700" role="status" data-testid="idea-click-note">{note}</p>}
+        </div>
+
+        {lists.map((list) => (
+          <PickList
+            key={list}
+            list={list}
+            picks={picks}
+            graph={graph}
+            ownNames={ownNames}
+            clicksHere={clickList === list}
+            footnote={footnotes[list]}
+            onActivate={() => onClickList(list)}
+            onToggle={(n) => onPicks(togglePick(picks, n, list))}
+          />
         ))}
+        {blocked && (
+          <p ref={blockedNote} className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert" data-testid="idea-needed-circle">
+            This makes a circle of requirements: {blocked.join(' → ')}. Take {blocked[blocked.length - 2]} out of Needed for, or change Requires: it cannot be saved like this.
+          </p>
+        )}
 
         {mode.kind !== 'requirements' && (
           <>
@@ -193,26 +267,6 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, clic
             </div>
           </>
         )}
-
-        <div className="mt-4 rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-          <div className="flex flex-wrap items-center gap-2">
-            <span id="idea-click-list">A click on a concept adds it to</span>
-            <div role="group" aria-labelledby="idea-click-list" className="inline-flex items-center rounded bg-gray-200 p-0.5">
-              {(['requires', 'helpful'] as const).map((list) => (
-                <button
-                  key={list}
-                  type="button"
-                  aria-pressed={clickList === list}
-                  onClick={() => onClickList(list)}
-                  className={`rounded px-2 py-0.5 text-xs font-medium ${clickList === list ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                >
-                  {LIST_LABEL[list]}
-                </button>
-              ))}
-            </div>
-          </div>
-          <p className="mt-1.5 text-gray-500">Click it again to take it out. Shift-click adds to Helpful first.</p>
-        </div>
 
         {circle && (
           <p className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700" role="status">

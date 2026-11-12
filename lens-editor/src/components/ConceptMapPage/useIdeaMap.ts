@@ -11,6 +11,8 @@ import {
   buildIdeaGraph,
   deletePlan,
   deletePlanChanges,
+  dependentEdits,
+  dependentLinkChanges,
   ideaEditChanges,
   ideaKey,
   ideaNameProblem,
@@ -26,6 +28,8 @@ import {
   renderIdeaFile,
   renderQuestion,
   requirementChanges,
+  type DependentEdit,
+  type Dependents,
   type IdeaEdit,
   type IdeaGraph,
   type IdeaNode,
@@ -46,6 +50,7 @@ import {
   trashPath,
 } from '../../lib/relay-api';
 import { useSnapshots } from '../ConceptRowsPanel/useConceptRows';
+import { listed } from './ideaLook';
 
 /**
  * Profiles: separate sets of concepts to switch between. Optional: a hook
@@ -87,8 +92,15 @@ export interface IdeaMap {
   refresh: () => void;
   /** The doc a Learn link points to (bare uuid), or null. */
   lensDoc: (link: string) => string | null;
-  /** Write a new idea file; resolves once it is on the map and its text is stored. */
-  createIdea: (idea: Omit<NewIdea, 'id'> & { name: string }) => Promise<void>;
+  /**
+   * Write a new idea file; resolves once it is on the map and its text is
+   * stored. `neededFor` / `helpfulFor` are names of written ideas: the new one
+   * is added to the `## Requires` / `## Helpful first` of each, after its own
+   * file is made (nothing is taken out of a file here). Everything is checked
+   * before anything is written (`dependentEdits`). Throws an error to show;
+   * when it stops half way, the error says what was written.
+   */
+  createIdea: (idea: Omit<NewIdea, 'id'> & { name: string } & Partial<Dependents>) => Promise<void>;
   /** Change an idea's requirements from `before` to `after`; resolves to an
    *  error to show, or null. */
   saveRequirements: (key: string, before: Picks, after: Picks) => Promise<string | null>;
@@ -102,8 +114,15 @@ export interface IdeaMap {
    * alone (IDEA_MOVED_ERROR). A changed `after.name` renames the file, after
    * the other changes: the relay's move rewrites the `[[links]]` to it in
    * other files, and what it left under Requires / Helpful first is rewritten
-   * here. The idea's key is `ideaKey(after.name)` afterwards. Resolves to an
-   * error to show, or null.
+   * here. The idea's key is `ideaKey(after.name)` afterwards.
+   *
+   * `neededFor` / `helpfulFor` live in the other ideas' files: an idea added
+   * to one of them gets this one under its `## Requires` / `## Helpful first`,
+   * one taken out loses the link (`dependentsDiff`, `dependentLinkChanges`).
+   * Everything is checked before anything is written (`dependentEdits`);
+   * those files are written last, under the idea's new name. When it stops
+   * half way, the error says what was written. Resolves to an error to show,
+   * or null.
    */
   editIdea: (key: string, before: IdeaEdit, after: IdeaEdit) => Promise<string | null>;
   /**
@@ -209,19 +228,6 @@ export function useIdeaMap(folder: string = IDEAS_FOLDER): IdeaMap {
     [ideaFiles, texts, failed, lensDoc],
   );
 
-  const createIdea = useCallback<IdeaMap['createIdea']>(async ({ name, ...idea }) => {
-    const folderDoc = folderDocs.get(IDEAS_SHARED_FOLDER);
-    if (!folderDoc) throw new Error(`folder ${IDEAS_SHARED_FOLDER} not loaded`);
-    if (!folderDoc.getMap('filemeta_v0').has(`/${folder}`)) createFolder(folderDoc, `/${folder}`);
-    const text = renderIdeaFile({ ...idea, id: generateUUID() });
-    const docId = await createDocument(folderDoc, `/${folder}/${name.trim()}.md`, 'markdown', text);
-    // Shown at once; the read after it tells whether the text arrived
-    // (createDocument only logs when writing it fails).
-    setSnapshot(`${RELAY_ID}-${docId}`, text);
-    const stored = await refreshSnapshot(`${RELAY_ID}-${docId}`);
-    if (stored !== text) throw new Error('The file was made, but its text was not written. Open the file to fill it in.');
-  }, [folderDocs, folder]);
-
   /** Make the changes `changesFor` works out from the live text of an idea's
    *  file, as one collaborative edit; resolves to an error to show, or null. */
   const editFile = useCallback(async (key: string, changesFor: (text: string) => ReturnType<typeof requirementChanges>) => {
@@ -249,6 +255,49 @@ export function useIdeaMap(folder: string = IDEAS_FOLDER): IdeaMap {
     if (result === null) return 'Another file was opened for editing meanwhile. Try again.';
     return result || null;
   }, [graph]);
+
+  /** The text of an idea's file as last read, for a check before anything is written. */
+  const textOf = useCallback((node: IdeaNode) => (node.docId ? texts.get(node.docId) : undefined), [texts]);
+
+  /**
+   * Write the idea `name` into (or take it out of) the Requires / Helpful
+   * first of other ideas, one file after another: which files were written,
+   * and when it stopped, which were not and why.
+   */
+  const linkDependents = useCallback(async (name: string, edits: DependentEdit[], formerNames: string[] = []) => {
+    const done: string[] = [];
+    for (const [index, { node, list }] of edits.entries()) {
+      const failed = await editFile(node.key, (text) => dependentLinkChanges(text, name, list, formerNames));
+      if (failed) return { done, left: edits.slice(index).map((edit) => edit.node.name), error: `In "${node.name}": ${failed}` };
+      done.push(node.name);
+    }
+    return { done, left: [] as string[], error: null };
+  }, [editFile]);
+
+  const createIdea = useCallback<IdeaMap['createIdea']>(async ({ name, neededFor = [], helpfulFor = [], ...idea }) => {
+    const folderDoc = folderDocs.get(IDEAS_SHARED_FOLDER);
+    if (!folderDoc) throw new Error(`folder ${IDEAS_SHARED_FOLDER} not loaded`);
+    const title = name.trim();
+    // Before anything is written: can the new idea go into every file picked
+    // under Needed for / Helpful for?
+    const links = dependentEdits(graph, { name: title, requires: idea.requires }, { neededFor: [], helpfulFor: [] }, { neededFor, helpfulFor }, textOf);
+    if ('error' in links) throw new Error(`Nothing was created. ${links.error}`);
+    if (!folderDoc.getMap('filemeta_v0').has(`/${folder}`)) createFolder(folderDoc, `/${folder}`);
+    const text = renderIdeaFile({ ...idea, id: generateUUID() });
+    const docId = await createDocument(folderDoc, `/${folder}/${title}.md`, 'markdown', text);
+    // Shown at once; the read after it tells whether the text arrived
+    // (createDocument only logs when writing it fails).
+    setSnapshot(`${RELAY_ID}-${docId}`, text);
+    const stored = await refreshSnapshot(`${RELAY_ID}-${docId}`);
+    if (stored !== text) throw new Error('The file was made, but its text was not written. Open the file to fill it in.');
+    const linked = await linkDependents(title, links.edits);
+    if (linked.error) {
+      throw new Error(
+        `The concept is created${linked.done.length > 0 ? ` and added to ${listed(linked.done)}` : ''}, but it is not added to ${listed(linked.left)}. `
+        + `${linked.error} Close this form; "Edit concept" can add the rest.`,
+      );
+    }
+  }, [folderDocs, folder, graph, textOf, linkDependents]);
 
   const saveRequirements = useCallback<IdeaMap['saveRequirements']>((key, before, after) => editFile(key, (text) => {
     const live = parseIdea(text);
@@ -293,30 +342,50 @@ export function useIdeaMap(folder: string = IDEAS_FOLDER): IdeaMap {
     const own = new Set([node.key, ideaKey(name)]);
     const others = (names: string[]) => names.filter((other) => !own.has(ideaKey(other)));
     const wanted = { ...after, requires: others(after.requires), helpful: others(after.helpful) };
-    const failed = await editFile(key, (text) => ideaEditChanges(text, before, wanted));
-    if (failed || !renamed) return failed;
+    // Before anything is written: the files of the ideas under Needed for /
+    // Helpful for that gain or lose a link, and this idea's own file
+    const links = dependentEdits(graph, { name: node.name, requires: wanted.requires }, before, wanted, textOf);
+    if ('error' in links) return `Nothing was saved. ${links.error}`;
+    const ownText = textOf(node);
+    const check = ownText == null || links.edits.length === 0 ? null : ideaEditChanges(ownText, before, wanted);
+    if (check && 'error' in check) return check.error;
 
-    try {
-      await movePath(relayPath(node.name), `/${folder}/${name}.md`);
-    } catch (error) {
-      return `The other changes are saved, but the rename failed: ${moveErrorMessage(error, `${name}.md`)}. Close this form and open it again.`;
+    const failed = await editFile(key, (text) => ideaEditChanges(text, before, wanted));
+    if (failed) return failed;
+
+    const said: string[] = [];
+    if (renamed) {
+      try {
+        await movePath(relayPath(node.name), `/${folder}/${name}.md`);
+      } catch (error) {
+        return `The other changes are saved, but the rename failed: ${moveErrorMessage(error, `${name}.md`)}.`
+          + `${links.edits.length > 0 ? ' Needed for and Helpful for are not changed either.' : ''} Close this form and open it again.`;
+      }
+      // The relay rewrites the links to a moved file. Read the files that named
+      // it again, and rewrite here what is still under the old name.
+      const left: IdeaNode[] = [];
+      await Promise.all(linkersOf(node).map(async (linker) => {
+        const text = await refreshSnapshot(`${RELAY_ID}-${linker.docId}`).catch(() => null);
+        const rest = text == null ? null : renameLinkChanges(text, node.name, name);
+        if (!rest || 'error' in rest || rest.changes.length > 0) left.push(linker);
+      }));
+      const unchanged: string[] = [];
+      for (const linker of left) {
+        if (await editFile(linker.key, (text) => renameLinkChanges(text, node.name, name))) unchanged.push(linker.name);
+      }
+      if (unchanged.length > 0) said.push(`The concept is renamed, but the link to it in ${unchanged.join(', ')} still has the old name. Change it in the file.`);
     }
-    // The relay rewrites the links to a moved file. Read the files that named
-    // it again, and rewrite here what is still under the old name.
-    const left: IdeaNode[] = [];
-    await Promise.all(linkersOf(node).map(async (linker) => {
-      const text = await refreshSnapshot(`${RELAY_ID}-${linker.docId}`).catch(() => null);
-      const rest = text == null ? null : renameLinkChanges(text, node.name, name);
-      if (!rest || 'error' in rest || rest.changes.length > 0) left.push(linker);
-    }));
-    const unchanged: string[] = [];
-    for (const linker of left) {
-      if (await editFile(linker.key, (text) => renameLinkChanges(text, node.name, name))) unchanged.push(linker.name);
+
+    // Last, under the name the idea has now: the other ideas' files
+    const linked = await linkDependents(name, links.edits, renamed ? [node.name] : []);
+    if (linked.error) {
+      said.push(
+        `The concept's own changes are saved${renamed ? ' and it is renamed' : ''}${linked.done.length > 0 ? `; ${listed(linked.done)} ${linked.done.length === 1 ? 'is' : 'are'} changed too` : ''}. `
+        + `Not changed: ${listed(linked.left)}. ${linked.error} Close this form and open it again.`,
+      );
     }
-    return unchanged.length > 0
-      ? `The concept is renamed, but the link to it in ${unchanged.join(', ')} still has the old name. Change it in the file.`
-      : null;
-  }, [graph, files, folder, editFile, relayPath, linkersOf]);
+    return said.length > 0 ? said.join(' ') : null;
+  }, [graph, files, folder, editFile, relayPath, linkersOf, textOf, linkDependents]);
 
   const deleteIdea = useCallback<IdeaMap['deleteIdea']>(async (key) => {
     const node = graph.byKey.get(ideaKey(key));

@@ -4,11 +4,13 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   IDEAS_FOLDER,
   IDEAS_SHARED_FOLDER,
+  WRITE_IT_FIRST,
   ideaAsEdit,
   ideaKey,
   questionAsNew,
   togglePick,
   type IdeaEdit,
+  type IdeaLinks,
   type IdeaQuestion,
   type Picks,
 } from '../../lib/idea-map';
@@ -21,7 +23,7 @@ import { IdeaTableView } from './IdeaTableView';
 import { ProfileSwitcher } from './ProfileSwitcher';
 import { QuestionForm } from './QuestionForm';
 import { SelectionBar } from './SelectionBar';
-import { BUTTON, PRIMARY_BUTTON, type IdeaViewProps, type PickKeys, type PickMarks } from './ideaLook';
+import { BUTTON, PRIMARY_BUTTON, SHIFT_LIST, type IdeaViewProps, type LinkList, type PickKeys, type PickMarks } from './ideaLook';
 import { useIdeaMap } from './useIdeaMap';
 
 const VIEWS = [
@@ -31,7 +33,7 @@ const VIEWS = [
 ] as const;
 type ViewId = (typeof VIEWS)[number]['id'];
 
-const NO_PICKS: Picks = { requires: [], helpful: [] };
+const NO_PICKS: IdeaLinks = { requires: [], helpful: [], neededFor: [], helpfulFor: [] };
 
 /**
  * The creator's concept map of the Context Accelerator (/concept-map): the
@@ -78,10 +80,14 @@ function ConceptMap({ folder, onFolder, view, onView }: {
   const [selected, setSelected] = useState<string | null>(null);
   const [find, setFind] = useState('');
   const [mode, setMode] = useState<FormMode | null>(null);
-  const [picks, setPicks] = useState<Picks>(NO_PICKS);
-  /** The requirements as they were when "Edit requirements" opened. */
-  const [before, setBefore] = useState<Picks>(NO_PICKS);
-  const [clickList, setClickList] = useState<keyof Picks>('requires');
+  /** The lists of the form: what this idea requires, and what it is needed for. */
+  const [picks, setPicks] = useState<IdeaLinks>(NO_PICKS);
+  /** The lists as they were when the form opened. */
+  const [before, setBefore] = useState<IdeaLinks>(NO_PICKS);
+  /** The list a click on an idea adds to while a form is open. */
+  const [clickList, setClickList] = useState<LinkList>('requires');
+  /** Why the last such click added nothing. */
+  const [pickNote, setPickNote] = useState<string | null>(null);
   /** The idea as it was when "Edit concept" opened. */
   const [editBefore, setEditBefore] = useState<IdeaEdit | null>(null);
   /** The idea a question is added to, or whose question (`edit`: its place
@@ -114,28 +120,32 @@ function ConceptMap({ folder, onFolder, view, onView }: {
   const marks = useMemo<PickMarks | null>(() => (mode ? {
     requires: new Set(picks.requires.map(ideaKey)),
     helpful: new Set(picks.helpful.map(ideaKey)),
+    neededFor: new Set(picks.neededFor.map(ideaKey)),
+    helpfulFor: new Set(picks.helpfulFor.map(ideaKey)),
     self: mode.kind === 'add' ? null : mode.key,
   } : null), [mode, picks]);
 
-  const openForm = (next: FormMode, start: Picks = NO_PICKS) => {
+  const openForm = (next: FormMode, start: IdeaLinks = NO_PICKS) => {
     setMode(next);
     setPicks(start);
     setBefore(start);
     setClickList('requires');
+    setPickNote(null);
   };
+  const names = (keys: string[]) => keys.map((k) => graph.byKey.get(k)?.name ?? k);
   const editRequirements = (key: string) => {
     const node = graph.byKey.get(key);
     if (!node) return;
-    const names = (keys: string[]) => keys.map((k) => graph.byKey.get(k)?.name ?? k);
-    openForm({ kind: 'requirements', key }, { requires: names(node.requires), helpful: names(node.helpful) });
+    openForm({ kind: 'requirements', key }, { ...NO_PICKS, requires: names(node.requires), helpful: names(node.helpful) });
   };
   const editIdea = (key: string) => {
     const node = graph.byKey.get(key);
     if (!node?.idea) return;
-    // The names as the file has them: saving compares the file with these
-    const start = ideaAsEdit(node.name, node.idea);
+    // The names as the file has them: saving compares the file with these.
+    // What it is needed for is in the other ideas' files: the graph knows.
+    const start = ideaAsEdit(node.name, node.idea, { neededFor: names(node.neededFor), helpfulFor: names(node.helpfulFor) });
     setEditBefore(start);
-    openForm({ kind: 'edit', key }, { requires: start.requires, helpful: start.helpful });
+    openForm({ kind: 'edit', key }, { requires: start.requires, helpful: start.helpful, neededFor: start.neededFor, helpfulFor: start.helpfulFor });
   };
 
   /** Several can be selected by a link that can edit, while no form is open. */
@@ -166,7 +176,14 @@ function ConceptMap({ folder, onFolder, view, onView }: {
     }
     const node = graph.byKey.get(key);
     if (!node || (mode.kind !== 'add' && mode.key === key)) return;
-    setPicks((current) => togglePick(current, node.name, keys.shift ? 'helpful' : clickList));
+    const list = keys.shift ? SHIFT_LIST[clickList] : clickList;
+    // "Needed for" / "Helpful for" write into the file of the idea clicked
+    if ((list === 'neededFor' || list === 'helpfulFor') && !node.written) {
+      setPickNote(`"${node.name}" is not written yet, so it cannot go under ${list === 'neededFor' ? 'Needed for' : 'Helpful for'}. ${WRITE_IT_FIRST}`);
+      return;
+    }
+    setPickNote(null);
+    setPicks((current) => togglePick(current, node.name, list));
   };
 
   // Escape: first the selection of several, then the panel. (A menu, a
@@ -187,12 +204,13 @@ function ConceptMap({ folder, onFolder, view, onView }: {
     if (!mode) return null;
     try {
       if (mode.kind === 'requirements') {
-        const failed = await map.saveRequirements(mode.key, before, picks);
+        const two = ({ requires, helpful }: Picks): Picks => ({ requires, helpful });
+        const failed = await map.saveRequirements(mode.key, two(before), two(picks));
         if (failed) return failed;
         setSelected(mode.key);
       } else if (mode.kind === 'edit') {
         if (!fields || !editBefore) return null;
-        const failed = await map.editIdea(mode.key, editBefore, { ...fields, requires: picks.requires, helpful: picks.helpful });
+        const failed = await map.editIdea(mode.key, editBefore, { ...fields, ...picks });
         if (failed) return failed;
         // A renamed idea is on the map under its new name
         setSelected(ideaKey(fields.name));
@@ -200,7 +218,13 @@ function ConceptMap({ folder, onFolder, view, onView }: {
         // An idea is never its own requirement
         const own = ideaKey(fields.name);
         const others = (names: string[]) => names.filter((name) => ideaKey(name) !== own);
-        await map.createIdea({ ...fields, requires: others(picks.requires), helpful: others(picks.helpful) });
+        await map.createIdea({
+          ...fields,
+          requires: others(picks.requires),
+          helpful: others(picks.helpful),
+          neededFor: others(picks.neededFor),
+          helpfulFor: others(picks.helpfulFor),
+        });
         setSelected(own);
       }
     } catch (error) {
@@ -344,9 +368,17 @@ function ConceptMap({ folder, onFolder, view, onView }: {
                 graph={graph}
                 fileNames={map.fileNames}
                 picks={picks}
-                onPicks={setPicks}
+                onPicks={(next) => {
+                  setPicks(next);
+                  setPickNote(null);
+                }}
+                before={before}
                 clickList={clickList}
-                onClickList={setClickList}
+                onClickList={(list) => {
+                  setClickList(list);
+                  setPickNote(null);
+                }}
+                note={pickNote}
                 onCancel={() => setMode(null)}
                 onSubmit={submit}
               />

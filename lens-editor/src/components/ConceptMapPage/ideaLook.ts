@@ -1,4 +1,4 @@
-import type { IdeaGraph, IdeaNode, Picks, Priority } from '../../lib/idea-map';
+import type { IdeaGraph, IdeaLinks, IdeaNode, Priority } from '../../lib/idea-map';
 
 /** The three priority colours, shared by the map, the steps and the legend. */
 export const PRIORITY_LOOK: Record<Priority, string> = {
@@ -28,10 +28,16 @@ export function ideaTitle(node: IdeaNode): string {
   return parts.join(' · ');
 }
 
-/** What the creator is picking as requirements while a form is open. */
+/** One of the four lists of the form. */
+export type LinkList = keyof IdeaLinks;
+
+/** What the creator is picking while a form is open: the ideas this one
+ *  requires, and (in "Add concept" and "Edit concept") the ones it is needed for. */
 export interface PickMarks {
   requires: ReadonlySet<string>;
   helpful: ReadonlySet<string>;
+  neededFor?: ReadonlySet<string>;
+  helpfulFor?: ReadonlySet<string>;
   /** The idea whose requirements are edited: it cannot be picked. */
   self: string | null;
 }
@@ -40,14 +46,16 @@ export interface PickMarks {
 export function pickWord(marks: PickMarks | null, key: string): string | null {
   if (!marks) return null;
   if (marks.self === key) return 'This concept';
-  if (marks.requires.has(key)) return 'Requires';
-  if (marks.helpful.has(key)) return 'Helpful first';
+  if (marks.requires.has(key)) return LIST_LABEL.requires;
+  if (marks.helpful.has(key)) return LIST_LABEL.helpful;
+  if (marks.neededFor?.has(key)) return LIST_LABEL.neededFor;
+  if (marks.helpfulFor?.has(key)) return LIST_LABEL.helpfulFor;
   return null;
 }
 
 /** How a click on an idea was made. */
 export interface PickKeys {
-  /** Shift was held: "helpful first" while a form picks requirements. */
+  /** Shift was held: the "helpful" list of the two, while a form picks. */
   shift: boolean;
   /** Ctrl, Cmd or Shift was held: add it to, or take it out of, the selection of several. */
   toggle: boolean;
@@ -87,4 +95,6 @@ export const DANGER_BUTTON = 'px-3 py-1 rounded bg-red-600 text-sm text-white ho
 
 /** The small grey word above a field of a form. */
 export const FIELD_LABEL = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400';
-export const LIST_LABEL: Record<keyof Picks, string> = { requires: 'Requires', helpful: 'Helpful first' };
+export const LIST_LABEL: Record<LinkList, string> = { requires: 'Requires', helpful: 'Helpful first', neededFor: 'Needed for', helpfulFor: 'Helpful for' };
+/** The list a shift-click adds to while `list` is the one clicks go to. */
+export const SHIFT_LIST: Record<LinkList, LinkList> = { requires: 'helpful', helpful: 'helpful', neededFor: 'helpfulFor', helpfulFor: 'helpfulFor' };

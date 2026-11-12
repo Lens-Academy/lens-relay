@@ -9,12 +9,16 @@ import {
   buildIdeaGraph,
   deletePlan,
   deletePlanChanges,
+  dependentEdits,
+  dependentLinkChanges,
+  dependentsDiff,
   ideaAsEdit,
   ideaEditChanges,
   ideaEditProblem,
   ideaNameProblem,
   mapColumns,
   mergePicks,
+  neededForCircle,
   newQuestionProblem,
   parseIdea,
   pickChoices,
@@ -440,6 +444,13 @@ describe('togglePick', () => {
     expect(picks).toEqual({ requires: ['B'], helpful: ['a'] });
     expect(togglePick(picks, 'A', 'requires')).toEqual({ requires: ['B', 'A'], helpful: [] });
   });
+
+  it('keeps an idea in one of the four lists of the form', () => {
+    const links = { requires: ['A'], helpful: ['B'], neededFor: ['C'], helpfulFor: [] as string[] };
+    expect(togglePick(links, 'a', 'neededFor')).toEqual({ requires: [], helpful: ['B'], neededFor: ['C', 'a'], helpfulFor: [] });
+    expect(togglePick(links, 'C', 'helpfulFor')).toEqual({ requires: ['A'], helpful: ['B'], neededFor: [], helpfulFor: ['C'] });
+    expect(togglePick(links, 'C', 'neededFor')).toEqual({ requires: ['A'], helpful: ['B'], neededFor: [], helpfulFor: [] });
+  });
 });
 
 describe('pickChoices', () => {
@@ -517,6 +528,41 @@ describe('mergePicks', () => {
   });
 });
 
+describe('pickChoices for "Needed for" and "Helpful for"', () => {
+  // "Old idea" has no file: Power-seeking names it
+  const g = buildIdeaGraph(ideas({ 'Power-seeking': ['Instrumental convergence', 'Old idea'], 'Instrumental convergence': [], 'Old ideas, new': [], Corrigibility: [] }));
+  const none = { requires: [], helpful: [], neededFor: [], helpfulFor: [] };
+  const choices = (typed: string, picks = none, own: string[] = []) => pickChoices(typed, g.nodes, picks, own, 50, true);
+  const WRITE = 'Write that concept first, or add this one to its Requires later.';
+
+  it('offers written ideas only, and never a new one', () => {
+    expect(choices('').options.map((o) => o.name)).toEqual(['Corrigibility', 'Instrumental convergence', 'Old ideas, new', 'Power-seeking']);
+    expect(choices('seek')).toEqual({ options: [{ kind: 'idea', key: 'power-seeking', name: 'Power-seeking', written: true }], problem: null });
+    expect(choices('Mesa optimisation')).toEqual({ options: [], problem: `No written concept has this name. ${WRITE}` });
+  });
+
+  it('says why an idea that is not written yet cannot be picked, also while others match', () => {
+    expect(choices('old idea')).toEqual({
+      options: [{ kind: 'idea', key: 'old ideas, new', name: 'Old ideas, new', written: true }],
+      problem: `"Old idea" is not written yet. ${WRITE}`,
+    });
+    // On the way to a longer name: what matches says enough
+    expect(choices('old').problem).toBeNull();
+  });
+
+  it('leaves out the idea itself and what is in one of the four lists', () => {
+    const picks = { requires: ['Corrigibility'], helpful: [], neededFor: ['Power-seeking'], helpfulFor: ['Old ideas, new'] };
+    expect(choices('', picks, ['Instrumental convergence']).options).toEqual([]);
+    expect(choices('instrumental convergence', none, ['Instrumental convergence']).problem).toBe('A concept cannot be needed for itself.');
+    expect(choices('corrigibility', picks).problem).toBe('This concept is under Requires already.');
+    expect(choices('power-seeking', picks).problem).toBe('This concept is under Needed for already.');
+    expect(choices('old ideas, new', picks).problem).toBe('This concept is under Helpful for already.');
+    // And the same from a requirements box
+    expect(pickChoices('power-seeking', g.nodes, picks, []).problem).toBe('This concept is under Needed for already.');
+    expect(pickChoices('', g.nodes, picks, []).options.map((o) => o.name)).toEqual(['Instrumental convergence', 'Old idea']);
+  });
+});
+
 describe('requirementCircle', () => {
   const g = buildIdeaGraph(ideas({ A: [], B: ['A'], C: ['B'], D: ['Missing'] }));
 
@@ -535,6 +581,39 @@ describe('requirementCircle', () => {
     expect(requirementCircle(g, 'D', ['C'])).toBeNull();
     expect(requirementCircle(g, 'Brand new', ['C'])).toBeNull();
     expect(requirementCircle(g, 'A', [])).toBeNull();
+  });
+
+  it('does not count the link of an idea that is being taken out of "Needed for"', () => {
+    expect(requirementCircle(g, 'A', ['B'], ['b'])).toBeNull();
+    // C still needs A through B
+    expect(requirementCircle(g, 'A', ['C'], ['C'])).toEqual(['A', 'C', 'B', 'A']);
+    expect(requirementCircle(g, 'A', ['C'], ['B'])).toBeNull();
+  });
+});
+
+describe('neededForCircle', () => {
+  // A <- B <- C; D requires the unwritten "Missing"
+  const g = buildIdeaGraph(ideas({ A: [], B: ['A'], C: ['B'], D: ['Missing'] }));
+
+  it('finds the circle when an idea would be needed for one of its own requirements', () => {
+    // C requires B (as the file says), and B would require C
+    expect(neededForCircle(g, 'C', ['B'], ['b'])).toEqual(['C', 'B', 'C']);
+    // … or for what one of them requires, however far down
+    expect(neededForCircle(g, 'c', ['B'], ['D', 'A'])).toEqual(['C', 'B', 'A', 'C']);
+  });
+
+  it('goes by the requirements the form holds, not by the file, and works for an idea with no file yet', () => {
+    expect(neededForCircle(g, 'C', [], ['A'])).toBeNull();
+    expect(neededForCircle(g, 'Brand new', ['C'], ['A'])).toEqual(['Brand new', 'C', 'B', 'A', 'Brand new']);
+    expect(neededForCircle(g, ' Brand new ', ['D'], ['C'])).toBeNull();
+  });
+
+  it('finds none otherwise', () => {
+    expect(neededForCircle(g, 'A', [], ['B', 'C'])).toBeNull();
+    expect(neededForCircle(g, 'B', ['A'], ['C', 'D'])).toBeNull();
+    expect(neededForCircle(g, 'B', ['A'], [])).toBeNull();
+    // Itself is another problem, not a circle through others
+    expect(neededForCircle(g, 'B', ['A'], ['B'])).toBeNull();
   });
 });
 
@@ -1320,8 +1399,14 @@ describe('ideaAsEdit', () => {
       learn: parseIdea(INSTRUMENTAL).learnText,
       requires: [],
       helpful: ['Orthogonality thesis'],
+      neededFor: [],
+      helpfulFor: [],
     });
     expect(parseIdea(INSTRUMENTAL).learnText).toMatch(/^- Start with \[\[/);
+  });
+
+  it('takes what the idea is needed and helpful for from the map: no file of its own says it', () => {
+    expect(ideaAsEdit('X', parseIdea('O.\n'), { neededFor: ['B', 'C'], helpfulFor: ['D'] })).toMatchObject({ requires: [], neededFor: ['B', 'C'], helpfulFor: ['D'] });
   });
 
   it('keeps an idea named under both headings as a requirement only', () => {
@@ -1517,7 +1602,7 @@ describe('ideaEditChanges', () => {
   });
 
   it('gives a file that reads back as the form was saved', () => {
-    const after: IdeaEdit = { name: 'Power', priority: 'low', courses: ['../courses/A', '../courses/B'], outcome: 'O.\nP.', why: 'W.', learn: '- [[../Lenses/L]]: l', requires: ['A', 'B'], helpful: ['C'] };
+    const after: IdeaEdit = { name: 'Power', priority: 'low', courses: ['../courses/A', '../courses/B'], outcome: 'O.\nP.', why: 'W.', learn: '- [[../Lenses/L]]: l', requires: ['A', 'B'], helpful: ['C'], neededFor: [], helpfulFor: [] };
     for (const text of [FILE, '', 'Outcome.\n', '---\nid: x\n---\n\n## Questions\n#### Question: Open\ncontent:: Q?\n']) {
       const result = ideaEditChanges(text, opened(text), after);
       if ('error' in result) throw new Error(result.error);
@@ -1598,6 +1683,140 @@ describe('removeLinksChanges', () => {
     expect(removeLinksChanges(FILE, ['X', 'Y'])).toEqual({ changes: [] });
     expect(removeLinksChanges(FILE, [])).toEqual({ changes: [] });
     expect(removeLinksChanges('## Requires\n- [[A]]\n{++- [[B]]++}\n', ['Z', 'A'])).toEqual({ error: PENDING_REQUIREMENTS_ERROR });
+  });
+});
+
+describe('dependentsDiff', () => {
+  const none = { neededFor: [], helpfulFor: [] };
+
+  it('lists what was added, by the list its file must name the idea under', () => {
+    expect(dependentsDiff(none, { neededFor: ['B', 'C'], helpfulFor: ['D'] })).toEqual([
+      { name: 'D', list: 'helpful' },
+      { name: 'B', list: 'requires' },
+      { name: 'C', list: 'requires' },
+    ]);
+  });
+
+  it('lists what was taken out, and what moved from one list to the other', () => {
+    expect(dependentsDiff({ neededFor: ['B', 'C'], helpfulFor: ['D', 'E'] }, { neededFor: ['c', 'D'], helpfulFor: [] })).toEqual([
+      { name: 'D', list: 'requires' },
+      { name: 'E', list: null },
+      { name: 'B', list: null },
+    ]);
+  });
+
+  it('leaves out what did not change, however it is spelled', () => {
+    expect(dependentsDiff({ neededFor: ['B'], helpfulFor: ['C'] }, { neededFor: [' b '], helpfulFor: ['C'] })).toEqual([]);
+    expect(dependentsDiff(none, none)).toEqual([]);
+    // Under both: it counts as "Needed for"
+    expect(dependentsDiff({ neededFor: ['B'], helpfulFor: [] }, { neededFor: ['B'], helpfulFor: ['B'] })).toEqual([]);
+  });
+});
+
+describe('dependentLinkChanges', () => {
+  const FILE = '---\nid: 1\n---\nExplain.\n\n## Requires\n- [[Other]]\n\n## Helpful first\n- [[Kept]]\n\n## Why it matters\nBecause.\n';
+  const changed = (text: string, ...rest: [string, 'requires' | 'helpful' | null, string[]?]) => {
+    const result = dependentLinkChanges(text, ...rest);
+    return 'error' in result ? result : applyChanges(text, result.changes);
+  };
+
+  it('adds the idea as a line under Requires or under Helpful first', () => {
+    expect(changed(FILE, 'New one', 'requires')).toBe(FILE.replace('- [[Other]]\n', '- [[Other]]\n- [[New one]]\n'));
+    expect(changed(FILE, ' New one ', 'helpful')).toBe(FILE.replace('- [[Kept]]\n', '- [[Kept]]\n- [[New one]]\n'));
+  });
+
+  it('adds the heading to a file that has none', () => {
+    expect(changed('---\nid: 1\n---\nExplain.\n\n## Why it matters\nBecause.\n', 'New one', 'requires'))
+      .toBe('---\nid: 1\n---\nExplain.\n\n## Requires\n- [[New one]]\n\n## Why it matters\nBecause.\n');
+    expect(changed('Explain.\n', 'New one', 'helpful')).toBe('Explain.\n\n## Helpful first\n- [[New one]]\n');
+  });
+
+  it('takes the idea out, of both lists', () => {
+    const both = FILE.replace('- [[Other]]\n', '- [[Other]]\n- [[Gone]]\n').replace('- [[Kept]]\n', '- [[Kept]]\n- [[gone|shown]]\n');
+    expect(changed(both, 'Gone', null)).toBe(FILE);
+    expect(dependentLinkChanges(FILE, 'Gone', null)).toEqual({ changes: [] });
+  });
+
+  it('moves the idea from one list to the other', () => {
+    expect(changed(FILE, 'Other', 'helpful')).toBe(FILE.replace('- [[Other]]\n', '').replace('- [[Kept]]\n', '- [[Kept]]\n- [[Other]]\n'));
+    expect(changed(FILE, 'kept', 'requires')).toBe(FILE.replace('- [[Kept]]\n', '').replace('- [[Other]]\n', '- [[Other]]\n- [[kept]]\n'));
+  });
+
+  it('has no changes for a file that says so already, however the link is written', () => {
+    expect(dependentLinkChanges(FILE, 'other', 'requires')).toEqual({ changes: [] });
+    expect(dependentLinkChanges(FILE.replace('[[Kept]]', '[[kept|shown]]'), 'Kept', 'helpful')).toEqual({ changes: [] });
+  });
+
+  it('writes the name of today in place of a link under a former name', () => {
+    expect(changed(FILE, 'Another', 'requires', ['Other'])).toBe(FILE.replace('[[Other]]', '[[Another]]'));
+    expect(changed(FILE, 'Another', null, ['Other'])).toBe(FILE.replace('- [[Other]]\n', ''));
+    expect(changed(FILE, 'Another', 'helpful', ['Other'])).toBe(FILE.replace('- [[Other]]\n', '').replace('- [[Kept]]\n', '- [[Kept]]\n- [[Another]]\n'));
+  });
+
+  it('refuses beside a pending suggestion in the section it changes', () => {
+    const pending = '## Requires\n- [[Other]]{++ (soon)++}\n\n## Helpful first\n- [[Kept]]\n';
+    expect(dependentLinkChanges(pending, 'New one', 'requires')).toEqual({ error: PENDING_REQUIREMENTS_ERROR });
+    expect(dependentLinkChanges(pending, 'Other', null)).toEqual({ error: PENDING_REQUIREMENTS_ERROR });
+    expect(changed(pending, 'New one', 'helpful')).toBe(`${pending}- [[New one]]\n`);
+    // A suggested link is not there yet, and cannot be written beside
+    const suggested = '## Requires\n{++- [[Other]]++}\n\n## Helpful first\n- [[Kept]]\n';
+    expect(dependentLinkChanges(suggested, 'New one', 'helpful')).toEqual({ error: PENDING_REQUIREMENTS_ERROR });
+  });
+});
+
+describe('dependentEdits', () => {
+  // A <- B <- C; D requires the unwritten "Draft" and finds A helpful
+  const texts: Record<string, string> = {
+    A: 'Explain.\n',
+    B: 'Explain.\n\n## Requires\n- [[A]]\n',
+    C: 'Explain.\n\n## Requires\n- [[B]]\n',
+    D: 'Explain.\n\n## Requires\n- [[Draft]]\n\n## Helpful first\n- [[A]]\n',
+  };
+  const graph = buildIdeaGraph(files(texts));
+  const textOf = (node: { name: string }) => texts[node.name];
+  const none = { neededFor: [], helpfulFor: [] };
+  const edits = (...args: Parameters<typeof dependentEdits>) => {
+    const result = dependentEdits(...args);
+    return 'error' in result ? result : result.edits.map((edit) => [edit.node.name, edit.list]);
+  };
+
+  it('lists the files to change for a new idea', () => {
+    expect(edits(graph, { name: 'New', requires: ['A'] }, none, { neededFor: ['c'], helpfulFor: ['D'] }, textOf)).toEqual([['D', 'helpful'], ['C', 'requires']]);
+    expect(edits(graph, { name: 'New', requires: [] }, none, none, textOf)).toEqual([]);
+  });
+
+  it('lists what an edit adds, takes out and moves', () => {
+    // A is needed for B and helpful for D: B goes, D moves up, C is new
+    expect(edits(graph, { name: 'A', requires: [] }, { neededFor: ['B'], helpfulFor: ['D'] }, { neededFor: ['D'], helpfulFor: ['C'] }, textOf))
+      .toEqual([['C', 'helpful'], ['D', 'requires'], ['B', null]]);
+    expect(edits(graph, { name: 'A', requires: [] }, { neededFor: ['B'], helpfulFor: ['D'] }, { neededFor: ['B'], helpfulFor: ['D'] }, textOf)).toEqual([]);
+  });
+
+  it('refuses an idea under both lists, the idea itself, and one that has no file', () => {
+    expect(edits(graph, { name: 'New', requires: [] }, none, { neededFor: ['B'], helpfulFor: ['b'] }, textOf))
+      .toEqual({ error: '"b" is under both Needed for and Helpful for. Take it out of one.' });
+    expect(edits(graph, { name: 'A', requires: [] }, none, { neededFor: [], helpfulFor: [' a '] }, textOf)).toEqual({ error: 'A concept cannot be needed for itself.' });
+    expect(edits(graph, { name: 'New', requires: [] }, none, { neededFor: ['draft'], helpfulFor: [] }, textOf))
+      .toEqual({ error: '"Draft" is not written yet, so it has no file to put the link in. Write that concept first, or add this one to its Requires later.' });
+    expect(edits(graph, { name: 'New', requires: [] }, none, { neededFor: [], helpfulFor: ['Nowhere'] }, textOf))
+      .toEqual({ error: '"Nowhere" is not written yet, so it has no file to put the link in. Write that concept first, or add this one to its Requires later.' });
+    // Taken out of one that is gone meanwhile: nothing to do
+    expect(edits(graph, { name: 'A', requires: [] }, { neededFor: ['Nowhere'], helpfulFor: [] }, none, textOf)).toEqual([]);
+  });
+
+  it('refuses a circle of requirements a new "Needed for" makes, not one under "Helpful for"', () => {
+    expect(edits(graph, { name: 'C', requires: ['B'] }, none, { neededFor: ['A'], helpfulFor: [] }, textOf))
+      .toEqual({ error: 'This makes a circle of requirements: C → B → A → C' });
+    expect(edits(graph, { name: 'C', requires: ['B'] }, none, { neededFor: [], helpfulFor: ['A'] }, textOf)).toEqual([['A', 'helpful']]);
+    // What was there when the form opened is not checked again
+    expect(edits(graph, { name: 'C', requires: ['B'] }, { neededFor: ['A'], helpfulFor: [] }, { neededFor: ['A', 'D'], helpfulFor: [] }, textOf)).toEqual([['D', 'requires']]);
+  });
+
+  it('names the file that cannot be changed safely, and leaves a file with no text at hand for later', () => {
+    const pending = { ...texts, C: 'Explain.\n\n## Requires\n{++- [[B]]++}\n' };
+    expect(edits(graph, { name: 'New', requires: [] }, none, { neededFor: ['D', 'C'], helpfulFor: [] }, (node) => pending[node.name]))
+      .toEqual({ error: `In "C": ${PENDING_REQUIREMENTS_ERROR}` });
+    expect(edits(graph, { name: 'New', requires: [] }, none, { neededFor: ['D', 'C'], helpfulFor: [] }, () => undefined)).toEqual([['D', 'requires'], ['C', 'requires']]);
   });
 });
 

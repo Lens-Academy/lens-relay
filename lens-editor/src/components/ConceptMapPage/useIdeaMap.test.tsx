@@ -415,6 +415,128 @@ describe('useIdeaMap', () => {
       expect(failed).toBe('The other changes are saved, but the rename failed: "Power.md" or "Power.html" already exists: a .md and a .html file cannot share a name. Close this form and open it again.');
       expect(text('ps')).toBe(POWER.replace('priority: high', 'priority: low'));
     });
+
+    describe('Needed for and Helpful for', () => {
+      // Power-seeking requires Instrumental convergence: the map says so, not its own file
+      const convergence = ideaAsEdit('Instrumental convergence', parseIdea(texts.ic), { neededFor: ['Power-seeking'], helpfulFor: [] });
+      const PENDING = POWER.replace('- [[Instrumental convergence]]', '- [[Instrumental convergence]]{++ (soon)++}');
+
+      it('takes the idea out of the Requires of an idea it is no longer needed for, and saves its own changes', async () => {
+        const text = liveDocs();
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        let failed: string | null = 'not run';
+        await act(async () => {
+          failed = await result.current.editIdea('instrumental convergence', convergence, { ...convergence, priority: 'low', neededFor: [] });
+        });
+        expect(failed).toBeNull();
+        expect(text('ic')).toBe(texts.ic.replace('priority: high', 'priority: low'));
+        expect(text('ps')).toBe(POWER.replace('- [[Instrumental convergence]]\n', ''));
+        expect(movePath).not.toHaveBeenCalled();
+        // The panel shows it at once
+        await waitFor(() => expect(result.current.graph.byKey.get('instrumental convergence')!.neededFor).toEqual([]));
+      });
+
+      it('moves the idea to the Helpful first of an idea it is now only helpful for', async () => {
+        const text = liveDocs();
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        await act(async () => {
+          expect(await result.current.editIdea('instrumental convergence', convergence, { ...convergence, neededFor: [], helpfulFor: ['power-seeking'] })).toBeNull();
+        });
+        // Its own file had nothing to change
+        expect(text('ic')).toBe(texts.ic);
+        expect(parseIdea(text('ps')!)).toMatchObject({ requires: [], helpful: ['Instrumental convergence'], why: parseIdea(POWER).why, questions: parseIdea(POWER).questions });
+        await waitFor(() => expect(result.current.graph.byKey.get('instrumental convergence')!.helpfulFor).toEqual(['power-seeking']));
+      });
+
+      it('turns a requirement around: out of its own Requires, into the Requires of the other', async () => {
+        const text = liveDocs();
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        await act(async () => {
+          expect(await result.current.editIdea('power-seeking', before, { ...before, requires: [], neededFor: ['Instrumental convergence'] })).toBeNull();
+        });
+        expect(text('ps')).toBe(POWER.replace('- [[Instrumental convergence]]\n', ''));
+        // The heading is added, above Helpful first as in a new file
+        expect(text('ic')).toBe(texts.ic.replace('## Helpful first', '## Requires\n- [[Power-seeking]]\n\n## Helpful first'));
+        await waitFor(() => expect(result.current.graph.byKey.get('power-seeking')!.neededFor).toEqual(['instrumental convergence']));
+      });
+
+      it('checks everything before the first write: a circle, an idea with no file, a file that cannot change', async () => {
+        const text = liveDocs();
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        expect(await result.current.editIdea('power-seeking', before, { ...before, priority: 'low', neededFor: ['Instrumental convergence'] }))
+          .toBe('Nothing was saved. This makes a circle of requirements: Power-seeking → Instrumental convergence → Power-seeking');
+        expect(await result.current.editIdea('power-seeking', before, { ...before, priority: 'low', helpfulFor: ['Orthogonality thesis'] }))
+          .toBe('Nothing was saved. "Orthogonality thesis" is not written yet, so it has no file to put the link in. Write that concept first, or add this one to its Requires later.');
+        expect(await result.current.editIdea('power-seeking', before, { ...before, priority: 'low', neededFor: ['Instrumental convergence'], helpfulFor: ['instrumental convergence'] }))
+          .toBe('Nothing was saved. "instrumental convergence" is under both Needed for and Helpful for. Take it out of one.');
+        // Its own file cannot take the change: the other file is not written either
+        expect(await result.current.editIdea('power-seeking', before, { ...before, why: 'New.', requires: [], neededFor: ['Instrumental convergence'] }))
+          .toMatch(/^"Why it matters" of this file has a pending suggestion or a comment/);
+        expect(text('ps') ?? POWER).toBe(POWER);
+        expect(text('ic')).toBeUndefined();
+      });
+
+      it('saves nothing when the file of the other idea holds a pending suggestion where the link goes', async () => {
+        texts.ps = PENDING;
+        try {
+          const text = liveDocs();
+          const { result } = renderMap();
+          await waitFor(() => expect(result.current.read).toBe(2));
+          expect(await result.current.editIdea('instrumental convergence', convergence, { ...convergence, priority: 'low', neededFor: [] }))
+            .toBe(`Nothing was saved. In "Power-seeking": ${PENDING_REQUIREMENTS_ERROR}`);
+          expect(text('ic')).toBeUndefined();
+        } finally {
+          texts.ps = POWER;
+        }
+      });
+
+      it('says what is saved and what is not when a file changed under it', async () => {
+        // The suggestion came after the map read the file
+        const text = liveDocs({ ps: PENDING });
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        let failed: string | null = null;
+        await act(async () => {
+          failed = await result.current.editIdea('instrumental convergence', convergence, { ...convergence, priority: 'low', neededFor: [] });
+        });
+        expect(failed).toBe(`The concept's own changes are saved. Not changed: Power-seeking. In "Power-seeking": ${PENDING_REQUIREMENTS_ERROR} Close this form and open it again.`);
+        expect(text('ic')).toBe(texts.ic.replace('priority: high', 'priority: low'));
+        expect(text('ps')).toBe(PENDING);
+      });
+
+      it('writes the links under the new name when the idea is renamed in the same save', async () => {
+        const text = liveDocs();
+        vi.mocked(movePath).mockResolvedValue({} as Awaited<ReturnType<typeof movePath>>);
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        let failed: string | null = 'not run';
+        await act(async () => {
+          failed = await result.current.editIdea('instrumental convergence', convergence, { ...convergence, name: 'Convergence', neededFor: [], helpfulFor: ['Power-seeking'] });
+        });
+        expect(failed).toBeNull();
+        expect(movePath).toHaveBeenCalledTimes(1);
+        expect(parseIdea(text('ps')!)).toMatchObject({ requires: [], helpful: ['Convergence'] });
+        expect(text('ps')).not.toContain('Instrumental convergence');
+      });
+
+      it('leaves the other files alone when the rename fails', async () => {
+        const text = liveDocs();
+        vi.mocked(movePath).mockRejectedValue(new RelayApiError('conflict', 409));
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        let failed: string | null = null;
+        await act(async () => {
+          failed = await result.current.editIdea('instrumental convergence', convergence, { ...convergence, name: 'Convergence', priority: 'low', neededFor: [] });
+        });
+        expect(failed).toMatch(/^The other changes are saved, but the rename failed: .* Needed for and Helpful for are not changed either\. Close this form and open it again\.$/);
+        expect(text('ic')).toBe(texts.ic.replace('priority: high', 'priority: low'));
+        expect(text('ps')).toBeUndefined();
+      });
+    });
   });
 
   describe('deleteIdea', () => {
@@ -669,6 +791,85 @@ describe('useIdeaMap', () => {
       await waitFor(() => expect(result.current.read).toBe(2));
       await act(async () => {
         await expect(result.current.createIdea(idea)).rejects.toThrow('its text was not written');
+      });
+    });
+
+    describe('Needed for and Helpful for', () => {
+      const linked = { ...idea, requires: [] as string[], neededFor: ['power-seeking'], helpfulFor: ['Instrumental convergence'] };
+      const liveDocs = (overrides: Record<string, string> = {}) => {
+        const docs = new Map<string, DocConnection>();
+        __embedDocsTesting.setConnector(async (fullId) => {
+          const id = fullId.slice(RELAY_ID.length + 1);
+          if (!docs.has(id)) docs.set(id, connection(overrides[id] ?? texts[id]));
+          return docs.get(id)!;
+        });
+        return (id: string) => docs.get(id)?.doc.getText('contents').toString();
+      };
+      const created = (text: (id: string) => string | undefined) => vi.mocked(createDocument).mockImplementation(async (_folderDoc, _path, _type, fileText) => {
+        // No other file is touched before the new one exists
+        expect(text('ps')).toBeUndefined();
+        expect(text('ic')).toBeUndefined();
+        texts.created = fileText!;
+        return 'created';
+      });
+
+      it('creates the file, then names the new idea in the files of the ideas it is needed and helpful for', async () => {
+        const text = liveDocs();
+        created(text);
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        await act(async () => { await result.current.createIdea(linked); });
+        expect(createDocument).toHaveBeenCalledTimes(1);
+        // Its own file says nothing about them
+        expect(texts.created).toContain('## Requires\n\n## Helpful first\n\n## Why it matters');
+        expect(text('ps')).toBe(POWER.replace('- [[Instrumental convergence]]\n', '- [[Instrumental convergence]]\n- [[Goal-directedness]]\n'));
+        expect(text('ic')).toBe(`${texts.ic}- [[Goal-directedness]]\n`);
+      });
+
+      it('creates nothing when a link cannot be written: a circle, an idea with no file, a pending suggestion', async () => {
+        const text = liveDocs();
+        created(text);
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        await expect(result.current.createIdea({ ...idea, neededFor: ['Instrumental convergence'] }))
+          .rejects.toThrow('Nothing was created. This makes a circle of requirements: Goal-directedness → Power-seeking → Instrumental convergence → Goal-directedness');
+        await expect(result.current.createIdea({ ...idea, helpfulFor: ['Orthogonality thesis'] }))
+          .rejects.toThrow('Nothing was created. "Orthogonality thesis" is not written yet, so it has no file to put the link in.');
+        await expect(result.current.createIdea({ ...idea, neededFor: ['Goal-directedness'] })).rejects.toThrow('Nothing was created. A concept cannot be needed for itself.');
+        expect(createDocument).not.toHaveBeenCalled();
+        expect(text('ps')).toBeUndefined();
+      });
+
+      it('creates nothing when the file of a picked idea holds a pending suggestion where the link goes', async () => {
+        texts.ps = POWER.replace('- [[Instrumental convergence]]', '- [[Instrumental convergence]]{++ (soon)++}');
+        try {
+          const text = liveDocs();
+          created(text);
+          const { result } = renderMap();
+          await waitFor(() => expect(result.current.read).toBe(2));
+          await expect(result.current.createIdea(linked)).rejects.toThrow(`Nothing was created. In "Power-seeking": ${PENDING_REQUIREMENTS_ERROR}`);
+          expect(createDocument).not.toHaveBeenCalled();
+          expect(text('ic')).toBeUndefined();
+        } finally {
+          texts.ps = POWER;
+        }
+      });
+
+      it('says what was written when it stops half way', async () => {
+        // The suggestion came after the map read the file
+        const pending = POWER.replace('- [[Instrumental convergence]]', '- [[Instrumental convergence]]{++ (soon)++}');
+        const text = liveDocs({ ps: pending });
+        created(text);
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        await act(async () => {
+          await expect(result.current.createIdea(linked)).rejects.toThrow(
+            `The concept is created and added to Instrumental convergence, but it is not added to Power-seeking. In "Power-seeking": ${PENDING_REQUIREMENTS_ERROR} Close this form; "Edit concept" can add the rest.`,
+          );
+        });
+        expect(createDocument).toHaveBeenCalledTimes(1);
+        expect(text('ic')).toBe(`${texts.ic}- [[Goal-directedness]]\n`);
+        expect(text('ps')).toBe(pending);
       });
     });
   });
