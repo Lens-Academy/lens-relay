@@ -67,6 +67,58 @@ describe('IdeaMapDrawing with long names', () => {
   });
 });
 
+describe('IdeaMapDrawing when its frame changes size', () => {
+  /** A frame of `size.width` x 600 that tells the map when it changed. */
+  const frameOf = (size: { width: number }) => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => size.width);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600);
+    const observers: Array<() => void> = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { observers.push(callback); }
+      observe() {}
+      disconnect() {}
+    });
+    return () => act(() => observers.forEach((changed) => changed()));
+  };
+  const seen = () => {
+    const layer = box('Short').parentElement!;
+    const [, x, k] = /translate\(([-\d.]+)px, [-\d.]+px\) scale\(([\d.]+)\)/.exec(layer.style.transform)!.map(Number);
+    return { k, left: x, right: x + parseFloat(layer.style.width) * k };
+  };
+
+  it('a map shown whole stays whole: smaller when the side panel opens, larger again when it closes', () => {
+    const size = { width: 400 };
+    const resized = frameOf(size);
+    render(<IdeaMapDrawing {...views} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Fit' }));
+    const open = seen();
+    expect(open.right).toBeLessThanOrEqual(400);
+
+    size.width = 200;
+    resized();
+    expect(seen().k).toBeLessThan(open.k);
+    expect(seen().left).toBeGreaterThanOrEqual(0);
+    expect(seen().right).toBeLessThanOrEqual(200 + 1e-6);
+
+    size.width = 400;
+    resized();
+    expect(seen().k).toBeCloseTo(open.k, 6);
+  });
+
+  it('a map that was zoomed by hand keeps its zoom', () => {
+    const size = { width: 400 };
+    const resized = frameOf(size);
+    render(<IdeaMapDrawing {...views} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Fit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    const zoomed = seen().k;
+
+    size.width = 200;
+    resized();
+    expect(seen().k).toBe(zoomed);
+  });
+});
+
 describe('IdeaOrderView with long names', () => {
   it('wraps a long name instead of cutting it', () => {
     render(<IdeaOrderView {...views} />);

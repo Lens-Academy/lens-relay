@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { buildIdeaGraph, ideaKey } from '../../lib/idea-map';
 import { IdeaMapDrawing } from './IdeaMapDrawing';
+import { CONTROL_ROOM } from './mapView';
 import { LAYOUT_STORE } from './useMapLayoutChoice';
 
 const requires = (...names: string[]) => `Explain it.\n\n## Requires\n${names.map((name) => `- [[${name}]]`).join('\n')}\n`;
@@ -117,7 +118,8 @@ describe('the layout switch of the drawn map', () => {
     render(<IdeaMapDrawing {...views} />);
     const layer = box('A1').parentElement!;
     const zoom = () => Number(/scale\(([\d.]+)\)/.exec(layer.style.transform)![1]);
-    const fits = () => Math.min(400 / parseFloat(layer.style.width), 300 / parseFloat(layer.style.height), 1);
+    // The whole map, below the row of controls
+    const fits = () => Math.min(400 / parseFloat(layer.style.width), (300 - CONTROL_ROOM) / parseFloat(layer.style.height), 1);
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
     choose('Layout', 'rows');
     expect(zoom()).toBeCloseTo(fits(), 5);

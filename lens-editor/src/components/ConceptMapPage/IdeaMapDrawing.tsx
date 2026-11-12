@@ -6,6 +6,7 @@ import { ChosenTick } from './ChosenTick';
 import { MapFrames, MapLayoutSwitch } from './MapLayoutSwitch';
 import { arrowFocus } from './ideaKeys';
 import { BUTTON, CHOSEN_LOOK, PRIORITY_LABEL, PRIORITY_LOOK, UNWRITTEN_LOOK, ideaLook, ideaTitle, pickByEnter, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
+import { clampZoom, wholeView, type MapView as View } from './mapView';
 import { useMapLayoutChoice } from './useMapLayoutChoice';
 
 // Every box is as wide as the others and as tall as its name needs: a long
@@ -16,8 +17,6 @@ const NODE_W = 176;
 const NODE_H = 36;
 const LINE_H = 14;
 const SIZES: MapSizes = { nodeWidth: NODE_W, gapX: 40, gapY: 12, margin: 16 };
-const MIN_ZOOM = 0.15;
-const MAX_ZOOM = 2;
 /** The zoom below which names are too small to read. */
 const READABLE_ZOOM = 0.75;
 /** About how many letters fit on a line of a box, until the box is measured. */
@@ -38,8 +37,6 @@ function focusByKeys(el: Element): boolean {
   }
 }
 
-interface View { x: number; y: number; k: number }
-const clampZoom = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
 
 function Legend() {
   const swatch = 'inline-block h-3 w-5 rounded-sm border';
@@ -122,11 +119,18 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
     return () => observer.disconnect();
   }, [graph]);
 
+  /**
+   * The map is shown whole, as "Fit" left it. It then stays whole when the
+   * frame changes size (the side panel opens or closes) or the map does (a
+   * concept is added). Moving or zooming it by hand ends that.
+   */
+  const shownWhole = useRef(false);
   const fit = useCallback(() => {
     const el = frame.current;
     if (!el || !width || !el.clientWidth) return;
-    const k = clampZoom(Math.min(el.clientWidth / width, el.clientHeight / height, 1));
-    setView({ k, x: (el.clientWidth - width * k) / 2, y: (el.clientHeight - height * k) / 2 });
+    const all = wholeView(el.clientWidth, el.clientHeight, width, height);
+    shownWhole.current = all.whole;
+    setView((v) => (v.k === all.view.k && v.x === all.view.x && v.y === all.view.y ? v : all.view));
   }, [width, height]);
 
   // When it opens: the whole map if its names stay readable at that size,
@@ -137,8 +141,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
     const el = frame.current;
     if (opened.current || !el || !width || !el.clientWidth) return;
     opened.current = true;
-    const whole = Math.min(el.clientWidth / width, el.clientHeight / height, 1);
-    if (whole >= READABLE_ZOOM) fit();
+    if (wholeView(el.clientWidth, el.clientHeight, width, height).view.k >= READABLE_ZOOM) fit();
     else setView({ k: READABLE_ZOOM, x: 0, y: (el.clientHeight - height * READABLE_ZOOM) / 2 });
   }, [fit, width, height]);
 
@@ -152,6 +155,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
   }, [drawnAs, fit]);
 
   const zoomAt = useCallback((cx: number, cy: number, factor: number) => {
+    shownWhole.current = false;
     setView((v) => {
       const k = clampZoom(v.k * factor);
       const ratio = k / v.k;
@@ -186,6 +190,8 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
     const el = frame.current;
     const at = placedRef.current.find((p) => p.node.key === selected);
     if (!el || !at || !el.clientWidth) return;
+    // Shown whole it is in view; in a frame that just changed size it is again once the map is fitted to it
+    if (shownWhole.current) return;
     setView((v) => {
       const left = at.x * v.k + v.x;
       const top = at.y * v.k + v.y;
@@ -199,16 +205,26 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
   }, [selected, placedSelected, width, height]);
 
   // The frame changes size when the side panel opens or closes: a map that
-  // fits stays whole in the middle instead of half under the edge.
+  // was shown whole is fitted into the new frame, so no part of it ends up
+  // under the edge; one that was moved or zoomed stays where it is (in the
+  // middle along a side it fits in).
   useEffect(() => {
     const el = frame.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
-      if (opened.current && el.clientWidth) setView((v) => centred(v, el, width, height));
+      if (!opened.current || !el.clientWidth) return;
+      if (shownWhole.current) fit();
+      else setView((v) => centred(v, el, width, height));
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [width, height]);
+  }, [fit, width, height]);
+
+  // The map itself changed size (a concept was added, a name got longer)
+  // while it was shown whole: it still is
+  useLayoutEffect(() => {
+    if (opened.current && shownWhole.current) fit();
+  }, [fit]);
 
   // Dragging moves the map; a press that did not move is a click.
   const drag = useRef<{ id: number; x: number; y: number; viewX: number; viewY: number; moved: boolean } | null>(null);
@@ -226,6 +242,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
     if (!d.moved) {
       if (Math.hypot(dx, dy) < 4) return;
       d.moved = true;
+      shownWhole.current = false;
       e.currentTarget.setPointerCapture(e.pointerId);
     }
     setView((v) => ({ ...v, x: d.viewX + dx, y: d.viewY + dy }));
@@ -249,7 +266,9 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
       : at.right > inside.right - FOCUS_EDGE ? inside.right - FOCUS_EDGE - at.right : 0;
     const dy = at.top < inside.top + FOCUS_EDGE ? inside.top + FOCUS_EDGE - at.top
       : at.bottom > inside.bottom - FOCUS_EDGE ? inside.bottom - FOCUS_EDGE - at.bottom : 0;
-    if (dx || dy) setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
+    if (!dx && !dy) return;
+    shownWhole.current = false;
+    setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
   };
 
   const near = useMemo(() => {
@@ -280,6 +299,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
         if (!scrollLeft && !scrollTop) return;
         el.scrollLeft = 0;
         el.scrollTop = 0;
+        shownWhole.current = false;
         setView((v) => ({ ...v, x: v.x - scrollLeft, y: v.y - scrollTop }));
       }}
       onClickCapture={(e) => {
