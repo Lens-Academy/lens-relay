@@ -109,6 +109,8 @@ export function fixtureIdeas(count: number, { cycle = false, isolated = Math.rou
       '---',
       `id: 00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
       `priority: ${rand() < 0.3 ? 'high' : rand() < 0.6 ? 'medium' : 'low'}`,
+      // The author's own topic; the concepts with no link have none
+      ...(i < linked ? [`topic: Topic ${topicOf[i] + 1}`] : []),
       '---',
       `Explain: ${name}.`,
       '',

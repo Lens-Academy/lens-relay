@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { buildIdeaGraph, type IdeaFile } from './idea-map';
 import type { MapEdge, MapSizes } from './idea-map-layout';
 import { layoutLayered } from './idea-map-layered';
-import { DEFAULT_CHOICE, MAP_GROUPINGS, MAP_LAYOUTS, communities, ideaGroups, layoutFor, parseChoice, type DrawnMap, type MapFrame, type MapLayoutChoice } from './idea-map-layouts';
+import { GROUPED_LAYOUTS, MAP_GROUPINGS, MAP_LAYOUTS, NO_TOPIC, communities, hasTopics, ideaGroups, layoutFor, parseChoice, resolveChoice, topicsOf, type DrawnMap, type GroupBy, type MapFrame, type MapLayoutChoice, type MapLayoutKind } from './idea-map-layouts';
+import { treeParents } from './idea-map-tree';
 import { crowdedBoxes, fixtureMap, linesOnTop, linesThroughBoxes, pathPoints, sideOf } from './idea-map-layouts.fixture';
+import { shownLinks } from './idea-map-links';
 
 const SIZES: MapSizes = { nodeWidth: 176, gapX: 40, gapY: 12, margin: 16 };
 const W = SIZES.nodeWidth;
@@ -28,6 +30,9 @@ function mapOf(lines: readonly string[], more: Record<string, string> = {}) {
   return { graph, edges, heightOf: () => 36, sizes: SIZES };
 }
 
+/** A choice with every part said. */
+const drawnAs = (layout: MapLayoutKind, groupBy: GroupBy = 'cluster', more: Partial<MapLayoutChoice> = {}): MapLayoutChoice => ({ layout, groupBy, links: 'all', hideImplied: false, ...more });
+
 const inFrame = (frame: MapFrame, box: { x: number; y: number; height: number }) => (
   box.x >= frame.x && box.y >= frame.y && box.x + W <= frame.x + frame.width && box.y + box.height <= frame.y + frame.height
 );
@@ -41,15 +46,41 @@ const ends = (d: string) => {
 
 describe('parseChoice', () => {
   it('reads back what was stored', () => {
-    expect(parseChoice(JSON.stringify({ layout: 'groups', groupBy: 'priority' }))).toEqual({ layout: 'groups', groupBy: 'priority' });
+    expect(parseChoice(JSON.stringify({ layout: 'groups', groupBy: 'priority', links: 'requires', hideImplied: true }))).toEqual({ layout: 'groups', groupBy: 'priority', links: 'requires', hideImplied: true });
   });
 
-  it.each([null, '', 'groups', '{"layout":"spiral","groupBy":7}', '[]', 'null'])('falls back to left to right for %j', (raw) => {
-    expect(parseChoice(raw)).toEqual(DEFAULT_CHOICE);
+  it.each([null, '', 'groups', '{"layout":"spiral","groupBy":7,"links":"some","hideImplied":"yes"}', '[]', 'null'])('knows nothing of %j', (raw) => {
+    expect(parseChoice(raw)).toEqual({});
   });
 
   it('keeps the half it knows', () => {
-    expect(parseChoice('{"layout":"rows","groupBy":"colour"}')).toEqual({ layout: 'rows', groupBy: 'cluster' });
+    expect(parseChoice('{"layout":"rows","groupBy":"colour"}')).toEqual({ layout: 'rows' });
+  });
+});
+
+describe('resolveChoice', () => {
+  const plain = mapOf(['a', 'b: a']);
+  const withTopics = mapOf(['a', 'b: a'], { a: 'topic: Basics\n' });
+
+  it('a small map with no topics: left to right, clusters, every link', () => {
+    expect(resolveChoice({}, plain.graph)).toEqual({ layout: 'columns', groupBy: 'cluster', links: 'all', hideImplied: false });
+  });
+
+  it('groups are the author\'s topics as soon as one concept has a topic', () => {
+    expect(hasTopics(plain.graph)).toBe(false);
+    expect(hasTopics(withTopics.graph)).toBe(true);
+    expect(resolveChoice({}, withTopics.graph).groupBy).toBe('topic');
+    expect(resolveChoice({ groupBy: 'priority' }, withTopics.graph).groupBy).toBe('priority');
+  });
+
+  it('never groups by topic a map that has none, whatever was chosen for another map', () => {
+    expect(resolveChoice({ groupBy: 'topic' }, plain.graph).groupBy).toBe('cluster');
+  });
+
+  it('a big map opens in groups; what was chosen stays', () => {
+    const big = fixtureMap(80);
+    expect(resolveChoice({}, big.graph).layout).toBe('groups');
+    expect(resolveChoice({ layout: 'tree', links: 'requires', hideImplied: true }, big.graph)).toMatchObject({ layout: 'tree', links: 'requires', hideImplied: true });
   });
 });
 
@@ -82,6 +113,22 @@ describe('ideaGroups', () => {
       ['b2', ['b1', 'b2', 'b3', 'b4']],
       ['Not linked', ['alone']],
     ]);
+  });
+
+  it('by the author\'s topics: as written whatever the case, biggest first, those without one last', () => {
+    const map = mapOf(['a1', 'a2: a1', 'b1: a2', 'b2: b1', 'b3: b1', 'loose', 'c: missing'], {
+      a1: 'topic: Basics\n', a2: 'topic: basics\n', b1: 'topic: "Risk: the argument"\n', b2: 'topic: "Risk: the argument"\n', b3: 'topic: "Risk: the argument"\n',
+    });
+    const groups = ideaGroups(map.graph, map.edges, 'topic');
+    expect(groups.map((group) => [group.label, [...group.members].sort()])).toEqual([
+      ['Risk: the argument', ['b1', 'b2', 'b3']],
+      ['Basics', ['a1', 'a2']],
+      ['No topic', ['c', 'loose', 'missing']],
+    ]);
+    expect(groups[2].key).toBe(NO_TOPIC);
+    // A topic keeps its colour whatever its place: by name
+    expect(topicsOf(map.graph).map((topic) => [topic.label, topic.tone])).toEqual([['Basics', 0], ['Risk: the argument', 1]]);
+    expect(groups.map((group) => group.tone)).toEqual([1, 0, undefined]);
   });
 
   it('by linked part: everything that hangs together is one group', () => {
@@ -122,14 +169,16 @@ describe('ideaGroups', () => {
 describe('layoutFor', () => {
   it('left to right and top to bottom are the layered drawing', () => {
     const { graph, keys, edges, heightOf } = fixtureMap(40);
-    expect(layoutFor({ layout: 'columns', groupBy: 'cluster' }, { graph, edges, heightOf, sizes: SIZES })).toEqual({ ...layoutLayered(keys, edges, heightOf, SIZES), frames: [] });
-    expect(layoutFor({ layout: 'rows', groupBy: 'cluster' }, { graph, edges, heightOf, sizes: SIZES })).toEqual({ ...layoutLayered(keys, edges, heightOf, SIZES, 'down'), frames: [] });
+    expect(layoutFor(drawnAs('columns'), { graph, edges, heightOf, sizes: SIZES })).toEqual({ ...layoutLayered(keys, edges, heightOf, SIZES), frames: [] });
+    expect(layoutFor(drawnAs('rows'), { graph, edges, heightOf, sizes: SIZES })).toEqual({ ...layoutLayered(keys, edges, heightOf, SIZES, 'down'), frames: [] });
+    // ELK's layout is made elsewhere, as a promise: until it is there, the page's own
+    expect(layoutFor(drawnAs('elk'), { graph, edges, heightOf, sizes: SIZES })).toEqual(layoutFor(drawnAs('columns'), { graph, edges, heightOf, sizes: SIZES }));
   });
 
   it('has nothing to draw for an empty map, whatever the layout', () => {
     const empty = mapOf([]);
     for (const layout of MAP_LAYOUTS) {
-      expect(layoutFor({ layout: layout.key, groupBy: 'cluster' }, empty)).toEqual({ boxes: [], lines: [], frames: [], width: 0, height: 32 });
+      expect(layoutFor(drawnAs(layout.key), empty)).toEqual({ boxes: [], lines: [], frames: [], width: 0, height: 32 });
     }
   });
 
@@ -139,7 +188,7 @@ describe('layoutFor', () => {
       'b1', 'b2: b1', 'b3: b2', 'b4: b2, b3, a4, ~a3',
       'alone',
     ]);
-    const drawn = layoutFor({ layout: 'groups', groupBy: 'cluster' }, map);
+    const drawn = layoutFor(drawnAs('groups', 'cluster'), map);
     const frame = (label: string) => drawn.frames.find((f) => f.label === label)!;
 
     it('draws a frame around each group, with its name and how many are in it', () => {
@@ -172,24 +221,24 @@ describe('layoutFor', () => {
     it('reads in the order the links ask for, not biggest first', () => {
       // The bigger group (b) needs the smaller one (a)
       const later = mapOf(['a1', 'a2: a1', 'a3: a1, a2', 'b1: a3', 'b2: b1', 'b3: b1, b2', 'b4: b1, b2, b3']);
-      expect(layoutFor({ layout: 'groups', groupBy: 'cluster' }, later).frames.map((f) => [f.count, f.note])).toEqual([[3, undefined], [4, 'Builds on: a1']]);
+      expect(layoutFor(drawnAs('groups', 'cluster'), later).frames.map((f) => [f.count, f.note])).toEqual([[3, undefined], [4, 'Builds on: a1']]);
     });
 
     it('two groups that need each other: the one that needs less comes first', () => {
       const both = mapOf(['a1: b3', 'a2: a1', 'a3: a1, a2', 'b1', 'b2: b1, a3', 'b3: b1, b2, a3']);
-      expect(layoutFor({ layout: 'groups', groupBy: 'cluster' }, both).frames.map((f) => f.note)).toEqual([undefined, 'Builds on: a1']);
+      expect(layoutFor(drawnAs('groups', 'cluster'), both).frames.map((f) => f.note)).toEqual([undefined, 'Builds on: a1']);
     });
 
     it('breaks the frames into rows when they are many', () => {
       const { graph, edges, heightOf } = fixtureMap(150);
-      const frames = layoutFor({ layout: 'groups', groupBy: 'cluster' }, { graph, edges, heightOf, sizes: SIZES }).frames;
+      const frames = layoutFor(drawnAs('groups', 'cluster'), { graph, edges, heightOf, sizes: SIZES }).frames;
       expect(new Set(frames.map((f) => f.y)).size).toBeGreaterThan(1);
       expect(new Set(frames.map((f) => f.y)).size).toBeLessThan(frames.length);
     });
 
     it('by priority the groups stay in the order of priority', () => {
       const { graph, edges, heightOf } = fixtureMap(40);
-      const frames = layoutFor({ layout: 'groups', groupBy: 'priority' }, { graph, edges, heightOf, sizes: SIZES }).frames;
+      const frames = layoutFor(drawnAs('groups', 'priority'), { graph, edges, heightOf, sizes: SIZES }).frames;
       expect(frames.map((f) => f.label)).toEqual(['High priority', 'Medium priority', 'Low priority', 'Not written yet']);
       expect(frames.every((f) => f.note === undefined)).toBe(true);
     });
@@ -198,7 +247,7 @@ describe('layoutFor', () => {
   describe('around one concept', () => {
     // a > b > c > d, with e beside b under a, and x > y apart from them
     const map = mapOf(['a', 'b: a', 'c: b', 'd: c', 'e: a', 'x', 'y: x']);
-    const around = (focus: string | null) => layoutFor({ layout: 'focus', groupBy: 'cluster' }, { ...map, focus });
+    const around = (focus: string | null) => layoutFor(drawnAs('focus', 'cluster'), { ...map, focus });
     const outside = (drawn: DrawnMap) => drawn.boxes.filter((box) => drawn.frames.some((f) => inFrame(f, box))).map((box) => box.key).sort();
 
     it('draws what the concept builds on and what builds on it, and sets the rest aside', () => {
@@ -221,7 +270,7 @@ describe('layoutFor', () => {
 
     it('has no frame when everything is on the way', () => {
       const chain = mapOf(['a', 'b: a', 'c: b']);
-      expect(layoutFor({ layout: 'focus', groupBy: 'cluster' }, { ...chain, focus: 'b' }).frames).toEqual([]);
+      expect(layoutFor(drawnAs('focus', 'cluster'), { ...chain, focus: 'b' }).frames).toEqual([]);
     });
   });
 
@@ -232,13 +281,18 @@ describe('layoutFor', () => {
     ['40 concepts with a circle of requirements', 40, { cycle: true }],
     ['20 concepts, half of them not linked', 20, { isolated: 10 }],
   ];
-  const choices: MapLayoutChoice[] = MAP_LAYOUTS.flatMap((layout) => (
-    layout.key === 'groups' ? MAP_GROUPINGS.map((grouping) => ({ layout: layout.key, groupBy: grouping.key })) : [{ layout: layout.key, groupBy: DEFAULT_CHOICE.groupBy }]
-  ));
+  const choices: MapLayoutChoice[] = [
+    ...MAP_LAYOUTS.flatMap((layout) => (
+      GROUPED_LAYOUTS.includes(layout.key) ? MAP_GROUPINGS.map((grouping) => drawnAs(layout.key, grouping.key)) : [drawnAs(layout.key)]
+    )),
+    drawnAs('groups', 'topic', { links: 'requires' }),
+    drawnAs('tree', 'topic', { links: 'requires', hideImplied: true }),
+  ];
   describe.each(maps)('%s', (_, count, options) => {
-    const { graph, keys, edges, heightOf } = fixtureMap(count, options);
-    it.each(choices)('$layout $groupBy: no box on another, no line through a box, frames apart', (choice) => {
-      const drawn = layoutFor(choice, { graph, edges, heightOf, sizes: SIZES });
+    const { graph, keys, edges: all, heightOf } = fixtureMap(count, options);
+    it.each(choices)('$layout $groupBy $links: no box on another, no line through a box, frames apart', (choice) => {
+      const drawn = layoutFor(choice, { graph, edges: all, heightOf, sizes: SIZES });
+      const edges = shownLinks(all, choice);
       expect(drawn.boxes.map((box) => box.key).sort()).toEqual([...keys].sort());
       expect(crowdedBoxes(drawn.boxes, W, SIZES.gapY)).toEqual([]);
       for (const box of drawn.boxes) {
@@ -258,8 +312,13 @@ describe('layoutFor', () => {
         expect(frame.y + frame.height).toBeLessThanOrEqual(drawn.height - SIZES.margin + 0.01);
         expect(drawn.boxes.filter((box) => inFrame(frame, box))).toHaveLength(frame.count);
       }
-      if (choice.layout === 'groups') {
+      if (GROUPED_LAYOUTS.includes(choice.layout)) {
         expect(drawn.frames.reduce((sum, frame) => sum + frame.count, 0)).toBe(keys.length);
+      }
+      // An arrow from group to group: between two frames of the map, for at least one link
+      for (const bundle of drawn.bundles ?? []) {
+        expect(drawn.frames.map((frame) => frame.key)).toEqual(expect.arrayContaining([bundle.from, bundle.to]));
+        expect(bundle.count).toBeGreaterThan(0);
       }
 
       // Lines: one for every link between two concepts (around one concept: those on the way only)
@@ -274,10 +333,16 @@ describe('layoutFor', () => {
           expect(y).toBeLessThanOrEqual(drawn.height);
         }
       }
-      // Those always drawn pass behind no box and do not run on top of each other
+      // Those always drawn pass behind no box and do not run on top of each other. (The organic drawing
+      // moves boxes off its straight lines where there is room, and promises no more than that.)
       const loud = drawn.lines.filter((line) => !line.quiet);
-      expect(linesThroughBoxes({ boxes: drawn.boxes, lines: loud }, W)).toEqual([]);
-      expect(linesOnTop(loud)).toEqual([]);
+      if (choice.layout === 'grid') expect(loud).toEqual([]);
+      if (choice.layout === 'organic') expect(linesThroughBoxes({ boxes: drawn.boxes, lines: loud }, W).length).toBeLessThanOrEqual(loud.length / 10);
+      else {
+        expect(linesThroughBoxes({ boxes: drawn.boxes, lines: loud }, W)).toEqual([]);
+        // The lines of a tree share the stem that leaves their concept
+        if (choice.layout !== 'tree') expect(linesOnTop(loud)).toEqual([]);
+      }
       for (const line of links) {
         const { start, end } = ends(line.d);
         expect(sideOf(start, drawn.boxes.find((box) => box.key === line.from)!, W)).not.toBeNull();
@@ -285,8 +350,85 @@ describe('layoutFor', () => {
       }
     });
 
-    it.each(choices)('$layout $groupBy: the same drawing every time', (choice) => {
-      expect(layoutFor(choice, { graph, edges: [...edges], heightOf, sizes: SIZES })).toEqual(layoutFor(choice, { graph, edges, heightOf, sizes: SIZES }));
+    it.each(choices)('$layout $groupBy $links: the same drawing every time', (choice) => {
+      expect(layoutFor(choice, { graph, edges: [...all], heightOf, sizes: SIZES })).toEqual(layoutFor(choice, { graph, edges: all, heightOf, sizes: SIZES }));
+    });
+  });
+
+  describe('tree', () => {
+    it('hangs each concept under the one it builds on most directly, once', () => {
+      // d requires a (step 1) and c (step 3): it hangs under c; e has only a "helpful first"
+      const map = mapOf(['a', 'b: a', 'c: b', 'd: a, c', 'e: ~b', 'alone']);
+      const parents = treeParents(map.graph, map.edges);
+      expect([...parents].map(([key, parent]) => `${key}<${parent.parent}${parent.helpful ? ' helpful' : ''}`).sort()).toEqual(['b<a', 'c<b', 'd<c', 'e<b helpful']);
+      const drawn = layoutFor(drawnAs('tree'), map);
+      const x = (key: string) => drawn.boxes.find((box) => box.key === key)!.x;
+      expect([x('a'), x('b'), x('c'), x('d')]).toEqual([...[x('a'), x('b'), x('c'), x('d')]].sort((p, q) => p - q));
+      expect(new Set([x('a'), x('b'), x('c'), x('d')]).size).toBe(4);
+      expect(x('e')).toBe(x('c'));
+      // The link that is not part of the tree is there, quiet
+      expect(drawn.lines.filter((line) => line.quiet).map((line) => `${line.from}>${line.to}`)).toEqual(['a>d']);
+      expect(drawn.lines.filter((line) => !line.quiet)).toHaveLength(4);
+    });
+
+    it('of two it requires at the same step, takes the one of its own topic', () => {
+      const map = mapOf(['a', 'b', 'c: a, b'], { a: 'topic: One\n', b: 'topic: Two\n', c: 'topic: Two\n' });
+      expect(treeParents(map.graph, map.edges).get('c')).toEqual({ parent: 'b', helpful: false });
+    });
+
+    it('makes no circle of a circle of requirements', () => {
+      const { graph, edges } = fixtureMap(40, { cycle: true });
+      const parents = treeParents(graph, edges);
+      for (const key of parents.keys()) {
+        const seen = new Set<string>();
+        for (let at: string | undefined = key; at !== undefined; at = parents.get(at)?.parent) {
+          expect(seen.has(at)).toBe(false);
+          seen.add(at);
+        }
+      }
+    });
+  });
+
+  describe('grid and organic', () => {
+    const map = mapOf(['a1', 'a2: a1', 'a3: a2', 'b1: a3', 'b2: b1', 'b3: b1, a1', 'alone'], {
+      a1: 'topic: First\n', a2: 'topic: First\n', a3: 'topic: First\n', b1: 'topic: Second\n', b2: 'topic: Second\n', b3: 'topic: Second\n',
+    });
+
+    it('grid: a frame per topic in the order to read them, every link quiet', () => {
+      const drawn = layoutFor(drawnAs('grid', 'topic'), map);
+      expect(drawn.frames.map((frame) => [frame.label, frame.count, frame.tone])).toEqual([['First', 3, 0], ['Second', 3, 1], ['No topic', 1, undefined]]);
+      expect(drawn.lines).toHaveLength(map.edges.length);
+      expect(drawn.lines.every((line) => line.quiet)).toBe(true);
+    });
+
+    it('organic: one arrow for all the links from one group to another, from the one that comes first', () => {
+      // Seven links from First to Second
+      const tied = mapOf(['a1', 'a2: a1', 'a3: a2', 'b1: a1, a2, a3', 'b2: b1, a1, a2', 'b3: b1, a1, a3'], {
+        a1: 'topic: First\n', a2: 'topic: First\n', a3: 'topic: First\n', b1: 'topic: Second\n', b2: 'topic: Second\n', b3: 'topic: Second\n',
+      });
+      const drawn = layoutFor(drawnAs('organic', 'topic'), tied);
+      expect(drawn.bundles).toEqual([expect.objectContaining({ from: 'topic:first', to: 'topic:second', count: 7 })]);
+      expect(drawn.lines.filter((line) => line.quiet)).toHaveLength(7);
+      expect(framesApart(drawn.frames)).toBe(true);
+    });
+
+    it('organic: a group with no link to another has no arrow', () => {
+      expect(layoutFor(drawnAs('organic', 'topic'), mapOf(['a', 'b'], { a: 'topic: One\n', b: 'topic: Two\n' })).bundles).toEqual([]);
+    });
+  });
+
+  describe('the links that are drawn', () => {
+    const map = mapOf(['a', 'b: a', 'c: b, a, ~a']);
+    const lines = (more: Partial<MapLayoutChoice>) => layoutFor(drawnAs('columns', 'cluster', more), map).lines.map((line) => `${line.from}>${line.to}${line.helpful ? ' helpful' : ''}`).sort();
+
+    it('all of them, or Requires only, or without those a chain says already', () => {
+      expect(lines({})).toEqual(['a>b', 'a>c', 'b>c']);
+      const both = mapOf(['a', 'b: a', 'c: b, a', 'd: ~a']);
+      const of = (more: Partial<MapLayoutChoice>) => layoutFor(drawnAs('columns', 'cluster', more), both).lines.map((line) => `${line.from}>${line.to}${line.helpful ? ' helpful' : ''}`).sort();
+      expect(of({})).toEqual(['a>b', 'a>c', 'a>d helpful', 'b>c']);
+      expect(of({ links: 'requires' })).toEqual(['a>b', 'a>c', 'b>c']);
+      expect(of({ hideImplied: true })).toEqual(['a>b', 'a>d helpful', 'b>c']);
+      expect(of({ links: 'requires', hideImplied: true })).toEqual(['a>b', 'b>c']);
     });
   });
 

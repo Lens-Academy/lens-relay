@@ -121,7 +121,7 @@ function crossings(left: { from: number; to: number }, right: { from: number; to
 }
 
 /** A line through `points` with its corners rounded. */
-function cornered(points: ReadonlyArray<readonly [number, number]>): string {
+export function cornered(points: ReadonlyArray<readonly [number, number]>): string {
   const path = [`M${round(points[0][0])},${round(points[0][1])}`];
   for (let i = 1; i < points.length - 1; i++) {
     const [px, py] = points[i - 1];
