@@ -21,8 +21,12 @@ const graph = buildIdeaGraph([
     docId: 'ic',
     text: file(1, 'high', `Explain why agents share sub-goals.\n\n## Helpful first\n- [[Orthogonality thesis]]\n\n## Why it matters\nIt underlies the risk argument.\n\n## Learn\n- Start with [[../Lenses/A lens|the first lens]] (11 minutes).\n- [[../Lenses/Not there]]\n\n## Questions\n${QUESTION}${QUESTION}`),
   },
-  { name: 'Power-seeking', docId: 'ps', text: file(2, 'medium', 'Explain why power helps.\n\n## Requires\n- [[Instrumental convergence]]\n') },
-  { name: 'Corrigibility', docId: 'co', text: file(3, 'low', '\n## Requires\n- [[Power-seeking]]\n') },
+  {
+    name: 'Power-seeking',
+    docId: 'ps',
+    text: file(2, 'medium', 'Explain why power helps.\n\n## Requires\n- [[Instrumental convergence]]\n').replace('priority: medium\n', 'priority: medium\ntopic: Risk arguments\n'),
+  },
+  { name: 'Corrigibility', docId: 'co', text: file(3, 'low', '\n## Requires\n- [[Power-seeking]]\n').replace('priority: low\n', 'priority: low\ntopic: Control\n') },
 ], { lensExists: (link) => link === '../Lenses/A lens' });
 
 let map: IdeaMap;
@@ -111,8 +115,9 @@ describe('ConceptMapPage', () => {
       const rows = () => [...screen.getByTestId('idea-table').querySelectorAll('tbody tr')];
       expect(rows().map((row) => row.getAttribute('data-idea'))).toEqual(['Corrigibility', 'Instrumental convergence', 'Orthogonality thesis', 'Power-seeking']);
       const cells = [...rows()[1].querySelectorAll('td')].slice(1).map((td) => td.textContent);
-      // (the box to select it,) name, priority, step, requires, needed for, lenses, questions, problems
-      expect(cells).toEqual(['Instrumental convergence', 'High', '1', '0', '1 · Power-seeking', '2', '2', 'Lens not found: Not there']);
+      // (the box to select it,) name, priority, topic, step, requires, needed for, lenses, questions, problems
+      expect(cells).toEqual(['Instrumental convergence', 'High', '', '1', '0', '1 · Power-seeking', '2', '2', 'Lens not found: Not there']);
+      expect(rows()[3].querySelectorAll('td')[3].textContent).toBe('Risk arguments');
       expect(rows()[0].querySelector('td:last-child')!.textContent).toBe('No outcomeNo questionsNo lens under Learn');
       expect(rows()[2].querySelector('td:last-child')!.textContent).toBe('Not written yet');
 
@@ -120,6 +125,24 @@ describe('ConceptMapPage', () => {
       await userEvent.click(screen.getByRole('button', { name: /Questions/ }));
       expect(rows()[0].getAttribute('data-idea')).toBe('Instrumental convergence');
       expect(screen.getByRole('columnheader', { name: /Questions/ }).getAttribute('aria-sort')).toBe('descending');
+    });
+
+    it('has a Topic column in the Table view: sorted by topic, concepts without one last', async () => {
+      renderPage('edit', '/concept-map?view=table');
+      const rows = () => [...screen.getByTestId('idea-table').querySelectorAll('tbody tr')].map((row) => row.getAttribute('data-idea'));
+      await userEvent.click(screen.getByRole('button', { name: /Topic/ }));
+      expect(screen.getByRole('columnheader', { name: /Topic/ }).getAttribute('aria-sort')).toBe('ascending');
+      expect(rows()).toEqual(['Corrigibility', 'Power-seeking', 'Instrumental convergence', 'Orthogonality thesis']);
+      await userEvent.click(screen.getByRole('button', { name: /Topic/ }));
+      expect(rows()).toEqual(['Power-seeking', 'Corrigibility', 'Instrumental convergence', 'Orthogonality thesis']);
+    });
+
+    it('shows the topic of a concept in its panel, and nothing for a concept without one', async () => {
+      renderPage();
+      await userEvent.click(box('Power-seeking'));
+      expect(within(screen.getByTestId('idea-panel')).getByTestId('idea-topic').textContent).toBe('Risk arguments');
+      await userEvent.click(box('Instrumental convergence'));
+      expect(within(screen.getByTestId('idea-panel')).queryByTestId('idea-topic')).toBeNull();
     });
 
     it('selects an idea from a name in another row, by click or keyboard', async () => {
@@ -222,6 +245,11 @@ describe('ConceptMapPage', () => {
       await userEvent.type(screen.getByLabelText('Name'), 'Goal-directedness');
       await userEvent.type(screen.getByLabelText('Outcome'), 'Say what a goal is.');
       await userEvent.selectOptions(screen.getByLabelText('Priority'), 'high');
+      // The topics the other concepts have are offered, by name
+      expect(screen.getByLabelText('Topic').getAttribute('list')).toBe('idea-topic-list');
+      expect([...screen.getByTestId('idea-topic-list').querySelectorAll('option')].map((option) => option.value)).toEqual(['Control', 'Risk arguments']);
+      expect(screen.getByText('Groups the concept on the map. Optional.')).toBeTruthy();
+      await userEvent.type(screen.getByLabelText('Topic'), '  Agency:  basics ');
       await userEvent.type(screen.getByLabelText('Why it matters'), 'Everything else builds on it.');
 
       await userEvent.click(box('Power-seeking'));
@@ -244,6 +272,7 @@ describe('ConceptMapPage', () => {
         name: 'Goal-directedness',
         outcome: 'Say what a goal is.',
         priority: 'high',
+        topic: 'Agency: basics',
         why: 'Everything else builds on it.',
         courses: ['../courses/in-development/Context Accelerator'],
         learn: '',
@@ -779,6 +808,8 @@ describe('ConceptMapPage', () => {
 
       fireEvent.change(screen.getByLabelText('Outcome'), { target: { value: 'Explain it.\nIn two lines.' } });
       await userEvent.selectOptions(screen.getByLabelText('Priority'), 'low');
+      expect(screen.getByLabelText('Topic')).toHaveProperty('value', '');
+      await userEvent.type(screen.getByLabelText('Topic'), 'Risk arguments');
       fireEvent.change(screen.getByLabelText('Courses'), { target: { value: '../courses/A' } });
       // Requirements are picked in the map, as in "Edit requirements"; itself cannot be
       await userEvent.click(box('Corrigibility'));
@@ -792,6 +823,7 @@ describe('ConceptMapPage', () => {
         ...before,
         outcome: 'Explain it.\nIn two lines.',
         priority: 'low',
+        topic: 'Risk arguments',
         courses: ['../courses/A'],
         requires: ['Corrigibility'],
       });
@@ -1398,6 +1430,19 @@ describe('ConceptMapPage', () => {
       await waitFor(() => expect(screen.queryByTestId('idea-form')).toBeNull());
       expect(vi.mocked(map.createIdea).mock.calls[0][0]).toMatchObject({ name: 'Deceptive alignment', outcome: 'Explain it.' });
       expect(screen.getByTestId('idea-notice').textContent).toBe('Created "Deceptive alignment".');
+    });
+
+    it('moves on from the topic with Enter instead of creating, and counts a typed topic as a change', async () => {
+      renderPage();
+      await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+      await userEvent.click(screen.getByLabelText('Topic'));
+      await userEvent.keyboard('Control{Enter}');
+      expect(map.createIdea).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(screen.getByLabelText('Why it matters'));
+      // Not saved: the first Escape only says so
+      await userEvent.keyboard('{Escape}');
+      expect(screen.getByTestId('form-leave-note')).toBeTruthy();
+      expect(screen.getByTestId('idea-form')).toBeTruthy();
     });
 
     it('closes a form with Escape: at once when nothing changed, after a second Escape when something did', async () => {

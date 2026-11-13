@@ -124,6 +124,9 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
           <h2 className="break-words text-base font-semibold text-gray-800">{node.name}</h2>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
             {idea && <span className={`rounded border px-1.5 py-0.5 ${PRIORITY_LOOK[idea.priority]}`}>{PRIORITY_LABEL[idea.priority]} priority</span>}
+            {idea?.topic && (
+              <span className="rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-gray-600" title="Topic" data-testid="idea-topic">{idea.topic}</span>
+            )}
             {!node.written && <span className="rounded border border-dashed border-gray-400 px-1.5 py-0.5">Not written yet</span>}
             <span>Step {node.step}</span>
           </div>

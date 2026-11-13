@@ -341,6 +341,22 @@ describe('useIdeaMap', () => {
       await waitFor(() => expect(result.current.graph.byKey.get('power-seeking')!.idea!.priority).toBe('low'));
     });
 
+    it('writes the topic line into the live file, and takes it out again', async () => {
+      const text = liveDocs();
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      await act(async () => {
+        expect(await result.current.editIdea('power-seeking', before, { ...before, topic: 'AI: risk' })).toBeNull();
+      });
+      const withTopic = POWER.replace('priority: high\n', 'priority: high\ntopic: "AI: risk"\n');
+      expect(text('ps')).toBe(withTopic);
+      await waitFor(() => expect(result.current.graph.byKey.get('power-seeking')!.idea!.topic).toBe('AI: risk'));
+      await act(async () => {
+        expect(await result.current.editIdea('power-seeking', { ...before, topic: 'AI: risk' }, before)).toBeNull();
+      });
+      expect(text('ps')).toBe(POWER);
+    });
+
     it('writes nothing when the file no longer says what the form was opened with', async () => {
       const liveText = POWER.replace('most goals', 'nearly all goals');
       const text = liveDocs({ ps: liveText });
@@ -732,6 +748,16 @@ describe('useIdeaMap', () => {
 
   describe('createIdea', () => {
     const idea = { name: ' Goal-directedness ', priority: 'low' as const, outcome: 'Say what a goal is.', why: '', requires: ['Power-seeking'], helpful: [] };
+
+    it('writes the topic of a new concept into its frontmatter', async () => {
+      vi.mocked(createDocument).mockImplementation(async (_folderDoc, _path, _type, text) => {
+        texts.created = text!;
+        return 'created';
+      });
+      const { result } = renderMap();
+      await act(async () => { await result.current.createIdea({ ...idea, topic: 'Governance and policy' }); });
+      expect(texts.created).toMatch(/\npriority: low\ntopic: Governance and policy\ncourses:\n/);
+    });
 
     it('creates the file in the folder through createDocument, in the spec format', async () => {
       vi.mocked(createDocument).mockImplementation(async (_folderDoc, _path, _type, text) => {

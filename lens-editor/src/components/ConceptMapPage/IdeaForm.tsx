@@ -1,6 +1,7 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   IDEA_COURSE_LINK,
+  MAX_TOPIC,
   PRIORITIES,
   ideaEditProblem,
   ideaKey,
@@ -28,6 +29,8 @@ export interface IdeaFields {
   name: string;
   outcome: string;
   priority: Priority;
+  /** The author's own group for the concept; '' for none. */
+  topic: string;
   why: string;
   /** Link targets of the `courses` list, one per line in the form. */
   courses: string[];
@@ -52,8 +55,8 @@ const NO_DEPENDENTS: Dependents = { neededFor: [], helpfulFor: [] };
  * for" and "Helpful for", the ideas whose own Requires / Helpful first get
  * this one.
  *
- * By keyboard: the focus starts in the first field; Enter in the name moves
- * on instead of saving; Ctrl/Cmd+Enter saves; Escape closes (asking once when
+ * By keyboard: the focus starts in the first field; Enter in the name or the
+ * topic moves on instead of saving; Ctrl/Cmd+Enter saves; Escape closes (asking once when
  * something is not saved).
  */
 export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, before = NO_DEPENDENTS, clickList, onClickList, note, onCancel, onSubmit }: {
@@ -80,6 +83,7 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, befo
   const [name, setName] = useState(mode.kind === 'add' ? mode.name : initial?.name ?? '');
   const [outcome, setOutcome] = useState(initial?.outcome ?? '');
   const [priority, setPriority] = useState<Priority>(initial?.priority ?? 'medium');
+  const [topic, setTopic] = useState(initial?.topic ?? '');
   const [why, setWhy] = useState(initial?.why ?? '');
   const [courses, setCourses] = useState((initial?.courses ?? [IDEA_COURSE_LINK]).join('\n'));
   const [learn, setLearn] = useState(initial?.learn ?? '');
@@ -87,14 +91,20 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, befo
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
   // What the form opened with: Escape asks before it discards anything else
-  const [start] = useState(() => JSON.stringify([name, outcome, priority, why, courses, learn, picks]));
+  const [start] = useState(() => JSON.stringify([name, outcome, priority, topic, why, courses, learn, picks]));
   const { onKeyDown, leaving } = useFormKeys({
-    dirty: JSON.stringify([name, outcome, priority, why, courses, learn, picks]) !== start,
+    dirty: JSON.stringify([name, outcome, priority, topic, why, courses, learn, picks]) !== start,
     busy,
     onCancel,
   });
 
   const self = mode.kind === 'add' ? undefined : graph.byKey.get(mode.key);
+  // The topics the other concepts have, offered while typing: one spelling per group
+  const topics = useMemo(
+    () => [...new Set(graph.nodes.map((node) => node.idea?.topic ?? '').filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })),
+    [graph],
+  );
   // The name the file has now; the form's own text until the map shows a rename
   const ownName = self?.name ?? initial?.name ?? '';
   const renamed = mode.kind === 'edit' && name.trim() !== ownName;
@@ -105,6 +115,7 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, befo
     name: name.trim(),
     outcome,
     priority,
+    topic: topic.replace(/\s+/g, ' ').trim(),
     why,
     courses: courses.split('\n').map((line) => line.trim()).filter(Boolean),
     learn,
@@ -200,6 +211,23 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, befo
               <select id="idea-priority" className="lens-input" value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
                 {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
               </select>
+            </div>
+            <div className="mt-4">
+              <label htmlFor="idea-topic" className={LABEL}>Topic</label>
+              <input
+                id="idea-topic"
+                className="lens-input w-full"
+                value={topic}
+                list="idea-topic-list"
+                autoComplete="off"
+                maxLength={MAX_TOPIC}
+                aria-describedby="idea-topic-note"
+                onChange={(e) => setTopic(e.target.value)}
+              />
+              <datalist id="idea-topic-list" data-testid="idea-topic-list">
+                {topics.map((other) => <option key={other} value={other} />)}
+              </datalist>
+              <p id="idea-topic-note" className="mt-1 text-xs text-gray-400">Groups the concept on the map. Optional.</p>
             </div>
             <div className="mt-4">
               <label htmlFor="idea-why" className={LABEL}>Why it matters</label>

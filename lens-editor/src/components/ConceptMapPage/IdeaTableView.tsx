@@ -6,6 +6,7 @@ import { PRIORITY_LABEL, PRIORITY_LOOK, pickByEnter, pickKeys, pickWord, type Id
 const COLUMNS: Array<{ id: IdeaSortColumn; label: string; title?: string; number?: boolean }> = [
   { id: 'name', label: 'Name' },
   { id: 'priority', label: 'Priority' },
+  { id: 'topic', label: 'Topic', title: 'The group the author put the concept in' },
   { id: 'step', label: 'Step', title: 'Step 1 needs nothing first', number: true },
   { id: 'requires', label: 'Requires' },
   { id: 'neededFor', label: 'Needed for' },
@@ -146,6 +147,7 @@ export function IdeaTableView({ graph, selected, chosen, marks, matches, onPick,
                     <span className={`rounded border px-1.5 py-0.5 text-xs ${PRIORITY_LOOK[node.idea.priority]}`}>{PRIORITY_LABEL[node.idea.priority]}</span>
                   )}
                 </td>
+                <td className="max-w-56 px-3 py-1.5 text-xs leading-5 text-gray-600">{node.idea?.topic}</td>
                 <td className="px-3 py-1.5 text-right tabular-nums text-gray-600">{node.step}</td>
                 <td className="max-w-80 px-3 py-1.5 text-xs leading-5 text-gray-600">{names(node.requires)}</td>
                 <td className="max-w-80 px-3 py-1.5 text-xs leading-5 text-gray-600">{names(node.neededFor)}</td>
