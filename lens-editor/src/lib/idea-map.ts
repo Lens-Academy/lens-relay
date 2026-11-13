@@ -71,6 +71,8 @@ export interface ParsedIdea {
   priority: Priority;
   /** Link targets of the frontmatter `courses`. */
   courses: string[];
+  /** The frontmatter `topic`: the group the author put the idea in; '' when it has none. */
+  topic: string;
   outcome: string;
   /** Names of the ideas under `## Requires`, in order, each once. */
   requires: string[];
@@ -220,6 +222,11 @@ function readQuestion(type: string, lines: readonly string[]): IdeaQuestion {
   };
 }
 
+/** The frontmatter `topic` as one line of text; '' for none or for anything that is not text or a number. */
+function readTopic(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' ? String(value).replace(/\s+/g, ' ').trim() : '';
+}
+
 /**
  * Read an idea file: the text learners get (pending suggestions are not in
  * it), without `%% comments %%`. Never throws; what it cannot read is left
@@ -281,6 +288,7 @@ export function parseIdea(raw: string): ParsedIdea {
     id,
     priority,
     courses: courseLinks(attributes.courses),
+    topic: readTopic(attributes.topic),
     outcome,
     requires: linkedNames(sections.get('requires') ?? ''),
     helpful: linkedNames(sections.get('helpful first') ?? ''),
