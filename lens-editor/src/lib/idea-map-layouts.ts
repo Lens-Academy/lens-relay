@@ -4,6 +4,8 @@
  *
  *  - columns: layered, left to right (lib/idea-map-layered).
  *  - rows: the same, top to bottom.
+ *  - elk: left to right by ELK (lib/idea-map-elk). Made off this file, as a
+ *    promise: `layoutFor` answers with `columns` until the page has it.
  *  - groups: the concepts in groups, each group a small left-to-right map in
  *    a frame of its own; links from group to group stay quiet.
  *  - grid: the groups as frames of boxes side by side, no line until a
@@ -39,6 +41,7 @@ export const MAP_LAYOUTS = [
   { key: 'organic', label: 'Organic', hint: 'Which groups belong together: groups with many links between them stand near each other, one arrow per pair of groups' },
   { key: 'columns', label: 'Left to right', hint: 'The order to learn in: what comes first on the left, every link drawn. Good up to about 60 concepts' },
   { key: 'rows', label: 'Top to bottom', hint: 'The same with what comes first at the top' },
+  { key: 'elk', label: 'Left to right (ELK)', hint: 'Left to right as laid out by ELK, the engine behind yEd-like hierarchical layouts: about half the line crossings on a big map. Takes a second' },
   { key: 'focus', label: 'Around one concept', hint: 'Only the selected concept, all it builds on (left) and all that builds on it (right)' },
 ] as const;
 export type MapLayoutKind = (typeof MAP_LAYOUTS)[number]['key'];

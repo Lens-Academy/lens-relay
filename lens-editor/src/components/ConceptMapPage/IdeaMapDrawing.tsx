@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { wrappedLines, type MapEdge, type MapSizes } from '../../lib/idea-map-layout';
-import { GROUPED_LAYOUTS, hasTopics, layoutFor, topicKey, topicsOf } from '../../lib/idea-map-layouts';
+import { GROUPED_LAYOUTS, hasTopics, layoutFor, type DrawnMap, topicKey, topicsOf } from '../../lib/idea-map-layouts';
 import { chainOf, impliedLinks, inChain, shownLinks } from '../../lib/idea-map-links';
 import { ChosenTick } from './ChosenTick';
 import { MapBundles, MapFrames, MapLayoutSwitch } from './MapLayoutSwitch';
@@ -104,7 +104,25 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
     () => layoutFor(choice, { graph, edges, heightOf, sizes: SIZES, focus: around }),
     [edges, heightOf, graph, choice, around],
   );
-  const { boxes, lines, frames, bundles, width, height } = drawn;
+  // ELK's layout is made off the page and arrives later: until then (and
+  // should ELK not load) the page's own left-to-right drawing stands in
+  const [elk, setElk] = useState<{ of: readonly unknown[]; map: DrawnMap | null } | null>(null);
+  const byElk = choice.layout === 'elk';
+  useEffect(() => {
+    if (!byElk) return;
+    let stale = false;
+    const of = [graph, shown, heightOf];
+    const keys = graph.nodes.map((node) => node.key);
+    Promise.all([import('../../lib/idea-map-elk'), import('../../lib/idea-map-elk-load')])
+      .then(async ([{ layoutElk }, { loadElk }]) => layoutElk(await loadElk(), keys, shown, heightOf, SIZES))
+      .then(
+        (map) => { if (!stale) setElk({ of, map: { ...map, frames: [] } }); },
+        () => { if (!stale) setElk({ of, map: null }); },
+      );
+    return () => { stale = true; };
+  }, [byElk, graph, shown, heightOf]);
+  const elkNow = byElk && elk !== null && elk.of[0] === graph && elk.of[1] === shown && elk.of[2] === heightOf ? elk : null;
+  const { boxes, lines, frames, bundles, width, height } = elkNow?.map ?? drawn;
   const placed = useMemo(() => boxes.map((box) => ({ ...box, node: graph.byKey.get(box.key)! })), [boxes, graph]);
   const frame = useRef<HTMLDivElement>(null);
   const layer = useRef<HTMLDivElement>(null);
@@ -398,6 +416,11 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
         })}
       </div>
       <Legend topics={tones.size > 0} />
+      {byElk && elkNow?.map == null && (
+        <p className="absolute left-3 top-3 rounded border border-gray-200 bg-white/90 px-2.5 py-1.5 text-xs text-gray-600" role="status" data-testid="map-elk-note">
+          {elkNow ? 'ELK could not be loaded: this is the page’s own left-to-right drawing.' : 'ELK is laying out the map…'}
+        </p>
+      )}
       <div className="absolute right-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center justify-end gap-1" data-map-control>
         <MapLayoutSwitch choice={choice} topics={hasTopics(graph)} implied={implied} onChoose={setChoice} />
         <button type="button" className={`${BUTTON} bg-white`} onClick={() => zoomButton(1 / 1.3)} aria-label="Zoom out" title="Zoom out">−</button>
