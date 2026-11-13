@@ -98,7 +98,7 @@ describe('ConceptMapPage', () => {
       const frame = screen.getByTestId('idea-map');
       expect(frame.querySelectorAll('[data-edge="requires"]')).toHaveLength(2);
       expect(frame.querySelectorAll('[data-edge="helpful"]')).toHaveLength(1);
-      expect(screen.getByTestId('idea-map-legend').textContent).toBe('PriorityHighMediumLowNot written yetRequiresHelpful first');
+      expect(screen.getByTestId('idea-map-legend').textContent).toBe('PriorityHighMediumLowNot written yetRequiresHelpful firstTopic');
       expect(screen.getByTestId('idea-counts').textContent).toBe('3 concepts · 1 not written yet');
     });
 

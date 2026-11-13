@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { wrappedLines, type MapEdge, type MapSizes } from '../../lib/idea-map-layout';
-import { layoutFor } from '../../lib/idea-map-layouts';
+import { GROUPED_LAYOUTS, hasTopics, layoutFor, topicKey, topicsOf } from '../../lib/idea-map-layouts';
+import { chainOf, impliedLinks, inChain, shownLinks } from '../../lib/idea-map-links';
 import { ChosenTick } from './ChosenTick';
-import { MapFrames, MapLayoutSwitch } from './MapLayoutSwitch';
+import { MapBundles, MapFrames, MapLayoutSwitch } from './MapLayoutSwitch';
 import { arrowFocus } from './ideaKeys';
-import { BUTTON, CHOSEN_LOOK, PRIORITY_LABEL, PRIORITY_LOOK, UNWRITTEN_LOOK, ideaLook, ideaTitle, pickByEnter, pickKeys, pickWord, type IdeaViewProps } from './ideaLook';
+import { BUTTON, CHOSEN_LOOK, PRIORITY_LABEL, PRIORITY_LOOK, UNWRITTEN_LOOK, ideaLook, ideaTitle, pickByEnter, pickKeys, pickWord, topicColours, type IdeaViewProps } from './ideaLook';
 import { clampZoom, wholeView, type MapView as View } from './mapView';
 import { useMapLayoutChoice } from './useMapLayoutChoice';
 
@@ -38,7 +39,7 @@ function focusByKeys(el: Element): boolean {
 }
 
 
-function Legend() {
+function Legend({ topics }: { topics: boolean }) {
   const swatch = 'inline-block h-3 w-5 rounded-sm border';
   return (
     <div className="absolute bottom-3 left-3 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-x-3 gap-y-1 rounded border border-gray-200 bg-white/90 px-2.5 py-1.5 text-xs text-gray-600" data-testid="idea-map-legend">
@@ -61,6 +62,12 @@ function Legend() {
         <svg width="22" height="8" aria-hidden="true"><line x1="0" y1="4" x2="22" y2="4" className="stroke-gray-500" strokeWidth="1.5" strokeDasharray="4 3" /></svg>
         Helpful first
       </span>
+      {topics && (
+        <span className="flex items-center gap-1" title="The colour on the left edge of a box is its topic, the same colour in every layout">
+          <span className={`${swatch} relative overflow-hidden border-gray-300 bg-white`}><span className="absolute inset-y-0 left-0 w-1" style={{ background: topicColours(0).mark }} /></span>
+          Topic
+        </span>
+      )}
     </div>
   );
 }
@@ -85,15 +92,19 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
   ]), [graph]);
   /** The heights the boxes really have (by key), once they are drawn. */
   const [measured, setMeasured] = useState<ReadonlyMap<string, number>>(new Map());
-  const [choice, setChoice] = useMapLayoutChoice();
+  const [choice, setChoice] = useMapLayoutChoice(graph);
   // "Around one concept" is drawn around the one selected last
   const [focus, setFocus] = useState(selected);
   if (selected !== null && selected !== focus) setFocus(selected);
   const around = choice.layout === 'focus' ? focus : null;
-  const { boxes, lines, frames, width, height } = useMemo(
-    () => layoutFor(choice, { graph, edges, heightOf: (key) => measured.get(key) ?? guessedHeight(graph.byKey.get(key)?.name ?? ''), sizes: SIZES, focus: around }),
-    [edges, measured, graph, choice, around],
+  /** The links that are drawn. */
+  const shown = useMemo(() => shownLinks(edges, choice), [edges, choice]);
+  const heightOf = useCallback((key: string) => measured.get(key) ?? guessedHeight(graph.byKey.get(key)?.name ?? ''), [measured, graph]);
+  const drawn = useMemo(
+    () => layoutFor(choice, { graph, edges, heightOf, sizes: SIZES, focus: around }),
+    [edges, heightOf, graph, choice, around],
   );
+  const { boxes, lines, frames, bundles, width, height } = drawn;
   const placed = useMemo(() => boxes.map((box) => ({ ...box, node: graph.byKey.get(box.key)! })), [boxes, graph]);
   const frame = useRef<HTMLDivElement>(null);
   const layer = useRef<HTMLDivElement>(null);
@@ -146,7 +157,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
   }, [fit, width, height]);
 
   // Drawn another way, the map is somewhere else: show all of it
-  const drawnAs = `${choice.layout} ${choice.groupBy} ${around}`;
+  const drawnAs = `${choice.layout} ${GROUPED_LAYOUTS.includes(choice.layout) ? choice.groupBy : ''} ${around}`;
   const fitted = useRef(drawnAs);
   useLayoutEffect(() => {
     if (fitted.current === drawnAs) return;
@@ -271,14 +282,20 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
     setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
   };
 
-  const near = useMemo(() => {
-    // Drawn around the selected one, the map is its neighbourhood already: nothing is dimmed
-    const node = selected && around === null ? graph.byKey.get(selected) : undefined;
-    return node ? new Set([node.key, ...node.requires, ...node.helpful, ...node.neededFor, ...node.helpfulFor]) : null;
-  }, [graph, selected, around]);
-  const dimmed = (key: string) => (matches ? !matches.has(key) : near ? !near.has(key) : false);
-  /** Key of the idea under the pointer: its lines stand out, so each can be followed in a full map. */
+  /** Key of the idea under the pointer. */
   const [hovered, setHovered] = useState<string | null>(null);
+  // How many links a chain of Requires says already
+  const implied = useMemo(() => impliedLinks(choice.links === 'requires' ? edges.filter((edge) => !edge.helpful) : edges).size, [edges, choice.links]);
+  // The concept whose chain stands out: the one pointed at, else the selected
+  // one (drawn around the selected one, the map is its chain already)
+  const lit = hovered ?? (around === null ? selected : null);
+  const chain = useMemo(() => (lit !== null && graph.byKey.has(lit) ? chainOf(lit, shown) : null), [graph, lit, shown]);
+  const inLitChain = (key: string) => key === lit || chain!.before.has(key) || chain!.after.has(key);
+  const dimmed = (key: string) => (matches ? !matches.has(key) : chain ? !inLitChain(key) : false);
+  const tones = useMemo(() => {
+    const toneOf = new Map(topicsOf(graph).map((topic) => [topic.key, topic.tone]));
+    return new Map(graph.nodes.flatMap((node) => (toneOf.has(topicKey(node)) ? [[node.key, toneOf.get(topicKey(node))!] as const] : [])));
+  }, [graph]);
 
   return (
     <div
@@ -314,6 +331,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
         style={{ width, height, transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}
       >
         <MapFrames frames={frames} zoom={view.k} />
+        {bundles && <MapBundles bundles={bundles} width={width} height={height} zoom={view.k} faint={chain !== null || matches !== null} />}
         <svg className="absolute inset-0 overflow-visible" width={width} height={height} aria-hidden="true">
           <defs>
             <marker id="idea-map-arrow" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
@@ -322,20 +340,26 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
             <marker id="idea-map-arrow-near" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
               <path d="M0,0 L6,3 L0,6 z" className="fill-indigo-500" />
             </marker>
+            <marker id="idea-map-arrow-far" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L6,3 L0,6 z" className="fill-indigo-300" />
+            </marker>
           </defs>
           {lines.map((line) => {
-            const touches = !matches && [selected, hovered].some((key) => key !== null && (line.from === key || line.to === key));
-            const faint = matches ? !(matches.has(line.from) && matches.has(line.to)) : (near !== null || hovered !== null) && !touches;
-            if (line.quiet && !touches) return null;
+            // Its two ends, and the rest of the chain of the concept that is pointed at or selected
+            const touches = !matches && lit !== null && (line.from === lit || line.to === lit);
+            const onChain = touches || (!matches && chain !== null && inChain(line, lit!, chain));
+            const faint = matches ? !(matches.has(line.from) && matches.has(line.to)) : chain !== null && !onChain;
+            if (line.quiet && !onChain) return null;
             return (
               <path
                 key={`${line.from}>${line.to}>${line.helpful}`}
                 d={line.d}
                 data-edge={line.helpful ? 'helpful' : 'requires'}
-                className={`fill-none ${touches ? 'stroke-indigo-500' : 'stroke-gray-400'} ${faint ? 'opacity-20' : line.helpful && !touches ? 'opacity-60' : ''}`}
-                strokeWidth={touches ? 1.75 : 1.25}
+                data-chain={onChain ? (touches ? 'near' : 'far') : undefined}
+                className={`fill-none ${touches ? 'stroke-indigo-500' : onChain ? 'stroke-indigo-300' : 'stroke-gray-400'} ${faint ? 'opacity-15' : line.helpful && !onChain ? 'opacity-60' : ''}`}
+                strokeWidth={touches ? 1.75 : onChain ? 1.5 : 1.25}
                 strokeDasharray={line.helpful ? '5 4' : undefined}
-                markerEnd={`url(#idea-map-arrow${touches ? '-near' : ''})`}
+                markerEnd={`url(#idea-map-arrow${touches ? '-near' : onChain ? '-far' : ''})`}
               />
             );
           })}
@@ -344,6 +368,7 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
           const word = pickWord(marks, node.key);
           const ring = word ? 'ring-2 ring-indigo-500' : node.key === selected ? 'ring-2 ring-blue-600' : '';
           const inSet = chosen.has(node.key);
+          const tone = tones.get(node.key);
           return (
             <button
               key={node.key}
@@ -358,10 +383,11 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
               onKeyDown={(e) => pickByEnter(e, (keys) => onPick(node.key, keys))}
               onPointerEnter={() => setHovered(node.key)}
               onPointerLeave={() => setHovered(null)}
-              className={`absolute flex items-center rounded border px-2 py-1 text-left text-xs leading-[14px] hover:brightness-95 ${ideaLook(node)} ${ring} ${inSet ? CHOSEN_LOOK : ''} ${dimmed(node.key) && !inSet ? 'opacity-30' : ''}`}
+              className={`absolute flex items-center rounded border px-2 py-1 text-left text-xs leading-[14px] transition-opacity hover:brightness-95 ${ideaLook(node)} ${ring} ${inSet ? CHOSEN_LOOK : ''} ${dimmed(node.key) && !inSet ? 'opacity-30' : ''}`}
               // As tall as the name needs; the layout is made with the height it then has
               style={{ left: x, top: y, width: NODE_W, minHeight: NODE_H }}
             >
+              {tone !== undefined && <span className="absolute inset-y-0 left-0 w-[3px] rounded-l" style={{ background: topicColours(tone).mark }} data-topic-mark />}
               <span className="min-w-0 flex-1 break-words">{node.name}</span>
               {word && (
                 <span className="absolute -top-2 right-1 rounded bg-indigo-600 px-1 py-px text-[9px] font-medium leading-none text-white">{word}</span>
@@ -371,9 +397,9 @@ export function IdeaMapDrawing({ graph, selected, chosen, marks, matches, onPick
           );
         })}
       </div>
-      <Legend />
-      <div className="absolute right-3 top-3 flex items-center gap-1" data-map-control>
-        <MapLayoutSwitch choice={choice} onChoose={setChoice} />
+      <Legend topics={tones.size > 0} />
+      <div className="absolute right-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center justify-end gap-1" data-map-control>
+        <MapLayoutSwitch choice={choice} topics={hasTopics(graph)} implied={implied} onChoose={setChoice} />
         <button type="button" className={`${BUTTON} bg-white`} onClick={() => zoomButton(1 / 1.3)} aria-label="Zoom out" title="Zoom out">−</button>
         <button type="button" className={`${BUTTON} bg-white`} onClick={() => zoomButton(1.3)} aria-label="Zoom in" title="Zoom in">+</button>
         <button type="button" className={`${BUTTON} bg-white`} onClick={fit} title="Show the whole map">Fit</button>

@@ -13,6 +13,15 @@ export const PRIORITY_LABEL: Record<Priority, string> = { high: 'High', medium: 
 /** A "not written yet" idea: dashed and muted. */
 export const UNWRITTEN_LOOK = 'border-dashed border-gray-400 bg-white text-gray-500';
 
+/** The hues of the topics, far enough apart that neighbours differ. */
+const TOPIC_HUES = [210, 28, 145, 275, 350, 185, 48, 310, 100, 238, 12, 165, 68, 330];
+
+/** The calm colours of topic number `tone`: the fill of its frame, its outline, its words, and a stronger one for a small mark. */
+export function topicColours(tone: number): { fill: string; edge: string; text: string; mark: string } {
+  const hue = TOPIC_HUES[tone % TOPIC_HUES.length];
+  return { fill: `hsl(${hue}, 60%, 97%)`, edge: `hsl(${hue}, 40%, 78%)`, text: `hsl(${hue}, 45%, 32%)`, mark: `hsl(${hue}, 55%, 58%)` };
+}
+
 /** How an idea's box looks: by priority; dashed when it has no file; a red
  *  edge when it is in a circle of requirements. */
 export function ideaLook(node: IdeaNode): string {
@@ -25,6 +34,7 @@ export function ideaTitle(node: IdeaNode): string {
   const parts = [node.name];
   if (!node.written) parts.push('Not written yet');
   else if (node.idea) parts.push(`${PRIORITY_LABEL[node.idea.priority]} priority`);
+  if (node.idea?.topic) parts.push(`Topic: ${node.idea.topic}`);
   if (node.inCycle) parts.push('In a circle of requirements');
   return parts.join(' · ');
 }
