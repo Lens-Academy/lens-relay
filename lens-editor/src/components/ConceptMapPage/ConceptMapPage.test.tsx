@@ -110,6 +110,27 @@ describe('ConceptMapPage', () => {
       expect(steps).toEqual([['Instrumental convergence', 'Orthogonality thesis'], ['Power-seeking'], ['Corrigibility']]);
     });
 
+    it('walks through the concepts one at a time in the Walk through view, and remembers what was seen per folder', async () => {
+      localStorage.clear();
+      renderPage();
+      await userEvent.click(screen.getByRole('button', { name: 'Walk through' }));
+      const topics = [...screen.getByTestId('walk-overview').querySelectorAll('[data-topic]')].map((el) => el.getAttribute('data-topic'));
+      expect(topics).toEqual(['No topic', 'Risk arguments', 'Control']);
+      await userEvent.click(screen.getByTestId('walk-start'));
+      const shown = () => screen.getByTestId('walk-step').querySelector<HTMLElement>('[data-walk-card]')!.dataset.idea;
+      expect(shown()).toBe('Orthogonality thesis');
+      await userEvent.click(screen.getByTestId('walk-next'));
+      expect(shown()).toBe('Instrumental convergence');
+      expect(screen.getByTestId('walk-where').textContent).toBe('Step 2 of 4 · Topic: No topic (2 of 2)');
+      // By the id of the file; the one without a file by its key
+      expect(JSON.parse(localStorage.getItem('concept-map-walk-seen:folder:Context Accelerator LOs')!)).toEqual(['orthogonality thesis', '00000000-0000-4000-8000-000000000001']);
+      // "Open" is the side panel of the page, and the panel follows the walk
+      await userEvent.click(within(screen.getByTestId('walk-step')).getByRole('button', { name: 'Open' }));
+      expect(within(screen.getByTestId('idea-panel')).getByRole('heading', { name: 'Instrumental convergence' })).toBeTruthy();
+      await userEvent.click(screen.getByTestId('walk-next'));
+      expect(within(screen.getByTestId('idea-panel')).getByRole('heading', { name: 'Power-seeking' })).toBeTruthy();
+    });
+
     it('lists every idea with its counts and problems in the Table view, sortable', async () => {
       renderPage('edit', '/concept-map?view=table');
       const rows = () => [...screen.getByTestId('idea-table').querySelectorAll('tbody tr')];
@@ -1162,6 +1183,13 @@ describe('ConceptMapPage', () => {
     const switcher = () => screen.getByRole('button', { name: 'Profile: Main' });
     const items = () => [...screen.getByRole('menu').querySelectorAll('[role^="menuitem"]')].map((el) => el.textContent);
 
+    it('remembers what the walk has shown per profile', async () => {
+      localStorage.clear();
+      renderPage('edit', '/concept-map?view=walk');
+      await userEvent.click(screen.getByTestId('walk-start'));
+      expect(JSON.parse(localStorage.getItem('concept-map-walk-seen:profile:Main')!)).toEqual(['orthogonality thesis']);
+    });
+
     it('shows no switcher and no "Copy to…" where the hook has no profiles', () => {
       map.profiles = undefined;
       renderPage();
@@ -1588,6 +1616,46 @@ describe('ConceptMapPage', () => {
       await userEvent.type(name, 'Corrigible agents');
       await userEvent.click(screen.getByRole('button', { name: 'Save' }));
       await waitFor(() => expect(screen.getByTestId('idea-notice').textContent).toBe('Saved "Corrigible agents" (renamed from "Corrigibility").'));
+    });
+
+    it('walks through the concepts: Enter starts, arrow right and left move, "Open" and Escape go to the panel and back', async () => {
+      localStorage.clear();
+      renderPage('edit', '/concept-map?view=walk');
+      const shown = () => screen.getByTestId('walk-step').querySelector<HTMLElement>('[data-walk-card]')!;
+      // A topic by Enter: its first concept, and the focus on it
+      const topic = screen.getByTestId('walk-overview').querySelector<HTMLElement>('[data-topic="No topic"]')!;
+      topic.focus();
+      await userEvent.keyboard('{Enter}');
+      expect(shown().dataset.idea).toBe('Orthogonality thesis');
+      expect(document.activeElement).toBe(shown());
+      await userEvent.keyboard('{ArrowRight}');
+      expect(shown().dataset.idea).toBe('Instrumental convergence');
+      // The end of the topic, and back
+      await userEvent.keyboard('{ArrowRight}');
+      expect(within(screen.getByTestId('walk-done')).getByRole('heading').textContent).toBe('Topic done');
+      await userEvent.keyboard('{ArrowLeft}');
+      expect(shown().dataset.idea).toBe('Instrumental convergence');
+
+      // "Open" by Enter: the panel has the focus, and the arrow keys are its own there
+      const open = within(screen.getByTestId('walk-step')).getByRole('button', { name: 'Open' });
+      open.focus();
+      await userEvent.keyboard('{Enter}');
+      expect(panelOf('Instrumental convergence')).toBeTruthy();
+      expect(document.activeElement).toBe(screen.getByTestId('idea-panel'));
+      await userEvent.keyboard('{ArrowLeft}');
+      expect(shown().dataset.idea).toBe('Instrumental convergence');
+      // Escape closes the panel; the focus is back on the concept of the walk
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByTestId('idea-panel')).toBeNull();
+      expect(document.activeElement).toBe(within(screen.getByTestId('walk-step')).getByRole('button', { name: 'Open' }));
+      await userEvent.keyboard('{ArrowLeft}');
+      expect(shown().dataset.idea).toBe('Orthogonality thesis');
+
+      // "/" goes to the search box, where the arrow keys do not walk
+      await userEvent.keyboard('/');
+      expect(document.activeElement).toBe(find());
+      await userEvent.keyboard('{ArrowRight}');
+      expect(shown().dataset.idea).toBe('Orthogonality thesis');
     });
   });
 });

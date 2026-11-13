@@ -21,6 +21,7 @@ import { IdeaMapDrawing } from './IdeaMapDrawing';
 import { IdeaOrderView } from './IdeaOrderView';
 import { IdeaPanel } from './IdeaPanel';
 import { IdeaTableView } from './IdeaTableView';
+import { IdeaWalkView } from './IdeaWalkView';
 import { ProfileSwitcher } from './ProfileSwitcher';
 import { QuestionForm } from './QuestionForm';
 import { SelectionBar } from './SelectionBar';
@@ -31,6 +32,7 @@ const VIEWS = [
   { id: 'map', label: 'Map' },
   { id: 'order', label: 'Order' },
   { id: 'table', label: 'Table' },
+  { id: 'walk', label: 'Walk through' },
 ] as const;
 type ViewId = (typeof VIEWS)[number]['id'];
 
@@ -51,7 +53,8 @@ type FocusTarget = { to: 'panel' } | { to: 'idea'; key: string } | { to: 'find' 
 /**
  * The creator's concept map of the Context Accelerator (/concept-map): the
  * idea files of `Lens Edu/Context Accelerator LOs/` as a graph, read live,
- * in three views with a side panel; links that can edit also add, edit,
+ * in four views (the map, the steps, a table, and a walk through it one
+ * concept at a time) with a side panel; links that can edit also add, edit,
  * rename and delete ideas and add, edit and delete their questions from it,
  * and select several ideas to delete (or, where the hook has profiles, copy
  * into another profile) together.
@@ -454,6 +457,9 @@ function ConceptMap({ folder, onFolder, view, onView }: {
             <IdeaMapDrawing {...views} />
           ) : view === 'order' ? (
             <IdeaOrderView {...views} />
+          ) : view === 'walk' ? (
+            // What was seen is remembered per set of concepts: a profile where there are profiles, else the folder
+            <IdeaWalkView {...views} seenSet={profile === undefined ? `folder:${folder}` : `profile:${profile}`} />
           ) : (
             <IdeaTableView {...views} />
           )}
