@@ -677,6 +677,57 @@ source.
 --content <checkout of lens-edu-relay>` reads the live site and reports what
 it would do; `--apply` changes the copy. It cannot write to a relay.
 
+## Atlas course sync
+
+The lens-editor server keeps a course in Lens Edu a read-only copy of the AI
+Safety Atlas's Google Docs, one module per chapter and one lens and article
+per section (`lens-editor/server/source-sync/atlas/`; how it works is in the
+headers of `types.ts` and `sync.ts`). The hand-curated Atlas course is a
+different course; the sync does not touch it.
+
+**Turn it on.** Put the course on one line in `/root/lens-relay/.env`, as
+`ATLAS_SYNC_COURSES='[ ... ]'`, a JSON list with one entry per course; the
+real course is `lens-editor/scripts/atlas-sync.config.example.json`. Each
+Doc must be shared "anyone with the link can view", or with the service
+account of `GOOGLE_SERVICE_ACCOUNT_JSON`. Recreate the container
+(`docker compose -f docker-compose.prod.yaml up -d lens-editor`). A
+configuration with a mistake logs `[atlas-sync] not started:` and every
+problem, and leaves only this sync off. A change to the configuration
+(credits, folder, prefixes) reaches the files at the next run.
+
+**Turn it off.** Empty `ATLAS_SYNC_COURSES` and recreate the container. The
+files stay as the last run left them.
+
+**The log.** `docker logs lens-editor 2>&1 | grep atlas-sync`. A run prints
+one line, `<course> at <revision>: ...`, then one line per warning. What may
+need a person:
+
+- *`N lens(es) are gone from the Docs for over an hour ... retired none`.*
+  The sync retires at most 3 lenses at once, and never a whole chapter, by
+  itself. If the Docs lost the text by mistake, put it back. If the loss is
+  right, set `ATLAS_SYNC_APPROVE_RETIREMENT=<the value in the message>` in
+  `.env`, recreate the container, and empty the variable again after the
+  run. The value names those lenses, so it stands while the Docs change
+  elsewhere, and approves no other lenses.
+- *`<Doc link> was left out of this run`.* The Doc could not be read (not
+  shared, deleted, network), its TITLE does not read `Chapter <N> -
+  <Title>`, or an image of it failed to download. Its files stay as they
+  are and nothing of it is retired. While the Docs stay as they were, the
+  next runs log `still blocked` and look again in full once an hour.
+- *`failed: ...`.* Nothing was changed; the message says what to do (a lens
+  that a module lists is missing, two lenses share an id, a course file the
+  sync did not write, or a course file that was moved: set
+  `ATLAS_SYNC_COURSES` to its new path). A file that changed during the run
+  needs nothing: the next run plans again.
+
+**Run it again without a change in the Docs** (after a fix to the converter
+is deployed): increase `ATLAS_SYNC_RULES` in `atlas/sync.ts`, or delete the
+`sync_rules:` line of the course file in the editor.
+
+**Try it on a copy.** `cd lens-editor && npx tsx scripts/atlas-sync.ts`
+prints its options. It reads a saved copy of the Docs and writes only to a
+directory on disk.
+
 ## Lens Editor Production Promotion
 
 The Lens Editor promotion feature compares the relay-owned staging repository

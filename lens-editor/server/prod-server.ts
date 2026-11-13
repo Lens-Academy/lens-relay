@@ -5,7 +5,7 @@ import { getRequestListener } from '@hono/node-server';
 import { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest } from './relay-proxy-auth.ts';
 import { initDiscordGateway } from './discord/routes.ts';
 import { createApp } from './app.ts';
-import { startIliadSyncFromEnv, startSourceSyncFromEnv } from './source-sync/index.ts';
+import { startAtlasSyncFromEnv, startIliadSyncFromEnv, startSourceSyncFromEnv } from './source-sync/index.ts';
 
 const relayUrl = process.env.RELAY_URL || 'http://relay-server:8080';
 const relayServerToken = process.env.RELAY_SERVER_TOKEN;
@@ -117,4 +117,5 @@ server.listen(port, () => {
   // Keep Relay copies of externally edited sources current (off unless configured)
   startSourceSyncFromEnv();
   startIliadSyncFromEnv();
+  startAtlasSyncFromEnv();
 });

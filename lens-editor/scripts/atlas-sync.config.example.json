@@ -1,0 +1,162 @@
+{
+  "course": "Lens Edu/courses/in-development/AI Safety Atlas (Google Docs).md",
+  "slug": "ai-safety-atlas-v1",
+  "title": "AI Safety Atlas",
+  "folder": "AI Safety Atlas (Google Docs)",
+  "filePrefix": "Atlas",
+  "moduleSlugPrefix": "atlas-",
+  "siteUrl": "https://ai-safety-atlas.com/chapters/v1",
+  "authors": [
+    "Markov Grey",
+    "Charbel-Raphaël Segerie"
+  ],
+  "chapters": [
+    {
+      "doc": "https://docs.google.com/document/d/1hWdq25Nw17538nk5aNG1_a8PxfNUhFKfaa9r0H6fRP4/edit?tab=t.0",
+      "authors": [
+        "Markov Grey",
+        "Charbel-Raphaël Segerie"
+      ],
+      "acknowledgements": [
+        "Jeanne Salle",
+        "Charles Martinet",
+        "Vincent Corruble",
+        "Diego Dorn",
+        "Josh Thorsteinson",
+        "Jonathan Claybrough",
+        "Alejandro Acelas",
+        "Jamie Raldua Veuthey",
+        "Alexandre Variengien",
+        "Léo Dana",
+        "Angélina Gentaz",
+        "Nicolas Guillard",
+        "Leo Karoubi"
+      ]
+    },
+    {
+      "doc": "https://docs.google.com/document/d/1TzouUrIM5SaJ0UJVXzk2SjDHPYaS7ue4tEy-9pHOVj4/edit?tab=t.0",
+      "authors": [
+        "Markov Grey",
+        "Charbel-Raphaël Segerie"
+      ],
+      "acknowledgements": [
+        "Jeanne Salle",
+        "Charles Martinet",
+        "Vincent Corruble",
+        "Sebastian Gil",
+        "Alejandro Acelas",
+        "Evander Hammer",
+        "Mo Munem",
+        "Mateo Rendon",
+        "Kieron Kretschmar",
+        "Camille Berger"
+      ]
+    },
+    {
+      "doc": "https://docs.google.com/document/d/1vWbtZ4_nXwlGHWHPzvBYG5-__kNfkq5t3-b-pmDd1KI/edit?tab=t.2iafmf6rj9gc",
+      "authors": [
+        "Markov Grey",
+        "Charbel-Raphaël Segerie"
+      ],
+      "acknowledgements": [
+        "Alexandre Variengien",
+        "Jeanne Salle",
+        "Charles Martinet",
+        "Amaury Lorin",
+        "Alejandro Acelas",
+        "Evander Hammer",
+        "Jessica Wen",
+        "Angélina Gentaz",
+        "Jonathan Claybrough",
+        "Camille Berger",
+        "Josh Thorsteinson",
+        "Pauliina Laine"
+      ]
+    },
+    {
+      "doc": "https://docs.google.com/document/d/16Dk4IRy1NoMSB5K_dKqR8XnwJ2PjX1LofoPGX_35o0k/edit?tab=t.0",
+      "authors": [
+        "Charles Martinet",
+        "Markov Grey",
+        "Su Cizem",
+        "Charbel-Raphaël Segerie"
+      ],
+      "acknowledgements": [
+        "Léo Karoubi",
+        "Ines Belhadj"
+      ]
+    },
+    {
+      "doc": "https://docs.google.com/document/d/165SypJtK-9S3Plot19EViZhjeRptivJELuWvUglQXa0/edit?tab=t.0",
+      "authors": [
+        "Markov Grey",
+        "Charbel-Raphaël Segerie"
+      ],
+      "acknowledgements": [
+        "Maxime Riché",
+        "Martin",
+        "Fabien Roger",
+        "Jeanne Salle",
+        "Camille Berger",
+        "Leo Karoubi"
+      ]
+    },
+    {
+      "doc": "https://docs.google.com/document/d/1xek7xTWiNI4UWQOPmHBeMgmuRkCx6Yamd-a_5tzrxKg/edit?tab=t.0",
+      "authors": [
+        "Markov Grey",
+        "Charbel-Raphaël Segerie"
+      ],
+      "acknowledgements": [
+        "Jeanne Salle",
+        "Oscar Heitmann",
+        "Ram Rachum",
+        "Nicolas Guillard",
+        "Camille Berger"
+      ]
+    },
+    {
+      "doc": "https://docs.google.com/document/d/11YpIAKCHaB0yxYVBEkGEdmaC2haxlNRB2ua-dQflO8Y/edit?tab=t.0",
+      "authors": [
+        "Markov Grey"
+      ],
+      "acknowledgements": [
+        "Charbel-Raphael Segerie",
+        "Emanuele Ascani",
+        "Jeanne Salle",
+        "Oscar Heitmann",
+        "Camille Berger",
+        "Josh Thorsteinson",
+        "Nicolas Guillard"
+      ]
+    },
+    {
+      "doc": "https://docs.google.com/document/d/1Z5YL7x65G06oy-cUT-h_kTFYlAB7wF4xooXijATbIf0/edit?tab=t.0",
+      "authors": [
+        "Markov Grey",
+        "Charbel-Raphaël Segerie"
+      ],
+      "acknowledgements": [
+        "Jeanne Salle",
+        "Chris Gerrby",
+        "Sebastian Gil",
+        "Josh Thorsteinson",
+        "Nicolas Guillard",
+        "Mateusz Bagiński",
+        "Yoann Poupart",
+        "Clément Dumas",
+        "Amaury Lorin",
+        "Mateo Rendon",
+        "Lucas Eichorn",
+        "Bogdan Ionut Cirstea",
+        "Gurvan R."
+      ]
+    }
+  ],
+  "courseFields": {
+    "partner-name": "AI Safety Atlas",
+    "partner-logo": "ai-safety-atlas-lockup.svg",
+    "partner-logo-small": "ai-safety-atlas.svg",
+    "partner-url": "https://ai-safety-atlas.com/"
+  }
+}
