@@ -2,8 +2,8 @@
  * The concept map of the Context Accelerator (pure logic, no React)
  *
  * `Lens Edu/Context Accelerator LOs/` holds one Markdown file per idea: the
- * file name is the idea's name, the frontmatter its `id`, `priority` and
- * `courses`, the first paragraph its outcome, and `## Requires`,
+ * file name is the idea's name, the frontmatter its `id`, `priority`, `topic`
+ * (optional) and `courses`, the first paragraph its outcome, and `## Requires`,
  * `## Helpful first`, `## Why it matters`, `## Learn` and `## Questions` the
  * rest (all optional, matched in any case). The format is shared with the
  * Lens platform, which shows the same ideas to learners: do not change it
@@ -525,7 +525,15 @@ function problemsOf(
   return problems;
 }
 
-export type IdeaSortColumn = 'name' | 'priority' | 'step' | 'requires' | 'neededFor' | 'lenses' | 'questions' | 'problems';
+export type IdeaSortColumn = 'name' | 'priority' | 'topic' | 'step' | 'requires' | 'neededFor' | 'lenses' | 'questions' | 'problems';
+
+/** By topic name; ideas without a topic come last, whichever way the column is sorted. */
+function byTopic(a: IdeaNode, b: IdeaNode, sign: number): number {
+  const one = a.idea?.topic ?? '';
+  const other = b.idea?.topic ?? '';
+  if (!one || !other) return one ? -1 : other ? 1 : 0;
+  return sign * one.localeCompare(other, undefined, { sensitivity: 'base', numeric: true });
+}
 
 /** The rows of the table, sorted by a column (ties by name). A new list. */
 export function sortIdeas(nodes: readonly IdeaNode[], column: IdeaSortColumn, descending = false): IdeaNode[] {
@@ -544,6 +552,7 @@ export function sortIdeas(nodes: readonly IdeaNode[], column: IdeaSortColumn, de
   const sign = descending ? -1 : 1;
   return [...nodes].sort((a, b) => {
     if (column === 'name') return sign * byName(a, b);
+    if (column === 'topic') return byTopic(a, b, sign) || byName(a, b);
     return sign * (value(a) - value(b)) || byName(a, b);
   });
 }
@@ -601,6 +610,8 @@ export function mapColumns(graph: IdeaGraph): string[][] {
 export interface NewIdea {
   id: string;
   priority: Priority;
+  /** The author's own group for the idea, one line; none when left out or empty. */
+  topic?: string;
   outcome: string;
   why: string;
   /** Names of the ideas that must come first. */
@@ -621,12 +632,36 @@ const cleanCourses = (courses: readonly string[]) =>
   courses.map((course) => course.trim().replace(/^\[\[/, '').replace(/\]\]$/, '').trim()).filter(Boolean);
 const courseLines = (courses: readonly string[]) => ['courses:', ...courses.map((course) => `  - "[[${course}]]"`)];
 
+/** The longest topic the forms take: it is a label on the map, not a sentence. */
+export const MAX_TOPIC = 80;
+
+/** A topic as it is written: one line, single spaces, none around it. */
+const cleanTopic = (topic: string | null | undefined) => (topic ?? '').replace(/\s+/g, ' ').trim();
+
+/** Words YAML reads as something other than text (in any case). */
+const YAML_WORDS = /^(?:true|false|yes|no|on|off|y|n|null)$/i;
+
+/**
+ * A topic as a YAML value that reads back as the same text. Written plain
+ * only when it plainly is text: it starts with a letter and has nothing in
+ * it that YAML gives a meaning (`: `, ` #`, a colon at the end, a word like
+ * `true`). Everything else (a number, `- dash`, `[x]`, a quote at the start)
+ * goes in double quotes, escaped as JSON does, which YAML reads the same way.
+ */
+function yamlText(value: string): string {
+  const plain = /^\p{L}/u.test(value) && !/:(?:\s|$)|\s#/.test(value) && !YAML_WORDS.test(value)
+    // eslint-disable-next-line no-control-regex
+    && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029\ufeff]/.test(value) && value === value.trim();
+  return plain ? value : JSON.stringify(value);
+}
+const topicLines = (topic: string) => (topic ? [`topic: ${yamlText(topic)}`] : []);
+
 /** The text of a new idea file, with an empty `## Questions`. */
-export function renderIdeaFile({ id, priority, outcome, why, requires, helpful, courses, learn }: NewIdea): string {
+export function renderIdeaFile({ id, priority, topic, outcome, why, requires, helpful, courses, learn }: NewIdea): string {
   const whyText = oneParagraph(why);
   const learnText = cleanValue(learn);
   const courseList = cleanCourses(courses ?? [IDEA_COURSE_LINK]);
-  const front = [`id: ${id}`, `priority: ${priority}`, ...(courseList.length > 0 ? courseLines(courseList) : [])];
+  const front = [`id: ${id}`, `priority: ${priority}`, ...topicLines(cleanTopic(topic)), ...(courseList.length > 0 ? courseLines(courseList) : [])];
   return [
     `---\n${front.join('\n')}\n---\n${oneParagraph(outcome)}\n`,
     `## Requires\n${linkLines(requires)}`,
@@ -1430,6 +1465,8 @@ export function questionDeleteChanges(text: string, index: number, before: IdeaQ
 export interface IdeaEdit {
   name: string;
   priority: Priority;
+  /** The frontmatter `topic`: the author's own group for the idea; '' for none. */
+  topic: string;
   /** Link targets of the frontmatter `courses`. */
   courses: string[];
   outcome: string;
@@ -1458,6 +1495,7 @@ export function ideaAsEdit(name: string, idea: ParsedIdea, dependents?: Dependen
   return {
     name,
     priority: idea.priority,
+    topic: idea.topic,
     courses: [...idea.courses],
     outcome: idea.outcome,
     why: idea.why,
@@ -1471,12 +1509,14 @@ export function ideaAsEdit(name: string, idea: ParsedIdea, dependents?: Dependen
 
 /** Why these values cannot be written to an idea file, or null (the name has
  *  its own check, `ideaNameProblem`). */
-export function ideaEditProblem(edit: Partial<Pick<IdeaEdit, 'courses' | 'outcome' | 'why' | 'learn'>>): string | null {
+export function ideaEditProblem(edit: Partial<Pick<IdeaEdit, 'topic' | 'courses' | 'outcome' | 'why' | 'learn'>>): string | null {
   const texts = [['The outcome', edit.outcome], ['Why it matters', edit.why], ['Learn', edit.learn]] as const;
   for (const [label, value] of texts) {
     if (/^#{1,2}(?!#)/m.test(cleanValue(value))) return `${label} cannot have a line that starts with # or ##: that starts a new part of the file.`;
   }
   if (cleanCourses(edit.courses ?? []).some((course) => /["[\]|\n]/.test(course))) return 'A course link cannot contain " [ ] or |.';
+  // A line break in a topic is no problem: it is written as a space
+  if (cleanTopic(edit.topic).length > MAX_TOPIC) return `A topic can have at most ${MAX_TOPIC} characters.`;
   return null;
 }
 
@@ -1486,7 +1526,8 @@ const sameIdeas = (a: readonly string[], b: readonly string[]) => sameList(a.map
 /**
  * The changes that make `text` (an idea file as stored) say what the form
  * says (`after`), given what the form was opened with (`before`). Only the
- * parts the user changed are written: the frontmatter `priority` and
+ * parts the user changed are written: the frontmatter `priority`, `topic`
+ * (its line is added after `priority`, and removed when emptied) and
  * `courses`, the outcome paragraph, the text under `## Why it matters` and
  * `## Learn`, and the link lines of `## Requires` and `## Helpful first` (as
  * `requirementChanges` does). A part that was not there is added in the
@@ -1504,13 +1545,15 @@ export function ideaEditChanges(text: string, before: IdeaEdit, after: IdeaEdit)
   const { lines, frontmatterEnd, firstHeading } = scan;
   const live = ideaAsEdit('', parseIdea(text));
   if (
-    live.priority !== before.priority || !sameList(live.courses, before.courses) || live.outcome !== before.outcome
+    live.priority !== before.priority || live.topic !== cleanTopic(before.topic)
+    || !sameList(live.courses, before.courses) || live.outcome !== before.outcome
     || live.why !== before.why || live.learn !== before.learn
     || !sameIdeas(live.requires, before.requires) || !sameIdeas(live.helpful, before.helpful)
   ) return { error: IDEA_MOVED_ERROR };
 
   const want = {
     priority: after.priority,
+    topic: cleanTopic(after.topic),
     courses: cleanCourses(after.courses),
     outcome: cleanValue(after.outcome),
     why: cleanValue(after.why),
@@ -1518,6 +1561,7 @@ export function ideaEditChanges(text: string, before: IdeaEdit, after: IdeaEdit)
   };
   const changed = {
     priority: want.priority !== live.priority,
+    topic: want.topic !== live.topic,
     courses: !sameList(want.courses, live.courses),
     outcome: want.outcome !== cleanValue(live.outcome),
     why: want.why !== cleanValue(live.why),
@@ -1525,6 +1569,7 @@ export function ideaEditChanges(text: string, before: IdeaEdit, after: IdeaEdit)
     picks: !sameIdeas(after.requires, live.requires) || !sameIdeas(after.helpful, live.helpful),
   };
   const problem = ideaEditProblem({
+    ...(changed.topic ? { topic: want.topic } : {}),
     ...(changed.courses ? { courses: want.courses } : {}),
     ...(changed.outcome ? { outcome: want.outcome } : {}),
     ...(changed.why ? { why: want.why } : {}),
@@ -1549,6 +1594,11 @@ export function ideaEditChanges(text: string, before: IdeaEdit, after: IdeaEdit)
   const frontChanges: Array<{ key: string; newLines: string[]; at: () => number }> = [];
   if (changed.priority) {
     frontChanges.push({ key: 'priority', newLines: [`priority: ${want.priority}`], at: () => (keyLines('id')?.last ?? front[0]).to });
+  }
+  if (changed.topic) {
+    // After the priority (the one this edit adds stands at the same place, before it)
+    const at = () => (keyLines('priority')?.last ?? keyLines('id')?.last)?.to ?? front[front.length - 1].from;
+    frontChanges.push({ key: 'topic', newLines: topicLines(want.topic), at });
   }
   if (changed.courses) {
     frontChanges.push({ key: 'courses', newLines: want.courses.length > 0 ? courseLines(want.courses) : [], at: () => front[front.length - 1].from });
@@ -1627,7 +1677,7 @@ export function ideaEditChanges(text: string, before: IdeaEdit, after: IdeaEdit)
   const result = ideaAsEdit('', parseIdea(applyChanges(text, merged)));
   const keySet = (names: readonly string[]) => [...new Set(names.map(ideaKey))].sort();
   const required = new Set(after.requires.map(ideaKey));
-  const reads = result.priority === want.priority && sameList(result.courses, want.courses)
+  const reads = result.priority === want.priority && result.topic === want.topic && sameList(result.courses, want.courses)
     && cleanValue(result.outcome) === want.outcome && cleanValue(result.why) === want.why && cleanValue(result.learn) === want.learn
     && sameList(keySet(result.requires), keySet(after.requires))
     && sameList(keySet(result.helpful), keySet(after.helpful.filter((name) => !required.has(ideaKey(name)))));

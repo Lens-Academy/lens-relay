@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  IDEA_COURSE_LINK,
   IDEA_MOVED_ERROR,
   PENDING_QUESTIONS_ERROR,
   PENDING_QUESTION_ERROR,
@@ -155,6 +156,18 @@ describe('parseIdea', () => {
     expect(parsed.questions).toBe(2);
     expect(parsed.bareQuestions).toBe(0);
     expect(parsed.warnings).toEqual([]);
+  });
+
+  it('reads the topic as one line of text, quoted or not; none is the empty text', () => {
+    const withTopic = (line: string) => parseIdea(FM.replace('priority: medium\n', `priority: medium\n${line}\n`) + 'Outcome.\n');
+    expect(parseIdea(INSTRUMENTAL).topic).toBe('');
+    expect(withTopic('topic: Governance and policy')).toMatchObject({ topic: 'Governance and policy', priority: 'medium', outcome: 'Outcome.', warnings: [] });
+    expect(withTopic('topic: "AI: risk"').topic).toBe('AI: risk');
+    expect(withTopic("topic: 'it''s'").topic).toBe("it's");
+    expect(withTopic('topic: 2026').topic).toBe('2026');
+    expect(withTopic('topic:').topic).toBe('');
+    expect(withTopic('topic: [a, b]').topic).toBe('');
+    expect(withTopic('topic: true').topic).toBe('');
   });
 
   it('keeps the Learn lines as written, with each link and its shown words', () => {
@@ -393,6 +406,24 @@ Otherwise the sky stays a mystery.
     const text = renderIdeaFile({ id: 'x', priority: 'high', outcome: 'One.\n## Two', why: 'A.\n\nB.', requires: [], helpful: [] });
     expect(text).toContain('\nOne. ## Two\n');
     expect(text).toContain('## Why it matters\nA. B.\n');
+  });
+
+  it('writes the topic after the priority, and no line for none', () => {
+    const base = { id: 'x', priority: 'medium' as const, outcome: 'Do it.', why: '', requires: [], helpful: [], courses: [] };
+    expect(renderIdeaFile({ ...base, topic: ' Governance  and\npolicy ' })).toMatch(/^---\nid: x\npriority: medium\ntopic: Governance and policy\n---\n/);
+    expect(renderIdeaFile({ ...base, topic: '  ' })).toMatch(/^---\nid: x\npriority: medium\n---\n/);
+    expect(renderIdeaFile(base)).not.toContain('topic');
+    expect(renderIdeaFile({ ...base, topic: 'AI: risk' })).toContain('\ntopic: "AI: risk"\n');
+    expect(renderIdeaFile({ ...base, topic: 'C# and more' })).toContain('\ntopic: C# and more\n');
+  });
+
+  it.each([
+    'Governance and policy', 'AI: risk', '"quoted"', 'C# and more', '- dash', '123', '1.5', '2026-01-02', 'true', 'No', 'null', '~', '[x]', '{a: b}',
+    "it's", "'single'", 'a #b', 'ends with:', 'back\\slash "and" quote', '#tag', '@at', '`tick', '%percent', '&and', '*star', '!bang', '|pipe', '>fold',
+    '? what', 'Überblick', '日本語', 'a, b', 'a - b', '0x1F', '.inf', 'key: value: more',
+  ])('writes the topic %j so that it is read back the same', (topic) => {
+    const input = { id: '9f1c2a8e-0b1d-4c3e-8f5a-6b7c8d9e0f1a', priority: 'high' as const, topic, outcome: 'Do it.', why: '', requires: [], helpful: [] };
+    expect(parseIdea(renderIdeaFile(input))).toMatchObject({ id: input.id, priority: 'high', topic, outcome: 'Do it.', courses: [IDEA_COURSE_LINK], warnings: [] });
   });
 
   it('is read back as written', () => {
@@ -729,6 +760,19 @@ describe('sortIdeas', () => {
 
   it('sorts by priority: high first', () => {
     expect(names('priority')).toEqual(['Alpha', 'Gamma', 'Beta']);
+  });
+
+  it('sorts by topic, then by name; ideas without a topic come last either way', () => {
+    const topic = (text: string, name: string) => text.replace('priority: medium\n', `priority: medium\ntopic: ${name}\n`);
+    const graph = buildIdeaGraph(files({
+      Delta: idea(),
+      Beta: topic(idea(), 'Risk'),
+      Alpha: topic(idea(['Missing']), 'governance'),
+      Gamma: topic(idea(), 'Risk'),
+    }));
+    const sorted = (descending = false) => sortIdeas(graph.nodes, 'topic', descending).map((n) => n.name);
+    expect(sorted()).toEqual(['Alpha', 'Beta', 'Gamma', 'Delta', 'Missing']);
+    expect(sorted(true)).toEqual(['Beta', 'Gamma', 'Alpha', 'Delta', 'Missing']);
   });
 
   it('sorts by counts, ties by name', () => {
@@ -1393,6 +1437,7 @@ describe('ideaAsEdit', () => {
     expect(ideaAsEdit('Instrumental convergence', parseIdea(INSTRUMENTAL))).toEqual({
       name: 'Instrumental convergence',
       priority: 'high',
+      topic: '',
       courses: ['../courses/in-development/Context Accelerator'],
       outcome: 'Explain why agents with very different final goals would pursue the same sub-goals.',
       why: parseIdea(INSTRUMENTAL).why,
@@ -1403,6 +1448,10 @@ describe('ideaAsEdit', () => {
       helpfulFor: [],
     });
     expect(parseIdea(INSTRUMENTAL).learnText).toMatch(/^- Start with \[\[/);
+  });
+
+  it('holds the topic of the file', () => {
+    expect(ideaAsEdit('X', parseIdea(`${FM.replace('---\n', '---\ntopic: "AI: risk"\n')}O.\n`)).topic).toBe('AI: risk');
   });
 
   it('takes what the idea is needed and helpful for from the map: no file of its own says it', () => {
@@ -1426,6 +1475,12 @@ describe('ideaEditProblem', () => {
     expect(ideaEditProblem({ learn: '- a\n##b' })).toMatch(/^Learn cannot/);
     expect(ideaEditProblem({ courses: ['A "quoted" course'] })).toBe('A course link cannot contain " [ ] or |.');
     expect(ideaEditProblem({ courses: ['A|B'] })).toBe('A course link cannot contain " [ ] or |.');
+  });
+
+  it('takes a topic of up to 80 characters; line breaks and spaces around it do not count', () => {
+    expect(ideaEditProblem({ topic: 'Governance and policy' })).toBeNull();
+    expect(ideaEditProblem({ topic: `  ${'x'.repeat(40)}\n${'y'.repeat(39)}  ` })).toBeNull();
+    expect(ideaEditProblem({ topic: 'x'.repeat(81) })).toBe('A topic can have at most 80 characters.');
   });
 });
 
@@ -1483,6 +1538,71 @@ describe('ideaEditChanges', () => {
     expect(saved(FILE.replace('priority: high\n', ''), { priority: 'low' })).toBe(FILE.replace('priority: high', 'priority: low'));
     expect(saved('---\ntags: [a]\n---\nOutcome.\n', { priority: 'high' })).toBe('---\npriority: high\ntags: [a]\n---\nOutcome.\n');
     expect(saved('Outcome.\n', { priority: 'high' })).toBe('---\npriority: high\n---\nOutcome.\n');
+  });
+
+  describe('the topic', () => {
+    const TOPIC = FILE.replace('priority: high\n', 'priority: high\ntopic: Risk arguments\n');
+
+    it('adds the line after the priority, the rest byte for byte', () => {
+      expect(edit(FILE, { topic: 'Risk arguments' })).toEqual({ changes: [{ from: FILE.indexOf('courses:'), to: FILE.indexOf('courses:'), insert: 'topic: Risk arguments\n' }] });
+      expect(saved(FILE, { topic: ' Risk\n arguments ' })).toBe(TOPIC);
+      expect(saved(FILE.replace(/\n/g, '\r\n'), { topic: 'Risk arguments' })).toBe(FILE.replace(/\n/g, '\r\n').replace('priority: high\r\n', 'priority: high\r\ntopic: Risk arguments\n'));
+    });
+
+    it('adds it after the id without a priority, at the end of the frontmatter without both, and with a frontmatter when there is none', () => {
+      expect(saved(FILE.replace('priority: high\n', ''), { topic: 'Risk' })).toBe(FILE.replace('priority: high\n', 'topic: Risk\n'));
+      expect(saved('---\ntags: [a]\n---\nOutcome.\n', { topic: 'Risk' })).toBe('---\ntags: [a]\ntopic: Risk\n---\nOutcome.\n');
+      expect(saved('Outcome.\n', { topic: 'Risk' })).toBe('---\ntopic: Risk\n---\nOutcome.\n');
+      // With a priority added by the same save: after it
+      expect(saved(FILE.replace('priority: high\n', ''), { priority: 'low', topic: 'Risk' })).toBe(FILE.replace('priority: high\n', 'priority: low\ntopic: Risk\n'));
+      expect(saved('Outcome.\n', { priority: 'high', topic: 'Risk' })).toBe('---\npriority: high\ntopic: Risk\n---\nOutcome.\n');
+    });
+
+    it('replaces the line only, wherever it stands and however it was written', () => {
+      const at = TOPIC.indexOf('topic:');
+      expect(edit(TOPIC, { topic: 'Control' })).toEqual({ changes: [{ from: at, to: at + 'topic: Risk arguments'.length, insert: 'topic: Control' }] });
+      const last = FILE.replace('tags: [a, b]\n', 'tags: [a, b]\ntopic:   "Risk: arguments"  \n');
+      expect(parseIdea(last).topic).toBe('Risk: arguments');
+      expect(saved(last, { topic: 'Control' })).toBe(FILE.replace('tags: [a, b]\n', 'tags: [a, b]\ntopic: Control\n'));
+      const folded = FILE.replace('priority: high\n', 'priority: high\ntopic: >-\n  Risk\n  arguments\n');
+      expect(parseIdea(folded).topic).toBe('Risk arguments');
+      expect(saved(folded, { topic: 'Control' })).toBe(FILE.replace('priority: high\n', 'priority: high\ntopic: Control\n'));
+    });
+
+    it('takes the line out when the topic is emptied', () => {
+      expect(saved(TOPIC, { topic: '' })).toBe(FILE);
+      expect(saved(TOPIC, { topic: ' \n ' })).toBe(FILE);
+    });
+
+    it('quotes what YAML would read as something else, and reads it back', () => {
+      for (const topic of ['AI: risk', '"quoted"', 'C# and more', '- dash', '123', 'true', '[x]', "it's", 'a #b']) {
+        const text = saved(FILE, { topic });
+        expect(parseIdea(text).topic).toBe(topic);
+        // One line more, nothing else
+        const line = text.split('\n')[3];
+        expect(line).toMatch(/^topic: /);
+        expect(text.replace(`${line}\n`, '')).toBe(FILE);
+      }
+      expect(saved(FILE, { topic: 'AI: risk' })).toContain('\ntopic: "AI: risk"\n');
+    });
+
+    it('changes it together with other parts, each in its place', () => {
+      expect(saved(TOPIC, { topic: 'Control', priority: 'low', outcome: 'New.' }))
+        .toBe(TOPIC.replace('priority: high\ntopic: Risk arguments', 'priority: low\ntopic: Control').replace('Explain why it seeks power.', 'New.'));
+    });
+
+    it('writes nothing when the topic is as it was, or the file says another one than the form opened with', () => {
+      expect(edit(TOPIC, { topic: ' Risk  arguments ' })).toEqual({ changes: [] });
+      expect(edit(TOPIC.replace('Risk arguments', 'Control'), { topic: 'Governance' }, TOPIC)).toEqual({ error: IDEA_MOVED_ERROR });
+      expect(edit(TOPIC, { topic: 'Governance' }, FILE)).toEqual({ error: IDEA_MOVED_ERROR });
+    });
+
+    it('refuses a topic that is too long, and a topic line with a pending suggestion', () => {
+      expect(edit(FILE, { topic: 'x'.repeat(81) })).toEqual({ error: 'A topic can have at most 80 characters.' });
+      const pending = TOPIC.replace('topic: Risk arguments', 'topic: Risk arguments{++ and more++}');
+      const result = edit(pending, { topic: 'Control' });
+      expect('error' in result && result.error).toMatch(/^The frontmatter of this file has a pending suggestion/);
+    });
   });
 
   it('rewrites the course list only, whatever way it was written', () => {
@@ -1602,7 +1722,7 @@ describe('ideaEditChanges', () => {
   });
 
   it('gives a file that reads back as the form was saved', () => {
-    const after: IdeaEdit = { name: 'Power', priority: 'low', courses: ['../courses/A', '../courses/B'], outcome: 'O.\nP.', why: 'W.', learn: '- [[../Lenses/L]]: l', requires: ['A', 'B'], helpful: ['C'], neededFor: [], helpfulFor: [] };
+    const after: IdeaEdit = { name: 'Power', priority: 'low', topic: 'Risk: the argument', courses: ['../courses/A', '../courses/B'], outcome: 'O.\nP.', why: 'W.', learn: '- [[../Lenses/L]]: l', requires: ['A', 'B'], helpful: ['C'], neededFor: [], helpfulFor: [] };
     for (const text of [FILE, '', 'Outcome.\n', '---\nid: x\n---\n\n## Questions\n#### Question: Open\ncontent:: Q?\n']) {
       const result = ideaEditChanges(text, opened(text), after);
       if ('error' in result) throw new Error(result.error);
