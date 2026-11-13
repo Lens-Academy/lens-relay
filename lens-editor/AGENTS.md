@@ -169,7 +169,7 @@ file per idea, `## Requires` and `## Helpful first` hold wikilinks to other idea
 exist is an idea "not written yet". Three views (Map, Order, Table) and a side panel; links that can edit also add an
 idea, create a not-written-yet one, change an idea's two requirement lists (only those lines are rewritten) and add a
 question (one typed `#### Question: Open|Choice` segment appended to `## Questions`). They also edit every part of an
-idea ("Edit": name, outcome, priority, courses, why, learn, both lists), rename it, delete it, and edit or delete a
+idea ("Edit": name, outcome, priority, topic, courses, why, learn, both lists), rename it, delete it, and edit or delete a
 question. Rules of every edit: only the part that changed is rewritten and the rest of the file stays byte for byte;
 the save carries what the form was opened with and writes nothing when the file no longer says that; a part that
 holds a pending suggestion or a comment is refused. An emptied section keeps its heading. A rename is the relay's
@@ -199,11 +199,30 @@ several options are right (the platform refuses them without it).
   - Several concepts can be selected (Ctrl/Cmd/Shift-click, or a box per row in the Table) to delete at once
     (`deleteIdeas`, `deletePlan`). `IdeaMap.profiles` is optional (a switcher of separate sets, "Copy to…"): the
     editor's hook provides none, a standalone build can.
-  - The drawing: `src/lib/idea-map-layered.ts` (columns by dagre, square lines on tracks of their own) and
-    `src/lib/idea-map-layouts.ts` (the "Layout" / "Group by" choice: left to right, top to bottom, groups, around
-    one concept), chosen in `MapLayoutSwitch.tsx`, kept per browser by `useMapLayoutChoice.ts`. `mapView.ts` has
-    the view that shows the map whole (below the row of controls, `CONTROL_ROOM`); a map shown whole is fitted
-    again when its frame changes size, one moved or zoomed by hand is left alone.
+  - The drawing: `src/lib/idea-map-layouts.ts` has the "Layout" / "Group by" / "Links" choice and `layoutFor`, which
+    draws the map the chosen way; chosen in `MapLayoutSwitch.tsx`, kept per browser by `useMapLayoutChoice.ts` (only
+    what was chosen by hand: the rest follows the map, `resolveChoice`: a map of more than 60 concepts opens in
+    Groups, and groups are the author's topics as soon as one concept has a topic). The layouts, each with a line in
+    `MAP_LAYOUTS` on what it is good for (shown as the tooltip): Groups (a small layered map per group in a frame),
+    Topic grid (boxes only, links for the concept pointed at), Tree (`idea-map-tree.ts`: every concept under the one
+    it builds on most directly), Organic (`idea-map-organic.ts`: groups as islands, one arrow per strongly linked
+    pair), Left to right / Top to bottom (`idea-map-layered.ts`: columns by dagre, square lines on tracks of their
+    own), Left to right (ELK) and Around one concept. A new layout has to pass the checks every layout passes in
+    `idea-map-layouts.test.ts` (no box on another, the same drawing every time, no line through a box where it
+    promises that).
+  - Topics: the frontmatter `topic:` of a concept file is the author's own group ("Topic (yours)" in Group by, a
+    field in the forms, a column in the Table). "Clusters (computed from the links)" is Louvain on the links; no one
+    chose those. A topic has one colour everywhere (`topicColours` in `ideaLook.ts`): its frame and the left edge of
+    its boxes.
+  - Links (`src/lib/idea-map-links.ts`): "Requires only" leaves Helpful first out; "Hide implied links" leaves out
+    what a chain of Requires says already (the transitive reduction). Pointing at a concept or selecting it lights
+    its whole chain (`chainOf`) and dims the rest. A `quiet` line (between groups, outside the tree, all of the grid)
+    is drawn only while it is part of that chain.
+  - ELK (`src/lib/idea-map-elk.ts`, loaded by `idea-map-elk-load.ts`, the one file that imports the `elkjs`
+    package): made off the page as a promise, in a chunk of its own (1.5 MB) fetched when the layout is first
+    chosen; the page's own left-to-right drawing stands in until it answers or when it cannot be loaded.
+  - `mapView.ts` has the view that shows the map whole (below the row of controls, `CONTROL_ROOM`); a map shown
+    whole is fitted again when its frame changes size, one moved or zoomed by hand is left alone.
   - Keyboard (keep it working when you add a control; `describe('by keyboard')` in `ConceptMapPage.test.tsx`):
     `FindBox.tsx` lists the matches under "Find a concept" (arrows, Enter opens or picks, Escape empties, "/" goes
     to it). `ideaKeys.ts`: arrow keys move the focus between the `[data-key]` elements of a view (`nextBox`); the
