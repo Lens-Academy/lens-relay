@@ -166,7 +166,7 @@ concept and its direct children (backlinkers in `Concepts/` whose parents includ
 
 `/concept-map` (••• menu, "Concept Map") draws the idea files of `Lens Edu/Context Accelerator LOs/` as a graph: one
 file per idea, `## Requires` and `## Helpful first` hold wikilinks to other ideas, a link to a file that does not
-exist is an idea "not written yet". Three views (Map, Order, Table) and a side panel; links that can edit also add an
+exist is an idea "not written yet". Four views (Map, Order, Table, Walk through) and a side panel; links that can edit also add an
 idea, create a not-written-yet one, change an idea's two requirement lists (only those lines are rewritten) and add a
 question (one typed `#### Question: Open|Choice` segment appended to `## Questions`). They also edit every part of an
 idea ("Edit": name, outcome, priority, topic, courses, why, learn, both lists), rename it, delete it, and edit or delete a
@@ -223,6 +223,12 @@ several options are right (the platform refuses them without it).
     chosen; the page's own left-to-right drawing stands in until it answers or when it cannot be loaded.
   - `mapView.ts` has the view that shows the map whole (below the row of controls, `CONTROL_ROOM`); a map shown
     whole is fitted again when its frame changes size, one moved or zoomed by hand is left alone.
+  - Walk through (`IdeaWalkView.tsx`, `WalkOverview.tsx`, `WalkStep.tsx`, orders in `src/lib/idea-map-walk.ts`): the
+    map one concept at a time, against the overwhelm of the whole graph. It opens on the topics in reading order;
+    a step shows one concept with what it builds on (left) and what it leads to (right). Four orders: Foundations
+    first (every concept after what it requires, topic by topic), Topic by topic, Backwards from a goal, Follow my
+    curiosity. Right / Left walk, a click on a neighbour is a detour, what was seen is kept per set of concepts in
+    the browser (`useWalkStore.ts`).
   - Keyboard (keep it working when you add a control; `describe('by keyboard')` in `ConceptMapPage.test.tsx`):
     `FindBox.tsx` lists the matches under "Find a concept" (arrows, Enter opens or picks, Escape empties, "/" goes
     to it). `ideaKeys.ts`: arrow keys move the focus between the `[data-key]` elements of a view (`nextBox`); the
