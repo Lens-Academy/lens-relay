@@ -17,7 +17,9 @@ export interface SelectionCount {
   characters: number;
 }
 
-// Comment threads; a suggestion's metadata; the delimiters
+// Comment threads; a suggestion's metadata; the delimiters. Mirrors the syntax in
+// criticmarkup-parser.ts, but as plain removals: a selection often cuts a
+// suggestion or comment in half, which the parser's whole-range patterns miss.
 const CRITIC_HIDDEN = /\{>>[\s\S]*?<<\}|\{"[^}]*\}@@|\{\+\+|\+\+\}|\{--|--\}|\{~~|~>|~~\}|\{==|==\}/g;
 
 export function countText(raw: string): SelectionCount {

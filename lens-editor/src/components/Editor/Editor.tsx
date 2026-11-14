@@ -499,8 +499,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         readAloud(),
         videoCutCallback.of((line, view) =>
           setCutTarget({ view, field: line.field, anchor: line.sectionFrom, version: 0, opened: Date.now() })),
-        // Only while the cut picker is open: follow its segment and re-render
-        // so its times stay current
+        // Count the selected words and characters for the label at the bottom right
         EditorView.updateListener.of((u) => {
           if (!u.selectionSet && !u.docChanged) return;
           const ranges = u.state.selection.ranges.filter((r) => !r.empty);
@@ -510,6 +509,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           setSelectionCount((prev) =>
             prev?.words === next?.words && prev?.characters === next?.characters ? prev : next);
         }),
+        // Only while the cut picker is open: follow its segment and re-render
+        // so its times stay current
         EditorView.updateListener.of((u) => {
           if (!u.docChanged || !cutOpenRef.current) return;
           setCutTarget((t) => t && { ...t, anchor: u.changes.mapPos(t.anchor, 1), version: t.version + 1 });
@@ -608,6 +609,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
     return () => {
       // The cut picker holds this view: close it with the view
       setCutTarget(null);
+      setSelectionCount(null);
       view.destroy();
       viewRef.current = null;
     };
