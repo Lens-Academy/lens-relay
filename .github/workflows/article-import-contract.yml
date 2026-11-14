@@ -11,7 +11,11 @@ on:
       - "crates/relay/src/mcp/tools/read.rs"
       - "crates/relay/src/mcp/tools/mod.rs"
       - "crates/relay/src/server.rs"
+      - "crates/relay/src/server/link_source.rs"
+      - "crates/relay/src/mcp/tools/source_link_note.rs"
+      - "crates/y-sweet-core/src/external_links.rs"
       - "lens-editor/shared/article-import-*"
+      - "lens-editor/shared/external-link*"
       - "lens-editor/shared/attachment-limits.json"
       - "lens-editor/server/add-article/**"
       - "lens-editor/server/attachments/**"
@@ -48,6 +52,11 @@ jobs:
           server/add-article/queue.test.ts
           server/add-article/pipeline-mode.test.ts
           server/add-article/pipeline-duplicate.test.ts
+          server/add-article/link-classify.test.ts
+          server/add-article/library-index.test.ts
+          server/add-article/queue-link-back.test.ts
+          server/add-article/routes-link-back.test.ts
+          shared/external-links.test.ts
           server/attachments/image-types.test.ts
           server/attachments/public-url.test.ts
           server/attachments/routes.test.ts
@@ -71,6 +80,15 @@ jobs:
       - run: >-
           cargo test --manifest-path crates/Cargo.toml -p relay
           mcp::tools::read::tests
+      - run: >-
+          cargo test --manifest-path crates/Cargo.toml -p y-sweet-core
+          external_links
+      - run: >-
+          cargo test --manifest-path crates/Cargo.toml -p relay
+          server::link_source
+      - run: >-
+          cargo test --manifest-path crates/Cargo.toml -p relay
+          mcp::tools::source_link_note
       - run: >-
           cargo test --manifest-path crates/Cargo.toml -p relay
           redact

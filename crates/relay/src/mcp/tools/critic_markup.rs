@@ -12,6 +12,17 @@ pub enum Span {
     },
 }
 
+/// `name` safe for a suggestion's metadata: nothing that breaks its JSON or that
+/// `parse` could read as the end of the metadata or of the markup. Every
+/// delimiter has a brace, and the metadata ends at `@@`.
+pub(crate) fn clean_author(name: &str) -> String {
+    name.chars()
+        .filter(|c| !matches!(c, '"' | '\\' | '{' | '}' | '@' | '~') && !c.is_control())
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 /// Suggestion-only delimiters (excludes comment delimiters which AI is allowed to use).
 const SUGGESTION_DELIMITERS: &[&str] = &["{--", "--}", "{++", "++}", "{~~", "~~}", "{==", "==}"];
 
@@ -400,6 +411,23 @@ pub fn base_view(spans: &[Span]) -> String {
     out
 }
 
+/// The metadata that opens a suggestion's `{--` and `{++` payloads. `author`
+/// must be sanitized as in [`stamp_new_comments`].
+fn suggestion_meta(author: &str, timestamp: u64) -> String {
+    format!(r#"{{"author":"{}","timestamp":{}}}@@"#, author, timestamp)
+}
+
+/// What to insert before and after a stretch of plain text to make it a
+/// pending replacement by `new_text`. The old text stays where it is, so it
+/// keeps its authors.
+pub(crate) fn replacement_markup(new_text: &str, author: &str, timestamp: u64) -> (String, String) {
+    let meta = suggestion_meta(author, timestamp);
+    (
+        format!("{{--{}", meta),
+        format!("--}}{{++{}{}++}}", meta, new_text),
+    )
+}
+
 // --- Smart Merge ---
 
 /// Compute the raw byte length of a span in the raw document.
@@ -612,7 +640,7 @@ pub fn merge_edit(
     }
 
     // Word-level diff with single-space absorption on expanded strings.
-    let meta = format!(r#"{{"author":"{}","timestamp":{}}}@@"#, author, timestamp);
+    let meta = suggestion_meta(author, timestamp);
     let diff = TextDiff::from_words(&expanded_old, &expanded_new);
     let changes: Vec<_> = diff.iter_all_changes().collect();
 
