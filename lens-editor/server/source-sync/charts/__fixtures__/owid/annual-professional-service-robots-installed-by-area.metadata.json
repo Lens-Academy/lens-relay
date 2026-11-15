@@ -1,0 +1,14 @@
+{
+ "chart": {
+  "title": "Annual professional service robots installed globally, by application area"
+ },
+ "columns": {
+  "number_of_professional_robots_installed": {
+   "shortName": "number_of_professional_robots_installed",
+   "titleShort": "Number of professional robots installed",
+   "shortUnit": "",
+   "unit": "robots",
+   "citationShort": "International Federation of Robotics via AI Index Report (2026) – with minor processing by Our World in Data"
+  }
+ }
+}

@@ -1,0 +1,14 @@
+{
+ "slug": "levelized-cost-of-energy",
+ "title": "Levelized cost of energy for renewables",
+ "subtitle": "The average cost per unit of energy generated across the lifetime of a new power plant. This data is expressed in US dollars per [kilowatt-hour](#dod:watt-hours). It is adjusted for inflation but does not account for differences in living costs between countries.",
+ "note": "Costs are expressed in constant 2025 US$ per kilowatt-hour.",
+ "selectedEntityNames": [
+  "World"
+ ],
+ "yAxis": {
+  "max": 0,
+  "min": 0,
+  "canChangeScaleType": true
+ }
+}

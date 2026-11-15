@@ -40,6 +40,7 @@ const READ_ROWS: Record<string, string[]> = {
   figure: ["caption"],
   video: ["caption"],
   iframe: ["caption"],
+  chart: ["caption"],
   quote: ["content", "source-url"],
   definition: ["content", "source"],
   notebox: ["content"],

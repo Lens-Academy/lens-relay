@@ -1,0 +1,140 @@
+Model,Organization,Publication date,Domain,Training compute (FLOP),Training compute notes
+MAI-Base-2,Microsoft,2026-10-15,"Language,Vision,Multimodal",2.4e+25,"6 * 80e9 active parameters * 50e12 tokens  = 2.4e25.
+
+21% MFU based on GB200's peak flosp"
+Mistral Large 4,Mistral AI,2026-10-06,"Language,Multimodal,Vision",1.24e+25,"From tech report: ""Mistral Large 4 was pretrained on 3,840 NVIDIA GB200 GPUs in a Mistral data center near Paris.
+Our internal training stack is built on PyTorch and CUDA. Pretraining took 45 days, or about 4.15 million GPU-hours, with a model FLOPs utilization (MFU) of 36% and a goodput of 94.1%. Webmeasure MFU against peak hardware BF16 FLOP/s, include matrix-multiplication and attention
+FLOPs.""
+
+GB200 is 2500 TFLOP/s BF16 peak, so 36% MFU and 94.1% goodput is 32.9% overall utilization. 
+3840 * 45 * 24*3600 * 0.329 * 2500 trillion = 1.23e25 FLOP pretraining.
+
+This suggests roughly 40T training tokens, using 6ND: 1.23e25 = 6* 52 billion * D.
+
+For post-training, RL involved 162.5 billion output tokens during rollouts for RL, so RL FLOP was <1% of pre-training. SFT and mid-training tokens were not disclosed.
+
+MFU is reported against bf16 spec, but report mentions FP8 in the pretraining without clarifying the primary format."
+DeepSeek V4.1 Flash,DeepSeek,2026-09-09,"Language,Vision,Multimodal",4.32e+24,"(Pre-training) - 6 * 16e9 active parameters * 45e12 tokens = 4.32e+24 FLOP
+"
+WeatherNext 3,"Google DeepMind,Google Research",2026-09-03,Earth science,2.0725198384e+23,"Hardware-based estimate: ""In total, both models required approximately 4.8 chip-years on TPUv4 and 8.9 chip-years on TPU7x chips."" Assuming FP16 precision and 30% utilization - 
+
+1.3e22 FLOP (4.8y on TPUv4) + 
+
+2307000000000000 FLOP/s * 86400 seconds/day * 365 days/year * 8.9 years * 0.3 utilization = 1.9425198384e+23 FLOP (8.9y on TPUv7)
+
+= 2.0725198384000003e+23 FLOP"
+GPT-6 Astra,OpenAI,2026-09-03,"Multimodal,Language,Vision",9.4e+26,"per OpenAI and affiliates (e.g. Nvidia), 6 Astra was trained on at least 100,000 GB200s in Abilene, Texas (so 100,000 in ""Hardware quantity"" is a lower bound/underestimate).
+
+This suggests around 9e26 FLOP (corresponding to ~100k GB200s over 90 days at 25% FP8 MFU). See more detailed estimate in this notebook, yielding a CI of ~[5e26, 2e27] FLOP.
+https://colab.research.google.com/drive/1DRlugIQs-_zoV66AJT1gQg6I1-NX7NqN "
+GLM-5.3-Flash,Z.ai (Zhipu AI),2026-08-20,"Language,Vision,Multimodal",3.24e+24,"6 * 18e9 active parameters * 30e12 tokens = 3.24e24 FLOP. 
+
+https://docs.z.ai/guides/vlm/glm-5.3-flash says ""Combined with our latest 30T-token multimodal pre-training corpus, these changes let GLM-5.3-Flash produce more intelligence with less compute."", which is not definitive in saying that all 30T tokens were used exactly once; likely confidence."
+Gemini 4 Carbon,Google DeepMind,2026-11-10,"Language,Multimodal,Vision",,
+Grok Voice 3.0,xAI,2026-10-14,"Language,Audio,Speech",,
+NLLB,Meta AI,2022-07-06,Language,1.751113728e+22,"Section 8.8:
+"" To train NLLB-200, a cumulative
+of 51968 GPU hours of computation was performed on hardware of type A100-SXM-80GB""
+See also Table 48
+
+Section 8.2.4 states they use FP16
+
+NVIDIA Datasheet states 312TFLOPS for FP16
+https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-nvidia-us-2188504-web.pdf
+
+Assuming 0.3 utilization:
+
+312e12*3600*51968*0.3
+
+Also:
+""Our final model is a Transformer
+encoder-decoder model in which we replace the Feed Forward Network (FFN) layer in
+every 4th Transformer block with a Sparsely Gated Mixture of Experts layer containing 128
+experts. We use model dimension 2048, FFN dimension 8192, 16 attention heads, 24 encoder
+layers and 24 decoder layers. We use Pre-LayerNorm (Xiong et al., 2020) as described in
+Section 6.1.1. We share the embedding weights of the encoder input embedding, decoder
+input embedding and decoder output embedding layers. We use an overall dropout of 0.3,
+attention dropout 0.1 and EOM with peom=0.2. The model has a total of 54.5B parameters
+and FLOPs similar to that of a 3.3B dense model."""
+CodeT5-large,Salesforce,2022-07-05,Language,2.72e+21,"""We perform our experiments on a kubernetes with 16 A100-40G GPUs on Google Cloud Platform and the total pretraining duration is around 21 days""
+
+16 * 312tFLOP/s * 21 * 24 * 3600 * 0.3 (utilization assumption) = 2.72e21"
+Minerva (540B),Google,2022-06-29,Language,2.7415e+24,"Minerva was fine-tuned from PaLM using the same hardware. Assume the same model FLOPs utilization rate for pre-training and fine-tuning.
+""the 540B model was trained for 29 days on a v4-1024""
+
+PaLM pretraining time: 6144 TPU for 1200 hours + 3072 TPU for 336 hours = @8404992 TPU-hours
+Minerva finetuning time: 1024 TPU for 696 hours = 712704 TPU-hours
+So fine-tuning added 8.5% more compute.
+
+Minerva total compute = PaLM pretraining compute * (712704+8404992)/(8404992) = 2.7415*10^24 FLOP
+https://www.wolframalpha.com/input?i=%28712704%2B8404992%29%2F%288404992%29+*+2.5272*10%5E24
+
+Palm pretraining: 2.5272e+24"
+ProGen2-xlarge,"Salesforce Research,Columbia University,Johns Hopkins University",2022-06-27,Biology,1.35e+22,"Estimate 1:
+""350,000 steps x 1m batch size x 6.4 B “connections” x 6"" - Arb Research (https://arbresearch.com/files/gen_bio.pdf)
+Steps and batches from Table 1. 
+FLOP estimate: 1.3e22
+
+Table 9 from here: https://www.biorxiv.org/content/10.1101/2023.07.05.547496v1.full.pdf
+FLOP estimate: 1.4e22
+
+Geometric mean = 1.35e22 FLOP"
+Parti,Google Research,2022-06-22,Image generation,5.09607936e+23,"Calculated from architecture. Does not take into account the encoding and decoding of text and images, only the transformer stack.
+
+Table 1 shows for the 20B model
+16 encoder layers
+64 decoder layers
+Dmodel = 4096
+Dhidden = 16384
+Num heads = 64
+
+Just below table 1:
+""We use a maximum length of text tokens of 128, and the length of image tokens are fixed to 1024""
+
+I take the length of the sequence to be 100 for the encoder stack and 1024 for the decoder stack.
+
+Section 3, Training: ""a total
+of 450,000 steps and final ratio of 0.025. We use a global batch size of 8192 during training.""
+
+6* 20B parameters * (1024+128) sequence length*450000 steps*8192 batch size= 5.096079e+23"
+CoCa,Google Research,2022-06-14,Vision,7.3e+22,"""Pretraining CoCa takes about 5 days on 2,048 CloudTPUv4 chips""
+
+275 teraFLOP/s * 2048 * 5 * 24 * 3600 * 0.3 (assumed utilization) = 7.3e22"
+ADALINE,Stanford University,1960-06-30,Vision,6600.0,"""The method of searching that has proven most useful is the method of steepest descent""
+
+Apparently each pattern was only shown once to the system.
+
+So the training compute is (forward pass compute) * (3 for backprop) * dataset size
+
+This is a single layer (and single neuron) which does not require gradients w.r.t. inputs - 1:1 forward-backward ratio
+
+"
+Perceptron (1960),Cornell Aeronautical Laboratory,1960-03-30,Vision,720000000.0,"4000 * 12000 * 15
+from the text ""This program uses the IBM 704 computer to simulate per-ceptual learning, recognition, and spontaneous classification of visual stimuli in the perceptron,""
+from https://en.wikipedia.org/wiki/IBM_704 The 704 can execute up to 12,000 floating-point additions per second.
+"" For the first system, the computing time averaged about 15 seconds per stimulus cycle, ""
+In Fig 10 we see up to 4000 stimuli"
+Samuel Neural Checkers,IBM,1959-07-01,Games,428400000.0,"""it can learn to do this in a remarkably short period of time 8 or 10 hours of machine-playing time)""
+
+""The availability of a larger and faster machine (the IBM 704), coupled with many detailed changes in the programming procedure, leads to a fairly interesting game being played, even without any learning.""
+
+""The Type 704 is the first large-scale, commercially available computer to employ fully automatic floating point arithmetic commands. [...]. Floating point addition or subtraction operations require 84 microseconds.""
+
+source: https://www.ibm.com/ibm/history/exhibits/mainframe/mainframe_PP704.html
+
+""An idea of the learning ability of this procedure can be gained by analyzing an initial test series of 28 games""
+
+""Each game averaged 68 moves (34 to a side), of which approximately 20 caused changes to be made in the scoring polynomial.""
+
+10*3600*1000000/84=428571428"
+Pandemonium (morse),Massachusetts Institute of Technology (MIT),1959-02-01,Language,600000000.0,"The paper mentions using an IBM 704, which can execute up to 12,000 floating-point additions per second (https://wikiless.org/wiki/IBM_704). My best guess as to how long it ran for ranges between 1h to 2 days, which when plugged into guesstimate (https://www.getguesstimate.com/models/19625), i.e., taking the log mean, gives a mean estimate of 600M"
+Perceptron Mark I,"Cornell Aeronautical Laboratory,Cornell University",1957-01-01,Other,694894.9377361819,"Extracted from AI and Compute (https://openai.com/blog/ai-and-compute/) charts by using https://automeris.io/WebPlotDigitizer/.
+
+Additional experiment described in https://babel.hathitrust.org/cgi/pt?id=coo.31924004657973&seq=70 
+- 400 input (20x20) - 512 hidden with 40 fixed connections each (not learned) - 1 output (learned)
+Parameters: 512*1=512
+Forward flop: 41*512=20992
+Forward + “backward flop”: 43*512=22016 (only last layer was adjusted)
+100*22016=2201600
+"
+Theseus,Bell Laboratories,1950-07-02,Robotics,40.0,"The ""training"" consists on the mouse running around and checking each wall (assuming each relay switch is one operation)."

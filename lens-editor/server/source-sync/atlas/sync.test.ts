@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DocsDocument } from "../google-docs/docs-types";
 import { splitFrontmatter } from "../iliad/module-file";
 import { CHAPTERS, CONFIG, DOC1, DOC2, emptyFiles, link, memoryDocs, wordsOf, type ChapterSpec } from "./__fixtures__/course";
+import { Gone } from "../charts/fetch";
 import { configHash, parseAtlasCourses } from "./config";
 import type { AtlasDocs } from "./snapshot";
 import { logAtlasReport, startAtlasSync, syncAtlasCourse, type AtlasMemory, type AtlasSyncDeps } from "./sync";
@@ -16,12 +17,12 @@ const T0 = new Date("2026-11-13T10:00:00Z");
 const minutes = (n: number) => new Date(T0.getTime() + n * 60_000);
 
 /** A course that a first run has written, and what to run it again with. */
-async function course(specs: ChapterSpec[] = CHAPTERS()) {
+async function course(specs: ChapterSpec[] = CHAPTERS(), extra: Partial<AtlasSyncDeps> = {}) {
   const files = emptyFiles();
   const docs = memoryDocs(specs);
   let n = 0;
   let now = T0;
-  const deps: AtlasSyncDeps = { files, docs, newId: () => `id-${++n}`, now: () => now };
+  const deps: AtlasSyncDeps = { files, docs, newId: () => `id-${++n}`, now: () => now, ...extra };
   const run = (options: Parameters<typeof syncAtlasCourse>[2] = {}, at?: Date) => {
     if (at) now = at;
     return syncAtlasCourse(CONFIG, deps, options);
@@ -379,14 +380,15 @@ describe("syncAtlasCourse: a run that is blocked", () => {
   it("looks again in full only once an hour while the Docs stay as they were", async () => {
     const { files, docs, deps } = await course();
     docs.fail.set(DOC2, new Error("Google Doc is not readable (403)"));
-    const memory: AtlasMemory = { images: new Map() };
+    const memory: AtlasMemory = { images: new Map(), charts: new Map() };
     const first = await syncAtlasCourse(CONFIG, { ...deps, memory, now: () => minutes(10) });
     expect(first.skipped).toEqual([`${link(DOC2)} was left out of this run, and its files kept as they are: Google Doc is not readable (403). The sync reads it again at its first run from 11:10 UTC, or sooner if a Doc of the course changes.`]);
     files.calls.length = 0;
     const reads = vi.spyOn(files, "read");
     const again = await syncAtlasCourse(CONFIG, { ...deps, memory, now: () => minutes(30) });
     expect(again.stillBlocked).toBe("1 chapter(s) left out");
-    expect(reads).not.toHaveBeenCalled();
+    // The course file only, for its charts (and the chart files, of which this course has none).
+    expect(reads.mock.calls).toEqual([[COURSE]]);
     const log = { log: vi.fn(), error: vi.fn() };
     logAtlasReport(again, log);
     expect(log.log.mock.calls).toEqual([[`[atlas-sync] ${COURSE} at ${again.revision}: still blocked (1 chapter(s) left out); the Docs are as they were, so the run looks again in full within the hour`]]);
@@ -458,8 +460,145 @@ describe("startAtlasSync", () => {
 
   it("prints every line of a warning with the prefix", () => {
     const log = { log: vi.fn(), error: vi.fn() };
-    logAtlasReport({ course: COURSE, revision: "abc", upToDate: false, changed: false, written: [], moved: [], retired: [], skipped: [], warnings: ["one\ntwo"] }, log);
+    logAtlasReport({ course: COURSE, revision: "abc", upToDate: false, changed: false, written: [], moved: [], retired: [], skipped: [], charts: [], warnings: ["one\ntwo"] }, log);
     expect(log.log.mock.calls.map(([line]) => line)).toEqual([`[atlas-sync] ${COURSE} at abc: unchanged, 1 warning(s)`, "[atlas-sync]   one\n[atlas-sync]   two"]);
+  });
+});
+
+describe("syncAtlasCourse: charts", () => {
+  const SLUG = "annual-industrial-robots-installed";
+  const ID = `owid-${SLUG}`;
+  const CHART = `Lens Edu/charts/Atlas Test/${ID}.md`;
+  const DAY = 24 * 60 * 60_000;
+  const owidFile = (name: string) => readFileSync(join(__dirname, "../charts/__fixtures__/owid", name), "utf8");
+
+  /** OWID serving the robots chart from the chart fixtures (`csv`; 403 when it is null, 503 while `down`); 404 for any other chart. */
+  function owid() {
+    const urls: string[] = [];
+    const served = { csv: owidFile(`${SLUG}.filtered.csv`) as string | null, down: false };
+    const get = async (url: string) => {
+      urls.push(url);
+      const [, slug, rest] = /^https:\/\/ourworldindata\.org\/grapher\/([^./?]+)\.(.*)$/.exec(url) ?? [];
+      if (slug !== SLUG) throw new Gone(`${url} answered 404`);
+      if (rest.startsWith("config.json")) return owidFile(`${SLUG}.config.json`);
+      if (rest.startsWith("metadata.json")) return owidFile(`${SLUG}.metadata.json`);
+      if (served.down) throw new Error(`${url} answered 503`);
+      if (served.csv === null) throw new Gone(`${url} answered 403`);
+      return served.csv;
+    };
+    return { urls, served, get };
+  }
+
+  /** The course with the robots chart in Risks > Misuse and a retired OWID chart in Risks > Risk Decomposition. */
+  async function charted() {
+    const specs = CHAPTERS();
+    specs[1].sections[1].chart = SLUG;
+    specs[1].sections[0].chart = "retired-chart";
+    const source = owid();
+    const memory: AtlasMemory = { images: new Map(), charts: new Map() };
+    const result = await course(specs, { fetchChart: source.get, memory });
+    return { ...result, source, memory };
+  }
+
+  it("writes the chart file before the articles, names it on its figure's still image, and records it in the course file", async () => {
+    const { first, files, data } = await charted();
+    expect(first.charts.map(({ id, action }) => `${id} ${action}`)).toEqual(["owid-retired-chart absent", `${ID} written`]);
+    expect(first.warnings).toEqual([
+      `The chart "owid-retired-chart" (https://ourworldindata.org/grapher/retired-chart.csv?v=1&csvType=filtered&useColumnShortNames=true) has no data, so its figure stays a still image: https://ourworldindata.org/grapher/retired-chart.config.json answered 404; it is tried again weekly.`,
+    ]);
+    expect(files.files.get(CHART)).toMatch(/^---\nid: "owid-annual-industrial-robots-installed"\nsource: https:\/\/ourworldindata.org\/grapher\/annual-industrial-robots-installed.csv\?v=1&csvType=filtered&useColumnShortNames=true\nretrieved: 2026-11-13\n---\n/);
+    expect(files.files.get(articleOf("Risks", "Misuse"))).toContain(`![Interactive figure 2.2](attachments/atlas-risks.png "chart:${ID}")`);
+    expect(files.files.get(articleOf("Risks", "Risk Decomposition"))).toContain("![Interactive figure 2.1](attachments/atlas-risks.png)\n");
+    expect(Object.keys(data(COURSE).sync_charts as Record<string, string>)).toEqual([ID]);
+  });
+
+  it("reads each chart at most once a day, also while the Docs stay as they were, and rewrites only the chart file when its data changes", async () => {
+    const { run, files, source } = await charted();
+    source.urls.length = 0;
+    expect(await run({}, minutes(10))).toMatchObject({ upToDate: true, written: [], charts: [{ action: "absent" }, { action: "not due" }] });
+    expect(source.urls).toEqual([]);
+
+    const day = await run({}, new Date(T0.getTime() + DAY));
+    expect(day).toMatchObject({ upToDate: true, charts: [{ action: "absent" }, { action: "unchanged" }] });
+    // The robots chart's three files; the retired chart is tried again only a week on.
+    expect(source.urls).toHaveLength(3);
+    expect(files.calls).toEqual([]);
+
+    source.served.csv = source.served.csv!.replace("CHN,2024,295000", "CHN,2024,300000");
+    const changed = await run({}, new Date(T0.getTime() + 2 * DAY));
+    expect(changed).toMatchObject({ upToDate: true, written: [], charts: [{ action: "absent" }, { action: "written", reason: "the data changed" }] });
+    expect(files.calls).toEqual([`write ${CHART}`]);
+    expect(files.files.get(CHART)).toContain("retrieved: 2026-11-15\n");
+  });
+
+  it("writes the chapter's articles again when a chart gets its file, and keeps the last good data when a check fails", async () => {
+    const specs = CHAPTERS();
+    specs[1].sections[1].chart = SLUG;
+    const source = owid();
+    source.served.down = true;
+    const memory: AtlasMemory = { images: new Map(), charts: new Map() };
+    const { run, files } = await course(specs, { fetchChart: source.get, memory });
+    expect(files.files.has(CHART)).toBe(false);
+    expect(files.files.get(articleOf("Risks", "Misuse"))).not.toContain("chart:");
+
+    source.served.down = false;
+    const later = await run({}, new Date(T0.getTime() + DAY));
+    expect(later.written).toEqual([articleOf("Risks", "Misuse"), COURSE]);
+    expect(files.files.get(articleOf("Risks", "Misuse"))).toContain(`"chart:${ID}")`);
+
+    const good = files.files.get(CHART);
+    source.served.csv = null;
+    const failed = await run({}, new Date(T0.getTime() + 2 * DAY));
+    expect(failed).toMatchObject({ upToDate: true, charts: [{ action: "kept" }] });
+    expect(failed.warnings[0]).toMatch(/keeps its data of 2026-11-14: .* answered 403; it is tried again weekly\.$/);
+    expect(files.files.get(CHART)).toBe(good);
+  });
+
+  it("trashes a chart file once no figure draws it, but not while a chapter cannot be read", async () => {
+    const { run, files, specs, docs, data } = await charted();
+    specs[1].sections[1].chart = undefined;
+    docs.fail.set(DOC1, new Error("Google Doc is not readable (403)"));
+    expect((await run({}, minutes(10))).charts.map((c) => c.action)).toEqual(["absent"]);
+    expect(files.files.has(CHART)).toBe(true);
+
+    docs.fail.clear();
+    const report = await run({}, minutes(20));
+    expect(report.charts.map((c) => `${c.id} ${c.action}`)).toEqual(["owid-retired-chart absent", `${ID} deleted`]);
+    expect(files.files.has(CHART)).toBe(false);
+    expect(files.files.get(articleOf("Risks", "Misuse"))).not.toContain("chart:");
+    expect(data(COURSE).sync_charts).toBeUndefined();
+  });
+
+  it("trashes a chart written while the course was blocked, once no figure draws it", async () => {
+    const specs = CHAPTERS();
+    specs[1].sections[1].chart = SLUG;
+    const files = emptyFiles();
+    const docs = memoryDocs(specs);
+    // No chapter can be used, so the run ends without recording its charts in the course file.
+    docs.titles.set(DOC1, "Not a chapter");
+    docs.titles.set(DOC2, "Not a chapter either");
+    let now = T0;
+    const deps: AtlasSyncDeps = { files, docs, fetchChart: owid().get, memory: { images: new Map(), charts: new Map() }, now: () => now };
+    const blocked = await syncAtlasCourse(CONFIG, deps);
+    expect(blocked.skipped).toHaveLength(2);
+    expect(files.files.has(CHART)).toBe(true);
+    expect(splitFrontmatter(files.files.get(COURSE) ?? "").data.sync_charts).toBeUndefined();
+
+    specs[1].sections[1].chart = undefined;
+    docs.titles.clear();
+    now = minutes(10);
+    const cleared = await syncAtlasCourse(CONFIG, deps);
+    expect(cleared.charts).toMatchObject([{ id: ID, action: "deleted" }]);
+    expect(files.files.has(CHART)).toBe(false);
+  });
+
+  it("lists the charts in a dry run, and names them on the articles it would write, writing nothing", async () => {
+    const specs = CHAPTERS();
+    specs[1].sections[1].chart = SLUG;
+    const files = emptyFiles();
+    const report = await syncAtlasCourse(CONFIG, { files, docs: memoryDocs(specs), fetchChart: owid().get }, { dryRun: true });
+    expect(report.charts).toMatchObject([{ id: ID, path: CHART, action: "written", reason: "new", bytes: expect.any(Number) }]);
+    expect(files.files.size).toBe(0);
   });
 });
 
@@ -470,7 +609,8 @@ describe.skipIf(!process.env.ATLAS_FIXTURE)("the real course", () => {
     const [config] = parseAtlasCourses(`[${readFileSync(join(__dirname, "../../../scripts/atlas-sync.config.example.json"), "utf8")}]`);
     const docs: AtlasDocs = { getDocument: async (id) => documents[id], getImage: async () => new Uint8Array([1]) };
     const files = emptyFiles();
-    const deps = { files, docs };
+    // Its charts are not read: the test stays off the network, and its figures stay still images.
+    const deps = { files, docs, fetchChart: async (url: string) => Promise.reject(new Error(`${url}: not read in tests`)) };
     const first = await syncAtlasCourse(config, deps);
     expect(first.skipped).toEqual([]);
     expect(first.written.filter((path) => path.includes("/Lenses/"))).toHaveLength(71);

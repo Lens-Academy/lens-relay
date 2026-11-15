@@ -9,8 +9,14 @@ import { convertSlice } from "../google-docs/to-markdown";
 import { isSectionDescription } from "./sections";
 import type { ChapterCounters, ChapterSource, ConvertedSection, Section } from "./types";
 
-/** `counters` is shared by the sections of one chapter, converted in order. */
-export function convertSection(section: Section, source: ChapterSource, imageUrl: (inlineObjectId: string) => string | null, counters: ChapterCounters): ConvertedSection {
+/** `counters` is shared by the sections of one chapter, converted in order. `chart` says which charts have a file. */
+export function convertSection(
+  section: Section,
+  source: ChapterSource,
+  imageUrl: (inlineObjectId: string) => string | null,
+  counters: ChapterCounters,
+  chart?: (id: string) => boolean,
+): ConvertedSection {
   const { content } = section;
   // The description leads wherever the Doc put it; the converter writes it as a
   // paragraph and a rule. Only the first one counts, as in sections.ts.
@@ -21,6 +27,7 @@ export function convertSection(section: Section, source: ChapterSource, imageUrl
     chapterNumber: section.chapter.number || null,
     counters,
     numberDefinitions: true,
+    chart,
   });
   const where = `Section ${section.chapter.number}.${section.number} (${section.title})`;
   return { markdown: body, warnings: warnings.map((warning) => `${where}: ${warning}`) };

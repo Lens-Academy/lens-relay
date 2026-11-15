@@ -12,14 +12,19 @@
  *   2. split each tab into its chapter facts and sections (sections.ts), by
  *      the rules of the Atlas's own site: a section starts at each non-empty
  *      Heading 1
- *   3. read the course as the sync last wrote it (state.ts)
- *   4. plan: existing lenses keep their `id` (learner progress is keyed on
+ *   3. keep a chart file for each chart the interactive figures draw, on
+ *      every run (../charts/refresh.ts says when and how); which charts
+ *      have a file is part of their chapter's revision, so a chart that
+ *      comes or goes rewrites the chapter's articles
+ *   4. read the course as the sync last wrote it (state.ts)
+ *   5. plan: existing lenses keep their `id` (learner progress is keyed on
  *      it) by the section's heading, its address, or its text (plan.ts)
- *   5. host the images of the chapters that changed, made WebP first
+ *   6. host the images of the chapters that changed, made WebP first
  *      (images.ts), and convert their sections to article Markdown
  *      (convert.ts, over ../google-docs/to-markdown.ts); figure, video,
- *      definition and interactive-figure numbers run per chapter
- *   6. compose and write what changed (files.ts, then applyFilePlan)
+ *      definition and interactive-figure numbers run per chapter, and the
+ *      still image of a figure whose chart has a file names it
+ *   7. compose and write what changed (files.ts, then applyFilePlan)
  *
  * This file is the contract between those steps.
  */
@@ -74,8 +79,9 @@ export interface ChapterSource {
   tab: DocumentTab;
   /**
    * Hash of the tab's content with the image download links taken out
-   * (they change on every read): what tells a changed chapter from an
-   * unchanged one. The Docs API gives `revisionId` only to editors.
+   * (they change on every read), and of which of its charts have a file:
+   * what tells a changed chapter from an unchanged one. The Docs API gives
+   * `revisionId` only to editors.
    */
   revision: string;
 }
@@ -170,6 +176,8 @@ export interface AtlasCourseHeader {
   syncRules: number | null;
   /** The configuration hash (config.ts configHash). */
   syncConfig: string | null;
+  /** `sync_charts`: the course's chart files, by id, each with the hash of the definition it was made from. */
+  charts: Map<string, string>;
 }
 
 /** The course as the sync last wrote it. */

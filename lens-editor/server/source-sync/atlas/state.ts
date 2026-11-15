@@ -20,9 +20,10 @@ import type { AtlasCourseConfig, AtlasCourseHeader, AtlasCourseState, AtlasLens,
 export const ATLAS_SOURCE = "atlas";
 
 /** The folders the sync writes a course's files in. */
-export function atlasFolders(config: AtlasCourseConfig): { modules: string; lenses: string; articles: string } {
+export function atlasFolders(config: AtlasCourseConfig): { modules: string; lenses: string; articles: string; charts: string } {
   const top = config.course.slice(0, config.course.indexOf("/"));
-  return { modules: `${top}/modules/${config.folder}`, lenses: `${top}/Lenses/${config.folder}`, articles: `${top}/articles/${config.folder}` };
+  const [modules, lenses, articles, charts] = ["modules", "Lenses", "articles", "charts"].map((dir) => `${top}/${dir}/${config.folder}`);
+  return { modules, lenses, articles, charts };
 }
 
 /** A file's frontmatter and body as Lens publishes it; throws a message a person can act on when the frontmatter is broken. */
@@ -52,6 +53,7 @@ export function courseHeader(data: Record<string, unknown>): AtlasCourseHeader {
     missingSince: textMap(data.missing_since),
     syncRules: data.sync_rules !== undefined && Number.isInteger(rules) ? rules : null,
     syncConfig: field(data, "sync_config"),
+    charts: textMap(data.sync_charts),
   };
 }
 
@@ -96,7 +98,7 @@ async function articleOf(read: ReturnType<typeof reader>, state: AtlasCourseStat
 }
 
 export async function readAtlasState(files: CourseFiles, config: AtlasCourseConfig): Promise<AtlasCourseState> {
-  const state: AtlasCourseState = { revisions: new Map(), missingSince: new Map(), syncRules: null, syncConfig: null, modules: [], pins: [], contents: new Map(), occupied: new Set(), warnings: [] };
+  const state: AtlasCourseState = { ...courseHeader({}), modules: [], pins: [], contents: new Map(), occupied: new Set(), warnings: [] };
   const read = reader(files, state);
   const folders = atlasFolders(config);
   const inside = (path: string, dir: string) => path.startsWith(`${dir}/`);

@@ -15,7 +15,7 @@ export const ATLAS_COURSES_ENV = "ATLAS_SYNC_COURSES";
 export const ATLAS_APPROVE_RETIREMENT_ENV = "ATLAS_SYNC_APPROVE_RETIREMENT";
 
 /** Course-file fields the sync writes itself, so `courseFields` may not set them. */
-const OWN_COURSE_FIELDS = ["id", "slug", "title", "synced_from", "upstream_revisions", "missing_since", "sync_rules", "sync_config"];
+const OWN_COURSE_FIELDS = ["id", "slug", "title", "synced_from", "upstream_revisions", "missing_since", "sync_rules", "sync_config", "sync_charts"];
 
 const STRINGS = ["course", "slug", "title", "folder", "filePrefix", "moduleSlugPrefix", "siteUrl"] as const;
 const KEYS = new Set<string>([...STRINGS, "authors", "chapters", "appendicesOptional", "courseFields"]);

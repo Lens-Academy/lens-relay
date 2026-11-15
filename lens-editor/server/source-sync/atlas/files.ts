@@ -113,6 +113,8 @@ export interface FilesInput {
   articles: Map<string, string>;
   /** The revision of every chapter, by Doc id, to record: this run's, or the last run's for a chapter it did not read. */
   revisions: Map<string, string>;
+  /** The course's chart files after the run, to record (refresh.ts ChartsResult.kept). */
+  charts: Map<string, string>;
   /** The combined revision of the run (FilePlan.commit). */
   revision: string;
   syncRules: number;
@@ -259,7 +261,7 @@ export function planAtlasFiles(input: FilesInput): FilePlan {
   }
 
   // 5. The course file.
-  const record = { revisions: input.revisions, missingSince: plan.missingSince, syncRules: input.syncRules };
+  const record = { revisions: input.revisions, missingSince: plan.missingSince, syncRules: input.syncRules, charts: input.charts };
   place(config.course, null, courseFile(config, contents.get(config.course) ?? null, courseLines, input.newId, record));
 
   return { commit: input.revision, changed: steps.length > 0, steps, removes, warnings: [...plan.warnings, ...warnings] };
@@ -276,7 +278,7 @@ export function courseFile(
   current: string | null,
   lines: string[],
   newId: () => string,
-  record?: { revisions: Map<string, string>; missingSince: Map<string, string>; syncRules: number },
+  record?: { revisions: Map<string, string>; missingSince: Map<string, string>; syncRules: number; charts: Map<string, string> },
 ): string {
   const { head, data } = headOf(config.course, current);
   const fields: Record<string, string | null> = {
@@ -290,6 +292,7 @@ export function courseFile(
       missing_since: mapping("missing_since", record.missingSince),
       sync_rules: `sync_rules: ${record.syncRules}`,
       sync_config: `sync_config: ${yamlQuote(configHash(config))}`,
+      sync_charts: mapping("sync_charts", new Map([...record.charts].sort(([a], [b]) => (a < b ? -1 : 1)))),
     }),
   };
   return `${setFrontmatter(head, fields)}${lines.map((line) => `${line}\n`).join("")}`;

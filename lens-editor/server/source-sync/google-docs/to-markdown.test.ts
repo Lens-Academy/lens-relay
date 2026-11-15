@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convertDocumentTab, convertSlice, escapeInline, parseChapterTitle } from "./to-markdown";
+import { convertDocumentTab, convertSlice, escapeInline, figureCharts, parseChapterTitle } from "./to-markdown";
 import type { DocumentTab, StructuralElement } from "./docs-types";
 import { heading, image, para, run, table, text } from "./__fixtures__/docs";
 
@@ -146,6 +146,57 @@ describe("Atlas components", () => {
         "![Interactive figure 1](https://img.test/kix.s.png)\n\n" +
         "*Interactive figure 1: A chart.* ([Open the interactive version](https://ourworldindata.org/g))\n",
     );
+  });
+
+  describe("interactive figures that draw a chart", () => {
+    const OWID = "https://ourworldindata.org/grapher/annual-industrial-robots-installed?tab=chart";
+    const iframe = (src: string, still = "kix.s") => table([["type", [text("iframe")]], ["source", [text(src)]], ["still_image", [image(still)]], ["caption", [text("Robots.")]]]);
+    const slice = (content: StructuralElement[], chart?: (id: string) => boolean) => convertSlice({}, content, { imageUrl, chapterNumber: 2, counters: new Map(), chart });
+
+    it("name the chart on the still image only when it has a file; other embeds stay as they are", () => {
+      const content = [iframe(OWID), iframe("https://ourworldindata.org/grapher/retired-chart", "kix.r"), iframe("https://www.metaculus.com/questions/embed/1", "kix.m")];
+      const out = slice(content, (id) => id === "owid-annual-industrial-robots-installed");
+      expect(out.body).toBe(
+        `![Interactive figure 2.1](https://img.test/kix.s.png "chart:owid-annual-industrial-robots-installed")\n\n*Interactive figure 2.1: Robots.* ([Open the interactive version](${OWID}))\n\n` +
+          "![Interactive figure 2.2](https://img.test/kix.r.png)\n\n*Interactive figure 2.2: Robots.* ([Open the interactive version](https://ourworldindata.org/grapher/retired-chart))\n\n" +
+          "![Interactive figure 2.3](https://img.test/kix.m.png)\n\n*Interactive figure 2.3: Robots.* ([Open the interactive version](https://www.metaculus.com/questions/embed/1))\n",
+      );
+      expect(out.warnings).toEqual([]);
+      // Without the option (the single-Doc sync), no figure names a chart.
+      expect(slice(content).body).toBe(slice(content, () => false).body);
+      expect(slice(content).body).not.toContain("chart:");
+    });
+
+    it("render a chart table like an iframe, linking the data's own page", () => {
+      const chart = table([
+        ["type", [text("chart")]],
+        ["source", [text("https://epoch.ai/data/notable_ai_models.csv")]],
+        ["x", [text("Publication date")]],
+        ["y", [text("Training compute (FLOP)")]],
+        ["id", [text("compute")]],
+        ["still_image", [image("kix.c")]],
+        ["caption", [text("Compute.")]],
+      ]);
+      expect(slice([chart], () => true).body).toBe(
+        '![Interactive figure 2.1](https://img.test/kix.c.png "chart:compute")\n\n*Interactive figure 2.1: Compute.* ([Open the interactive version](https://epoch.ai/data/notable-ai-models))\n',
+      );
+      const broken = table([["type", [text("chart")]], ["source", [text("https://example.org/data.csv")]], ["still_image", [image("kix.c")]], ["caption", [text("Compute.")]]]);
+      const out = slice([broken], () => true);
+      expect(out.body).toBe("![Interactive figure 2.1](https://img.test/kix.c.png)\n\n*Interactive figure 2.1: Compute.* ([Open the interactive version](https://example.org/data.csv))\n");
+      expect(out.warnings).toEqual(["Interactive figure 2.1: its source https://example.org/data.csv is not an https link to ourworldindata.org or epoch.ai"]);
+    });
+
+    it("are found where the converter renders them: in the text and in boxes, not in plain tables", () => {
+      const box = table([["type", [text("notebox")]], ["content", [iframe("https://ourworldindata.org/grapher/in-a-box")]]]);
+      const plain = { table: { columns: 1, tableRows: [{ tableCells: [{ content: [iframe("https://ourworldindata.org/grapher/in-a-cell")] }] }] } };
+      expect(figureCharts([iframe(OWID), box, plain, iframe("https://www.metaculus.com/questions/embed/1")]).map((c) => c.id)).toEqual(["owid-annual-industrial-robots-installed", "owid-in-a-box"]);
+    });
+
+    it("are no chart without a still image, which the chart's name sits on", () => {
+      const imageless = table([["type", [text("iframe")]], ["source", [text(OWID)]], ["still_image", []], ["caption", [text("Robots.")]]]);
+      expect(figureCharts([imageless])).toEqual([]);
+      expect(slice([imageless], () => true).body).toBe(`*Interactive figure 2.1: Robots.* ([Open the interactive version](${OWID}))\n`);
+    });
   });
 
   it("renders a quote with its attribution", () => {

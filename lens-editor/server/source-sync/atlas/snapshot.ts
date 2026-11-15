@@ -73,6 +73,16 @@ export function combinedRevision(revisions: (string | null)[]): string {
   return createHash("sha256").update(revisions.map((revision) => revision ?? "unread").join("\n")).digest("hex").slice(0, 12);
 }
 
+/**
+ * A chapter's revision with the charts its figures draw that have a file:
+ * one coming or going changes it, so the chapter's articles are written
+ * again with or without the chart. Unchanged for a chapter with none.
+ */
+export function withCharts(revision: string, ids: string[]): string {
+  const charted = [...new Set(ids)].sort();
+  return charted.length ? createHash("sha256").update([revision, ...charted].join("\n")).digest("hex").slice(0, 16) : revision;
+}
+
 /** A configured chapter the run could not read, and why. */
 export interface UnreadChapter {
   docId: string;
