@@ -1,0 +1,14 @@
+{
+ "chart": {
+  "title": "Cumulative number of large-scale AI systems by country since 2019"
+ },
+ "columns": {
+  "cumulative_count": {
+   "shortName": "cumulative_count",
+   "titleShort": "Cumulative number of large-scale AI systems by country",
+   "shortUnit": "",
+   "unit": "AI systems",
+   "citationShort": "Epoch AI (2026) – with major processing by Our World in Data"
+  }
+ }
+}

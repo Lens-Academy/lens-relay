@@ -19,7 +19,9 @@
  * WebP as the server makes them (server/source-sync/atlas/images.ts).
  *
  * Without --apply the run reports what it would write, move and retire, and
- * changes no course file; images are still stored in <content>/attachments.
+ * what it would do with each chart file, and changes no course or chart
+ * file; images are still stored in <content>/attachments. Charts' data is
+ * read live from Our World in Data and Epoch AI (one request every 2 s).
  * With --apply it changes the copy, so Lens's content validator can be run
  * on the result. Run it twice with --apply to see that a second run of the
  * same Docs writes nothing.
@@ -89,6 +91,9 @@ try {
   for (const move of report.moved) console.log(`  moved    ${move.from} -> ${move.to}`);
   for (const path of report.written) console.log(`  written  ${path}`);
   for (const path of report.retired) console.log(`  retired  ${path}`);
+  for (const { id, action, reason, bytes } of report.charts) {
+    console.log(`  chart    ${id}: ${action}${reason ? ` (${reason})` : ""}${bytes === undefined ? "" : `, ${(bytes / 1024).toFixed(1)} KB`}`);
+  }
   if (!args.includes("--apply")) console.log(`(dry run: nothing written under ${root} but attachments/; add --apply to write)`);
 } catch (err) {
   console.error(`[atlas-sync] failed: ${(err as Error).message}`);

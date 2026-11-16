@@ -1,0 +1,56 @@
+{
+ "chart": {
+  "title": "Levelized cost of energy for renewables"
+ },
+ "columns": {
+  "bioenergy": {
+   "shortName": "bioenergy",
+   "titleShort": "Bioenergy levelized cost of energy",
+   "shortUnit": "$/kWh",
+   "unit": "constant 2025 US$ per kilowatt-hour",
+   "citationShort": "IRENA (2026); IRENA (2025); IRENA (2024) – with major processing by Our World in Data"
+  },
+  "geothermal": {
+   "shortName": "geothermal",
+   "titleShort": "Geothermal levelized cost of energy",
+   "shortUnit": "$/kWh",
+   "unit": "constant 2025 US$ per kilowatt-hour",
+   "citationShort": "IRENA (2026); IRENA (2025); IRENA (2024) – with major processing by Our World in Data"
+  },
+  "offshore_wind": {
+   "shortName": "offshore_wind",
+   "titleShort": "Offshore wind levelized cost of energy",
+   "shortUnit": "$/kWh",
+   "unit": "constant 2025 US$ per kilowatt-hour",
+   "citationShort": "IRENA (2026); IRENA (2025); IRENA (2024) – with major processing by Our World in Data"
+  },
+  "solar_photovoltaic": {
+   "shortName": "solar_photovoltaic",
+   "titleShort": "Solar photovoltaic levelized cost of energy",
+   "shortUnit": "$/kWh",
+   "unit": "constant 2025 US$ per kilowatt-hour",
+   "citationShort": "IRENA (2026); IRENA (2025); IRENA (2024) – with major processing by Our World in Data"
+  },
+  "concentrated_solar_power": {
+   "shortName": "concentrated_solar_power",
+   "titleShort": "Concentrated solar power levelized cost of energy",
+   "shortUnit": "$/kWh",
+   "unit": "constant 2025 US$ per kilowatt-hour",
+   "citationShort": "IRENA (2026); IRENA (2025); IRENA (2024) – with major processing by Our World in Data"
+  },
+  "hydropower": {
+   "shortName": "hydropower",
+   "titleShort": "Hydropower levelized cost of energy",
+   "shortUnit": "$/kWh",
+   "unit": "constant 2025 US$ per kilowatt-hour",
+   "citationShort": "IRENA (2026); IRENA (2025); IRENA (2024) – with major processing by Our World in Data"
+  },
+  "onshore_wind": {
+   "shortName": "onshore_wind",
+   "titleShort": "Onshore wind levelized cost of energy",
+   "shortUnit": "$/kWh",
+   "unit": "constant 2025 US$ per kilowatt-hour",
+   "citationShort": "IRENA (2026); IRENA (2025); IRENA (2024) – with major processing by Our World in Data"
+  }
+ }
+}

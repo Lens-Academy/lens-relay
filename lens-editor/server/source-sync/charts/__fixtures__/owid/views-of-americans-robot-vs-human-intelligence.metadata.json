@@ -1,0 +1,42 @@
+{
+ "chart": {
+  "title": "Views of Americans about robot vs. human intelligence"
+ },
+ "columns": {
+  "dont_know": {
+   "shortName": "dont_know",
+   "titleShort": "Don't know",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "YouGov (2025) – with major processing by Our World in Data"
+  },
+  "none_of_these": {
+   "shortName": "none_of_these",
+   "titleShort": "None of these",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "YouGov (2025) – with major processing by Our World in Data"
+  },
+  "robots_will_never_be_able_to_develop_higher_levels_of_intelligence_than_humans": {
+   "shortName": "robots_will_never_be_able_to_develop_higher_levels_of_intelligence_than_humans",
+   "titleShort": "Robots will never surpass human intelligence",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "YouGov (2025) – with major processing by Our World in Data"
+  },
+  "robots_will_be_able_to_develop_higher_levels_of_intelligence_than_humans_in_the_future": {
+   "shortName": "robots_will_be_able_to_develop_higher_levels_of_intelligence_than_humans_in_the_future",
+   "titleShort": "Robots will surpass human intelligence in the future",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "YouGov (2025) – with major processing by Our World in Data"
+  },
+  "most_robots_have_already_developed_higher_levels_of_intelligence_than_humans": {
+   "shortName": "most_robots_have_already_developed_higher_levels_of_intelligence_than_humans",
+   "titleShort": "Robots smarter than humans now",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "YouGov (2025) – with major processing by Our World in Data"
+  }
+ }
+}

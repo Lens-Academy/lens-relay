@@ -1,0 +1,14 @@
+{
+ "chart": {
+  "title": "New industrial robots installed per year"
+ },
+ "columns": {
+  "industrial_robot_installations": {
+   "shortName": "industrial_robot_installations",
+   "titleShort": "Annual industrial robots installed",
+   "shortUnit": "",
+   "unit": "robots",
+   "citationShort": "International Federation of Robotics via AI Index Report (2026) – with minor processing by Our World in Data"
+  }
+ }
+}

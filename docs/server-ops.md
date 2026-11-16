@@ -698,6 +698,15 @@ problem, and leaves only this sync off. A change to the configuration
 **Turn it off.** Empty `ATLAS_SYNC_COURSES` and recreate the container. The
 files stay as the last run left them.
 
+**Charts.** Each interactive figure of Our World in Data (an `iframe` table
+whose src is an OWID grapher page), and each `chart` table, that has a still
+image gets a chart file `Lens Edu/charts/<course folder>/<id>.md`, which
+lens-platform draws in place of that image. When the sync reads a chart's data, when it
+replaces a file, and when it trashes one: the header of
+`lens-editor/server/source-sync/charts/refresh.ts`. A chart with no file
+(OWID retired it, or does not let its data be downloaded) stays a still
+image.
+
 **The log.** `docker logs lens-editor 2>&1 | grep atlas-sync`. A run prints
 one line, `<course> at <revision>: ...`, then one line per warning. What may
 need a person:
@@ -714,6 +723,17 @@ need a person:
   <Title>`, or an image of it failed to download. Its files stay as they
   are and nothing of it is retired. While the Docs stay as they were, the
   next runs log `still blocked` and look again in full once an hour.
+- *`The chart "<id>" ... keeps its data of <date>: ...`, `... has no data,
+  so its figure stays a still image: ...` or `"<path>" is not a chart file
+  the sync can read`.* The chart's source answered with an error, or with
+  data that failed a check, or someone edited the chart file. Each is
+  logged once a day, when the chart is read; a source that answers 404 or
+  403 (OWID retired the chart, or does not let its data be downloaded) is
+  logged once, when it starts, and tried again weekly. Nothing to do unless
+  it lasts: then replace the figure in the Doc. A `highlight` row's names
+  that match nothing in the data are logged once.
+- *`N chart(s) were not read`.* The run's time for charts ran out (OWID
+  slow); the next run reads them first.
 - *`failed: ...`.* Nothing was changed; the message says what to do (a lens
   that a module lists is missing, two lenses share an id, a course file the
   sync did not write, or a course file that was moved: set

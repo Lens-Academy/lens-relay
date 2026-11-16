@@ -13,10 +13,14 @@
  *     dollar; the maths is Typst, translated to TeX (typst-math.ts);
  *   - a two-column table with a `type` row naming a component is that
  *     component, its other rows attributes: figure, video, iframe, quote,
- *     definition, noteBox, callout, section-description.
+ *     definition, noteBox, callout, section-description; and Lens's own
+ *     `chart`, an interactive figure drawn from data (../charts/definition.ts).
  * Components map onto what Lens articles already render: images with an
  * italic "Figure N.M: caption" line, `:::callout` boxes, blockquotes and
  * `**Definition: term**` paragraphs, matching the Atlas's earlier import.
+ * An interactive figure (an iframe, or a chart table) whose chart has a file
+ * gets the title "chart:<id>" on its still image, and lens-platform draws
+ * the chart in the image's place; every other reader sees the image.
  * Anything with no Lens form is reported in `warnings`, never dropped silently.
  *
  * convertDocumentTab converts a whole tab into one article; convertSlice
@@ -24,6 +28,7 @@
  * with component numbers carried from one slice of a chapter to the next.
  */
 
+import { iframeChart, pageUrl, tableChart, type ChartDefinition } from "../charts/definition";
 import type {
   DocumentTab,
   Paragraph,
@@ -43,6 +48,8 @@ export interface ConvertOptions {
    * were first written without numbers.
    */
   numberDefinitions?: boolean;
+  /** Whether the chart has a file (../charts/refresh.ts). Without it no figure names a chart. */
+  chart?(id: string): boolean;
 }
 
 export interface SliceOptions extends ConvertOptions {
@@ -84,7 +91,7 @@ const LINE_BREAK = "\u000b";
 
 const ORDERED_GLYPHS = new Set(["DECIMAL", "ZERO_DECIMAL", "ALPHA", "UPPER_ALPHA", "ROMAN", "UPPER_ROMAN"]);
 
-const COMPONENT_TYPES = new Set(["figure", "video", "iframe", "quote", "definition", "notebox", "callout", "section-description"]);
+const COMPONENT_TYPES = new Set(["figure", "video", "iframe", "chart", "quote", "definition", "notebox", "callout", "section-description"]);
 
 /** Attribute rows only components have, for spotting one that lost its `type` row. */
 const COMPONENT_ATTRIBUTES = new Set(["content", "caption", "src", "still_image", "speaker", "term", "flavor", "source-url"]);
@@ -344,6 +351,38 @@ export function atlasComponent(table: Table): { type: string | null; attrs: Map<
   return { type: COMPONENT_TYPES.has(type) ? type : null, attrs };
 }
 
+/** A chart table's rows other than its source, still image and caption (../charts/definition.ts tableChart). */
+const CHART_ROWS = ["id", "kind", "x", "y", "series", "label", "highlight", "y_scale", "title"];
+
+/**
+ * An interactive figure table (iframe or chart) read: the chart it draws,
+ * if any, what is wrong with a chart table, and where its "Open the
+ * interactive version" link goes (an iframe's src as written; a chart's
+ * original). A figure without a still image draws no chart: the chart's
+ * name sits on the image (`"chart:<id>"`).
+ */
+function interactiveFigure(type: string, attrs: Map<string, StructuralElement[]>): { chart: ChartDefinition | null; problems: string[]; link: string } {
+  const srcCell = attrs.get("src") ?? attrs.get("source");
+  const src = cellLink(srcCell) ?? plainText(srcCell);
+  const pictured = imageIds(attrs.get("still_image")).length > 0;
+  if (type === "iframe") return { chart: pictured ? iframeChart(src) : null, problems: [], link: src };
+  const { chart, problems } = tableChart(new Map([["source", src], ...CHART_ROWS.map((key): [string, string] => [key, plainText(attrs.get(key))])]));
+  return { chart: pictured ? chart : null, problems, link: chart ? pageUrl(chart) : src };
+}
+
+/**
+ * The charts the interactive figures in these elements draw, in order,
+ * found where the converter renders figures: in the elements, and in the
+ * boxes and definitions it renders block by block.
+ */
+export function figureCharts(elements: StructuralElement[]): ChartDefinition[] {
+  return elements.flatMap((el) => {
+    const { type, attrs } = el.table ? atlasComponent(el.table) : { type: null, attrs: new Map() };
+    if (type === "iframe" || type === "chart") return interactiveFigure(type, attrs).chart ?? [];
+    return type === "notebox" || type === "callout" || type === "definition" ? figureCharts(attrs.get("content") ?? []) : [];
+  });
+}
+
 function paragraphs(elements: StructuralElement[] | undefined): Paragraph[] {
   return (elements ?? []).flatMap((el) => (el.paragraph ? [el.paragraph] : []));
 }
@@ -499,7 +538,7 @@ class Converter {
   /** The hosted URL of the picture a figure or interactive figure table shows, if any. */
   private componentPicture(table: Table): string | null {
     const { type, attrs } = atlasComponent(table);
-    const cells = type === "figure" ? [attrs.get("content"), attrs.get("source")] : type === "iframe" ? [attrs.get("still_image")] : [];
+    const cells = type === "figure" ? [attrs.get("content"), attrs.get("source")] : type === "iframe" || type === "chart" ? [attrs.get("still_image")] : [];
     for (const cell of cells) {
       const [id] = imageIds(cell);
       const url = id ? this.opts.imageUrl(id) : null;
@@ -699,7 +738,8 @@ class Converter {
     return out.split(LINE_BREAK).map(escapeLineStart).join("\n");
   }
 
-  private image(objectId: string, alt: string): string | null {
+  /** `title`: the image's Markdown title, as `![alt](url "title")`; only chart ids, which need no escaping. */
+  private image(objectId: string, alt: string, title = ""): string | null {
     const url = this.opts.imageUrl(objectId);
     if (!url) {
       this.warn(`an image (${objectId}) could not be hosted and was left out`);
@@ -707,14 +747,14 @@ class Converter {
     }
     const props = this.tab.inlineObjects?.[objectId]?.inlineObjectProperties?.embeddedObject;
     const text = (alt || props?.title || props?.description || "").replace(/\s+/g, " ").trim();
-    return `![${escapeInline(text)}](${url})`;
+    return `![${escapeInline(text)}](${url}${title ? ` "${title}"` : ""})`;
   }
 
   /** The first image in a component cell; any more are reported. */
-  private cellImage(cell: StructuralElement[] | undefined, alt: string): string | null {
+  private cellImage(cell: StructuralElement[] | undefined, alt: string, title = ""): string | null {
     const ids = imageIds(cell);
     if (ids.length > 1) this.warn(`${alt}: only the first of ${ids.length} images is kept`);
-    return ids.length ? this.image(ids[0], alt) : null;
+    return ids.length ? this.image(ids[0], alt, title) : null;
   }
 
   /** A component cell as one line of inline markdown (paragraphs joined). */
@@ -740,14 +780,15 @@ class Converter {
     const component = {
       figure: this.figure,
       video: this.video,
-      iframe: this.iframe,
+      iframe: this.interactive,
+      chart: this.interactive,
       quote: this.quote,
       definition: this.definition,
       notebox: this.noteBox,
       callout: this.callout,
       "section-description": this.sectionDescription,
     }[type]!;
-    return component.call(this, attrs);
+    return component.call(this, attrs, type);
   }
 
   /** The section's lead paragraph, set off by a rule as in the Atlas's earlier import. */
@@ -780,14 +821,15 @@ class Converter {
     return [this.caption(label, attrs.get("caption"), url ? ` ([Watch the video](${destination(url)}))` : "")];
   }
 
-  private iframe(attrs: Map<string, StructuralElement[]>): string[] {
+  /** An iframe or chart table: its still image (naming its chart when the chart has a file), caption, and link to the original. */
+  private interactive(attrs: Map<string, StructuralElement[]>, type: string): string[] {
     const label = this.label("Interactive figure");
-    const srcCell = attrs.get("src") ?? attrs.get("source");
-    const src = cellLink(srcCell) ?? plainText(srcCell);
-    const still = this.cellImage(attrs.get("still_image"), label);
+    const { chart, problems, link } = interactiveFigure(type, attrs);
+    for (const problem of problems) this.warn(`${label}: ${problem}`);
+    const still = this.cellImage(attrs.get("still_image"), label, chart && this.opts.chart?.(chart.id) ? `chart:${chart.id}` : "");
     if (!still) this.warn(`${label} has no still image, so only its caption and link are shown`);
-    const link = src ? ` ([Open the interactive version](${destination(src)}))` : "";
-    return [...(still ? [still] : []), this.caption(label, attrs.get("caption"), link)];
+    const open = link ? ` ([Open the interactive version](${destination(link)}))` : "";
+    return [...(still ? [still] : []), this.caption(label, attrs.get("caption"), open)];
   }
 
   private quote(attrs: Map<string, StructuralElement[]>): string[] {

@@ -1,0 +1,15 @@
+{
+ "slug": "private-investment-in-artificial-intelligence-cset",
+ "title": "Estimated funding raised by privately held AI companies",
+ "note": "Data is expressed in constant 2021 US$. Inflation adjustment is based on the US Consumer Price Index (CPI).",
+ "selectedEntityNames": [
+  "World",
+  "United States",
+  "China",
+  "United Kingdom"
+ ],
+ "yAxis": {
+  "min": 0,
+  "canChangeScaleType": true
+ }
+}

@@ -1,0 +1,31 @@
+entity,code,year,pct_of_respondents
+All geographies,,2021,56
+All geographies,,2022,50
+All geographies,,2023,55
+All geographies,,2024,78
+All geographies,,2025,88
+Asia-Pacific,,2021,64
+Asia-Pacific,,2022,55
+Asia-Pacific,,2023,58
+Asia-Pacific,,2024,72
+Asia-Pacific,,2025,82
+Developing markets,,2021,52.03603
+Developing markets,,2022,44
+Developing markets,,2023,49
+Developing markets,,2024,77
+Developing markets,,2025,88
+Europe,OWID_EUR,2021,51
+Europe,OWID_EUR,2022,48
+Europe,OWID_EUR,2023,57
+Europe,OWID_EUR,2024,80
+Europe,OWID_EUR,2025,91
+Greater China,,2021,61
+Greater China,,2022,41
+Greater China,,2023,48
+Greater China,,2024,75
+Greater China,,2025,88
+North America,OWID_NAM,2021,55
+North America,OWID_NAM,2022,59
+North America,OWID_NAM,2023,61
+North America,OWID_NAM,2024,82
+North America,OWID_NAM,2025,90

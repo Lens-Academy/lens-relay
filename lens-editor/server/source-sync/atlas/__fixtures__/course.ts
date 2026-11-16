@@ -35,6 +35,8 @@ export interface SectionSpec {
   words: string[];
   description?: string;
   image?: string;
+  /** An interactive figure of this OWID chart (its grapher slug), with a still image. */
+  chart?: string;
 }
 
 export interface ChapterSpec {
@@ -62,6 +64,11 @@ export function chapterDoc(docId: string, spec: ChapterSpec, titleText = `Chapte
     if (section.image) {
       content.push(figure(section.image));
       images.push(section.image);
+    }
+    if (section.chart) {
+      const still = `kix.${section.chart}`;
+      content.push(table([["type", [text("iframe")]], ["source", [text(`https://ourworldindata.org/grapher/${section.chart}?tab=chart`)]], ["still_image", [image(still)]], ["caption", [text("A chart.")]]]));
+      images.push(still);
     }
   }
   return {

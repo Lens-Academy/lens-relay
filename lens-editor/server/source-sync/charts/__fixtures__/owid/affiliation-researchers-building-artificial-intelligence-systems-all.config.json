@@ -1,0 +1,18 @@
+{
+ "slug": "affiliation-researchers-building-artificial-intelligence-systems-all",
+ "title": "Affiliation of research teams building notable AI systems, by year of publication",
+ "subtitle": "Describes the sector where the authors of a notable AI system have their primary affiliations.",
+ "note": "A research collective is a group of AI researchers not organized under an academic or industry affiliation. Systems are defined as \"notable\" by the authors based on several criteria, such as advancing the state of the art or being of historical importance.",
+ "chartTypes": [
+  "StackedBar"
+ ],
+ "selectedEntityNames": [
+  "Other",
+  "Academia",
+  "Academia and industry collaboration",
+  "Industry"
+ ],
+ "yAxis": {
+  "min": 0
+ }
+}
