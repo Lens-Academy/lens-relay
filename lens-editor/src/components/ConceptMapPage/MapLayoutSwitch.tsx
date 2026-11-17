@@ -127,16 +127,16 @@ export function MapBundles({ bundles, width, height, zoom, faint }: {
     <svg className="pointer-events-none absolute inset-0 overflow-visible" width={width} height={height} aria-hidden="true">
       <defs>
         <marker id="idea-map-bundle" viewBox="0 0 6 6" refX="4.5" refY="3" markerWidth="3" markerHeight="3" orient="auto">
-          <path d="M0,0 L6,3 L0,6 z" className="fill-slate-500" />
+          <path d="M0,0 L6,3 L0,6 z" className="fill-gray-500" />
         </marker>
       </defs>
       {bundles.map((bundle) => (
-        <path key={`${bundle.from}>${bundle.to}`} d={bundle.d} data-bundle={bundle.count} className="fill-none stroke-slate-500" strokeOpacity={faint ? 0.1 : 0.35} strokeWidth={(1.5 + Math.sqrt(bundle.count) * 1.5) * thick} markerEnd="url(#idea-map-bundle)" />
+        <path key={`${bundle.from}>${bundle.to}`} d={bundle.d} data-bundle={bundle.count} className="fill-none stroke-gray-500" strokeOpacity={faint ? 0.1 : 0.35} strokeWidth={(1.5 + Math.sqrt(bundle.count) * 1.5) * thick} markerEnd="url(#idea-map-bundle)" />
       ))}
       {bundles.map((bundle) => (
         <g key={`${bundle.from}>${bundle.to}`} opacity={faint ? 0.25 : 1}>
-          <circle cx={bundle.x} cy={bundle.y} r={size * 0.95} className="fill-white stroke-slate-300" />
-          <text x={bundle.x} y={bundle.y} dy="0.35em" textAnchor="middle" fontSize={size} className="fill-slate-600">{bundle.count}</text>
+          <circle cx={bundle.x} cy={bundle.y} r={size * 0.95} className="fill-white stroke-gray-300" />
+          <text x={bundle.x} y={bundle.y} dy="0.35em" textAnchor="middle" fontSize={size} className="fill-gray-600">{bundle.count}</text>
         </g>
       ))}
     </svg>

@@ -4,7 +4,7 @@ import type { MapEdge, MapSizes } from './idea-map-layout';
 import { layoutLayered } from './idea-map-layered';
 import { GROUPED_LAYOUTS, MAP_GROUPINGS, MAP_LAYOUTS, NO_TOPIC, communities, hasTopics, ideaGroups, layoutFor, parseChoice, resolveChoice, topicsOf, type DrawnMap, type GroupBy, type MapFrame, type MapLayoutChoice, type MapLayoutKind } from './idea-map-layouts';
 import { treeParents } from './idea-map-tree';
-import { crowdedBoxes, fixtureMap, linesOnTop, linesThroughBoxes, pathPoints, sideOf } from './idea-map-layouts.fixture';
+import { crowdedBoxes, fixtureMap, linesOnTop, linesThroughBoxes, pathPoints, sideOf } from '../test/fixtures/idea-map-layouts';
 import { shownLinks } from './idea-map-links';
 
 const SIZES: MapSizes = { nodeWidth: 176, gapX: 40, gapY: 12, margin: 16 };

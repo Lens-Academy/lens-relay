@@ -5,8 +5,8 @@
  * most links stay inside a topic, some reach back to an earlier one; names
  * run from one word to a whole sentence, so boxes differ in height.
  */
-import { buildIdeaGraph, type IdeaFile, type IdeaGraph } from './idea-map';
-import { wrappedLines, type MapBox, type MapEdge, type MapLayout, type MapLine } from './idea-map-layout';
+import { buildIdeaGraph, type IdeaFile, type IdeaGraph } from '../../lib/idea-map';
+import { wrappedLines, type MapBox, type MapEdge, type MapLayout, type MapLine } from '../../lib/idea-map-layout';
 
 const TERMS = [
   'Goodharting', 'Sharp left turn', 'Instrumental convergence', 'Corrigibility', 'Mesa-optimisation', 'Deceptive alignment',

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type RefObject } from 'react';
+import { lazy, Suspense, useState, useCallback, useEffect, useRef, type RefObject } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useYDoc, useYjsProvider } from './lib/ydoc-provider';
 import { RelayProvider } from './providers/RelayProvider';
@@ -37,7 +37,6 @@ import { ReviewPage } from './components/ReviewPage/ReviewPage';
 import { RecentChangesPage } from './components/RecentChangesPage/RecentChangesPage';
 import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
 import { PromotionRoute } from './components/Promotion/PromotionRoute';
-import { ConceptMapPage } from './components/ConceptMapPage';
 import { MultiDocSectionEditor } from './components/SectionEditor';
 import { applySuggestionActionsViaServer, SUGGESTION_NOT_FOUND } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
@@ -61,6 +60,9 @@ import { MobileDrawer } from './components/Mobile/MobileDrawer';
 import { WorkflowMenu } from './components/WorkflowMenu';
 import { isDocRoute } from './lib/app-routes';
 import { useEdgeSwipe } from './hooks/useEdgeSwipe';
+
+// Loaded when the page is opened: its layouts need dagre, which the editor itself does not
+const ConceptMapPage = lazy(() => import('./components/ConceptMapPage').then((page) => ({ default: page.ConceptMapPage })));
 
 // Panel configuration — single source of truth for all panel behavior
 // All panels use CSS flexbox with pixel widths.
@@ -701,7 +703,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                     } />
                     <Route path="/concept-map" element={
                       isAllFolders || folderUuid === EDU_FOLDER_ID
-                        ? <ConceptMapPage />
+                        ? <Suspense fallback={<p className="px-6 py-6 text-sm text-gray-500">Loading…</p>}><ConceptMapPage /></Suspense>
                         : <DefaultLanding />
                     } />
                     {/* The page's old address, kept for links and bookmarks */}

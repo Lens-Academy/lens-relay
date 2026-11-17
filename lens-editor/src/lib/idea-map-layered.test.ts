@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MapEdge, MapSizes } from './idea-map-layout';
 import { layoutLayered, type MapFlow } from './idea-map-layered';
-import { crowdedBoxes, fixtureMap, linesOnTop, linesThroughBoxes, pathPoints, sideOf } from './idea-map-layouts.fixture';
+import { crowdedBoxes, fixtureMap, linesOnTop, linesThroughBoxes, pathPoints, sideOf } from '../test/fixtures/idea-map-layouts';
 
 const SIZES: MapSizes = { nodeWidth: 176, gapX: 40, gapY: 12, margin: 16 };
 const W = SIZES.nodeWidth;

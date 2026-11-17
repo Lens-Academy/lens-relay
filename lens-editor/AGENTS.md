@@ -173,7 +173,8 @@ question (one typed `#### Question: Open|Choice` segment appended to `## Tests`)
 idea ("Edit": name, outcome, priority, topic, courses, why, the lenses, both lists), rename it, delete it, and edit or delete a
 question. Rules of every edit: only the part that changed is rewritten and the rest of the file stays byte for byte;
 the save carries what the form was opened with and writes nothing when the file no longer says that; a part that
-holds a pending suggestion or a comment is refused. An emptied section keeps its heading. A rename is the relay's
+holds a pending suggestion or a comment is refused; a changed file is read back before it is written, and refused
+when anything but the part meant would read differently (`requirementChanges`, `ideaEditChanges`). An emptied section keeps its heading. A rename is the relay's
 move (`movePath`, which rewrites links in other files; links it left under Requires / Helpful first are rewritten by
 `renameLinkChanges`). A delete takes the idea's links out of the other ideas' two lists, then trashes the file
 (`trashPath`: `Lens Edu/_trash/`, restorable); it stops when a file outside the map links to the idea. Questions of
@@ -181,7 +182,7 @@ types other than Open and Choice are edited in the file. In `options::` a right 
 one plain `- text` (the platform's parser reports `- [ ]` as an error), and `multi:: true` is written whenever
 several options are right (the platform refuses them without it).
 
-- `src/lib/idea-map.ts`: file parsing, the graph (steps, circles, problems), sorting, the map's column layout, the
+- `src/lib/idea-map.ts`: file parsing, the graph (steps, circles, problems), sorting, the
   text of a new file, the changes for a requirements edit, the text of a new question and the change that appends
   it, and the changes for editing an idea (`ideaEditChanges`), renaming or removing its links in other files
   (`renameLinkChanges`, `removeLinkChanges`) and editing or deleting a question (`questionEditChanges`,
@@ -239,4 +240,5 @@ several options are right (the platform refuses them without it).
 - Local data: the default seed (`scripts/setup-local-relay.mjs`) has the three real files. For a big set run
   `npx tsx scripts/seed-fake-ideas.ts --relay-url http://127.0.0.1:<relay port>` (150 made-up ideas in
   `Context Accelerator LOs (fake 150)`; `--count 12 --cycle` makes a small set with a circle), then pick the folder in
-  the page's header or with `?folder=`. The script refuses any relay that is not on localhost.
+  the page's header or with `?folder=`. The script refuses any relay that is not on localhost, and the page reads
+  other folders than the real one only with `VITE_LOCAL_RELAY=true` (`useIdeaMap.ts`).
