@@ -43,4 +43,14 @@ describe('fakeIdeas', () => {
     expect(graph.cycles).toHaveLength(1);
     expect(graph.cycles[0]).toHaveLength(3);
   });
+
+  it('makes a set of any size: no gap outside the set, no link to nothing', () => {
+    for (let count = 1; count <= 60; count++) {
+      const files = fakeIdeas({ count, cycle: true });
+      expect(files, String(count)).toHaveLength(count);
+      expect(files.some((f) => f.text.includes('undefined')), String(count)).toBe(false);
+    }
+    // From 30 on some requirements are not written yet
+    expect(graphOf(fakeIdeas({ count: 40 })).nodes.some((n) => !n.written)).toBe(true);
+  });
 });

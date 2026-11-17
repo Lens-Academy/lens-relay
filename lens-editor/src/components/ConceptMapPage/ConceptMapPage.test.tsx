@@ -1547,6 +1547,57 @@ describe('ConceptMapPage', () => {
       expect(document.activeElement).toBe(find());
     });
 
+    it('closes the panel with Escape for a link that cannot edit too, and gives the focus back', async () => {
+      renderPage('view');
+      box('Power-seeking').focus();
+      await userEvent.keyboard('{Enter}');
+      expect(panelOf('Power-seeking')).toBeTruthy();
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByTestId('idea-panel')).toBeNull();
+      expect(document.activeElement).toBe(box('Power-seeking'));
+    });
+
+    it('never saves with Enter on the Priority list: it moves on to the next field', async () => {
+      renderPage();
+      await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+      await userEvent.type(screen.getByLabelText('Name'), 'Deceptive alignment');
+      const priority = screen.getByLabelText('Priority');
+      priority.focus();
+      // Not prevented, the browser would send the form
+      expect(fireEvent.keyDown(priority, { key: 'Enter' })).toBe(false);
+      expect(document.activeElement).toBe(screen.getByLabelText('Topic'));
+      expect(map.createIdea).not.toHaveBeenCalled();
+    });
+
+    it('keeps the open form as it is when "Add concept" is clicked again', async () => {
+      renderPage();
+      await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+      await userEvent.type(screen.getByLabelText('Name'), 'Deceptive alignment');
+      await userEvent.click(box('Power-seeking'));
+      expect(names('requires')).toEqual(['Power-seeking']);
+      await userEvent.click(screen.getByRole('button', { name: 'Add concept' }));
+      expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Deceptive alignment');
+      expect(names('requires')).toEqual(['Power-seeking']);
+      // Still a change that Escape asks about
+      await userEvent.keyboard('{Escape}');
+      expect(screen.getByTestId('form-leave-note')).toBeTruthy();
+    });
+
+    it('lets go of a question form whose concept left the map: the page works on', async () => {
+      const view = renderPage();
+      await userEvent.click(box('Power-seeking'));
+      await userEvent.click(screen.getByRole('button', { name: 'Add question' }));
+      await userEvent.type(screen.getByLabelText('Question'), 'Why?');
+      // Renamed or deleted elsewhere meanwhile
+      map = { ...map, graph: buildIdeaGraph([{ name: 'Corrigibility', docId: 'co', text: file(3, 'low', 'Explain it.\n') }]), total: 1, read: 1 };
+      view.rerender(page());
+      expect(screen.queryByLabelText('Question')).toBeNull();
+      expect(screen.getByTestId('idea-notice').textContent).toBe('"Power-seeking" is not on the map any more, so the question was not added.');
+      expect((screen.getByRole('button', { name: 'Add concept' }) as HTMLButtonElement).disabled).toBe(false);
+      await userEvent.click(box('Corrigibility'));
+      expect(panelOf('Corrigibility')).toBeTruthy();
+    });
+
     it('has no letter keys in the panel of a link that cannot edit', async () => {
       renderPage('view');
       box('Power-seeking').focus();

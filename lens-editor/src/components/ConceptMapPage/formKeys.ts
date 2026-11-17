@@ -66,7 +66,8 @@ export function useFormKeys({ dirty, busy, onCancel }: {
       return;
     }
     const field = e.target;
-    if (!(field instanceof HTMLInputElement) || field.type === 'submit' || field.type === 'button') return;
+    // A select counts as a one-line field: Enter on one sends the form too
+    if (!(field instanceof HTMLInputElement || field instanceof HTMLSelectElement) || field.type === 'submit' || field.type === 'button') return;
     // The browser would send the form
     e.preventDefault();
     if (field.type === 'checkbox' || field.type === 'radio') return;

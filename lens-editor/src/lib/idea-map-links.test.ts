@@ -37,6 +37,17 @@ describe('impliedLinks', () => {
     expect(said(impliedLinks(links('a>b', 'b>x', 'x>b', 'b>c', 'a>c')))).toEqual(['a>c']);
   });
 
+  it('keeps one link into a circle from a concept outside it: two such links are not each the other\'s way round', () => {
+    const edges = links('a>b', 'a>c', 'b>c', 'c>b');
+    expect(said(impliedLinks(edges))).toEqual(['a>b']);
+    const left = shownLinks(edges, { links: 'all', hideImplied: true });
+    expect([...chainOf('a', left).after].sort()).toEqual(['b', 'c']);
+    expect([...chainOf('b', left).before].sort()).toEqual(['a', 'b', 'c']);
+    // Three into a circle of three: still one way in
+    const three = links('a>x', 'a>y', 'a>z', 'x>y', 'y>z', 'z>x');
+    expect([...chainOf('a', shownLinks(three, { links: 'all', hideImplied: true })).after].sort()).toEqual(['x', 'y', 'z']);
+  });
+
   it('what is left still leads from everything to everything it led to', () => {
     // A made-up map of 60 with links only to later ones, and many of them
     const edges: MapEdge[] = [];

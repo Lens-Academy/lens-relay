@@ -45,8 +45,9 @@ function reached(start: string, next: ReadonlyMap<string, readonly string[]>, fi
  * The links a chain of Requires already says: a Requires link A → C when
  * there is another way from A to C through Requires links, and a Helpful
  * first link A → C when Requires links lead from A to C at all. A link from a
- * concept that is in a circle of requirements is never implied. What is left
- * leads from every concept to all it led to before.
+ * concept that is in a circle of requirements is never implied, and the other
+ * way is one through links that are left. What is left leads from every
+ * concept to all it led to before.
  */
 export function impliedLinks(edges: readonly MapEdge[]): Set<MapEdge> {
   const next = requiredBy(edges);
@@ -66,7 +67,13 @@ export function impliedLinks(edges: readonly MapEdge[]): Set<MapEdge> {
     if (reach(edge.from).has(edge.from)) continue;
     // Another way there: by one of the other concepts that need `from`, not coming back through `from`
     const others = (next.get(edge.from) ?? []).filter((other) => other !== edge.to);
-    if (others.length > 0 && reached(edge.from, next, others, edge.from).has(edge.to)) implied.add(edge);
+    if (others.length > 0 && reached(edge.from, next, others, edge.from).has(edge.to)) {
+      implied.add(edge);
+      // Gone for the links looked at after it: no link is implied by a way through one that is itself left out
+      // (two links from outside into one circle would each be the other's way round, and both would go)
+      const list = next.get(edge.from)!;
+      list.splice(list.indexOf(edge.to), 1);
+    }
   }
   return implied;
 }

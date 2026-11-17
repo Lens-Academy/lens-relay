@@ -113,7 +113,7 @@ function ConceptMap({ folder, onFolder, view, onView }: {
   const [editBefore, setEditBefore] = useState<IdeaEdit | null>(null);
   /** The idea a question is added to, or whose question (`edit`: its place
    *  and what it said when the form opened) is edited. */
-  const [questionFor, setQuestionFor] = useState<{ key: string; edit?: { index: number; before: IdeaQuestion } } | null>(null);
+  const [questionFor, setQuestionFor] = useState<{ key: string; name: string; edit?: { index: number; before: IdeaQuestion } } | null>(null);
   /** The ideas selected to act on together (Ctrl/Cmd/Shift-click, the boxes of the table). */
   const [chosen, setChosen] = useState<readonly string[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -151,6 +151,12 @@ function ConceptMap({ folder, onFolder, view, onView }: {
     setLoaded(false);
   }
   if (!loaded && map.ready && map.total > 0 && map.read === map.total) setLoaded(true);
+  // The concept of the open question form was renamed or deleted elsewhere: without it the form cannot be
+  // shown or cancelled, and it would block the page (no click on a concept, no "Add concept") until a reload
+  if (questionFor && loaded && !graph.byKey.has(questionFor.key)) {
+    setQuestionFor(null);
+    setNotice({ text: `"${questionFor.name}" is not on the map any more, so the question was not ${questionFor.edit ? 'saved' : 'added'}.`, kind: 'note' });
+  }
 
   useEffect(() => {
     const want = focusNext.current;
@@ -280,7 +286,8 @@ function ConceptMap({ folder, onFolder, view, onView }: {
 
   // Escape: first the selection of several, then the panel. (A menu, a
   // confirm step or the list of a pick box that is open takes it before.)
-  const escape = choosing ? (chosenKeys.length > 0 ? 'selection' : selected !== null ? 'panel' : null) : null;
+  // The panel closes for a link that can only view too; only the selection needs one that can edit.
+  const escape = mode || questionFor ? null : chosenKeys.length > 0 ? 'selection' : selected !== null ? 'panel' : null;
   useEffect(() => {
     if (!escape) return;
     const onKey = (e: KeyboardEvent) => {
@@ -395,7 +402,10 @@ function ConceptMap({ folder, onFolder, view, onView }: {
               className={PRIMARY_BUTTON}
               disabled={!map.ready || questionFor !== null}
               title={questionFor ? QUESTION_OPEN : undefined}
-              onClick={() => openForm({ kind: 'add', name: '' })}
+              onClick={() => {
+                // Already open: opening it again would empty the picked requirements under what is typed
+                if (mode?.kind !== 'add' || mode.name !== '') openForm({ kind: 'add', name: '' });
+              }}
             >
               Add concept
             </button>
@@ -542,10 +552,10 @@ function ConceptMap({ folder, onFolder, view, onView }: {
                   return failed;
                 }}
                 onEditRequirements={() => editRequirements(selectedNode.key)}
-                onAddQuestion={() => setQuestionFor({ key: selectedNode.key })}
+                onAddQuestion={() => setQuestionFor({ key: selectedNode.key, name: selectedNode.name })}
                 onEditQuestion={(index) => {
                   const before = selectedNode.idea?.questionList[index];
-                  if (before) setQuestionFor({ key: selectedNode.key, edit: { index, before } });
+                  if (before) setQuestionFor({ key: selectedNode.key, name: selectedNode.name, edit: { index, before } });
                 }}
                 onDeleteQuestion={async (index) => {
                   const before = selectedNode.idea?.questionList[index];

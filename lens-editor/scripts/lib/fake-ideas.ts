@@ -71,21 +71,24 @@ export function fakeIdeas({ count = 150, cycle = false }: FakeIdeaOptions = {}):
       // Mostly the layer before, sometimes further back
       const back = rand() < 0.8 ? 1 : rand() < 0.7 ? 2 : 3;
       const from = inLayer(Math.max(0, layer - back));
+      // A tiny set has layers with nothing in them
+      if (from.length === 0) break;
       const target = pick(from);
       if (!requires[i].includes(target)) requires[i].push(target);
       if (from.length <= requires[i].length) break;
     }
     if (rand() < 0.2) {
       const target = pick(inLayer(Math.max(0, layer - 1 - Math.floor(rand() * 2))));
-      if (!requires[i].includes(target)) helpful[i].push(target);
+      if (target !== undefined && !requires[i].includes(target)) helpful[i].push(target);
     }
   });
   // A few requirements nobody has written yet
   const gaps = ['Unwritten gizmo basics (fake)', 'Unwritten sprocket theory (fake)', 'Unwritten doohickey ethics (fake)'];
   if (count >= 30) {
     gaps.forEach((gap, g) => {
-      unwritten[Math.floor(count / 3) + g * 17].push(gap);
-      unwritten[Math.floor(count / 2) + g * 11].push(gap);
+      // In a set smaller than 85 some of these places are past its end: no gap there
+      unwritten[Math.floor(count / 3) + g * 17]?.push(gap);
+      unwritten[Math.floor(count / 2) + g * 11]?.push(gap);
     });
   }
   if (cycle && count >= 3) {
