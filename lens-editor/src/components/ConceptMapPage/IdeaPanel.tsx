@@ -32,7 +32,7 @@ const keyTitle = (key: string) => `Key: ${key} (while this panel has the focus)`
 export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect, onClose, onCreate, onEdit, onDelete, onEditRequirements, onAddQuestion, onEditQuestion, onDeleteQuestion }: {
   node: IdeaNode;
   graph: IdeaGraph;
-  /** The doc a Learn link points to (bare uuid), or null. */
+  /** The doc a link under `## Lenses` points to (bare uuid), or null. */
   lensDoc: (link: string) => string | null;
   canEdit: boolean;
   /** What becomes of a deleted file, said before deleting ("… can be restored …"). */
@@ -198,7 +198,7 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
             <Part title="Why it matters">
               {idea.why ? <p className="whitespace-pre-wrap text-sm text-gray-800">{idea.why}</p> : NONE}
             </Part>
-            <Part title="Learn">
+            <Part title="Lenses">
               {idea.learn.length === 0 ? NONE : (
                 <ul className="list-disc space-y-1 pl-4 text-sm text-gray-800">
                   {idea.learn.map((line, i) => (
@@ -215,7 +215,7 @@ export function IdeaPanel({ node, graph, lensDoc, canEdit, deleteNote, onSelect,
                 </ul>
               )}
             </Part>
-            <Part title="Questions">
+            <Part title="Tests">
               {idea.questionList.length === 0 ? NONE : (
                 <ol className="list-decimal space-y-1 pl-5 text-sm text-gray-800" data-testid="idea-questions">
                   {idea.questionList.map((question, i) => {

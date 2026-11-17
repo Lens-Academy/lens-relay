@@ -4,7 +4,7 @@
  * `Lens Edu/Context Accelerator LOs/` holds one Markdown file per idea: the
  * file name is the idea's name, the frontmatter its `id`, `priority`, `topic`
  * (optional) and `courses`, the first paragraph its outcome, and `## Requires`,
- * `## Helpful first`, `## Why it matters`, `## Learn` and `## Questions` the
+ * `## Helpful first`, `## Why it matters`, `## Lenses` and `## Tests` the
  * rest (all optional, matched in any case). The format is shared with the
  * Lens platform, which shows the same ideas to learners: do not change it
  * here alone.
@@ -35,7 +35,7 @@ export const IDEA_COURSE_LINK = '../courses/in-development/Context Accelerator';
 export const PRIORITIES = ['high', 'medium', 'low'] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
-/** A piece of a Learn line: words, or a link with the words it shows. */
+/** A piece of a line under `## Lenses`: words, or a link with the words it shows. */
 export type LearnPart = { text: string } | { link: string; label: string };
 
 /** A `name:: value` field of a question, as written. */
@@ -79,13 +79,13 @@ export interface ParsedIdea {
   /** Names under `## Helpful first`. */
   helpful: string[];
   why: string;
-  /** The lines under `## Learn`, without their list marker. */
+  /** The lines under `## Lenses`, without their list marker. */
   learn: LearnPart[][];
-  /** The text under `## Learn`, as written. */
+  /** The text under `## Lenses`, as written. */
   learnText: string;
-  /** Link targets under `## Learn`. */
+  /** Link targets under `## Lenses`. */
   lenses: string[];
-  /** Question segments under `## Questions`. */
+  /** Question segments under `## Tests`. */
   questions: number;
   /** The same segments, in order: what each asks. */
   questionList: IdeaQuestion[];
@@ -100,7 +100,7 @@ const COMMENT = /%%[\s\S]*?%%/g;
 const WIKILINK = /\[\[([^[\]\n|]+)(?:\|([^[\]\n]*))?\]\]/g;
 const QUESTION_TITLE = /^question\s*(?::\s*(.*))?$/i;
 const QUESTION_TYPES = ['open', 'choice', 'fillblank', 'ranking'];
-const SECTIONS = ['requires', 'helpful first', 'why it matters', 'learn', 'questions'] as const;
+const SECTIONS = ['requires', 'helpful first', 'why it matters', 'lenses', 'tests'] as const;
 type SectionName = (typeof SECTIONS)[number];
 
 /** A name as ideas are matched by: whatever its case. */
@@ -268,7 +268,7 @@ export function parseIdea(raw: string): ParsedIdea {
     // The heading line itself is not part of a section's text
     const content = part.level === 2 ? part.content.slice(part.content.indexOf('\n') + 1 || part.content.length) : part.content;
     sections.set(current, (sections.get(current) ?? '') + content);
-    if (current !== 'questions' || part.level === 2) continue;
+    if (current !== 'tests' || part.level === 2) continue;
     const question = QUESTION_TITLE.exec(part.label);
     if (!question) continue;
     const type = (question[1] ?? '').trim();
@@ -277,7 +277,7 @@ export function parseIdea(raw: string): ParsedIdea {
     else if (!QUESTION_TYPES.includes(type.toLowerCase())) warnings.push(`Unknown question type "${type}"`);
   }
 
-  const learnText = (sections.get('learn') ?? '').trim();
+  const learnText = (sections.get('lenses') ?? '').trim();
   const learn = learnText
     .split('\n')
     .map((line) => line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').trim())
@@ -360,7 +360,7 @@ export interface IdeaGraph {
 }
 
 export interface IdeaGraphOptions {
-  /** Whether a Learn link (as written) finds a file; unknown when left out. */
+  /** Whether a link under `## Lenses` (as written) finds a file; unknown when left out. */
   lensExists?: (link: string) => boolean;
 }
 
@@ -506,7 +506,7 @@ function problemsOf(
   if (twins.length > 0) add('duplicate-id', `Same id as ${twins.map((t) => t.name).join(', ')}`, true);
   if (!idea.outcome) add('no-outcome', 'No outcome');
   if (idea.questions === 0) add('no-questions', 'No questions');
-  if (idea.lenses.length === 0) add('no-lens', 'No lens under Learn');
+  if (idea.lenses.length === 0) add('no-lens', 'No lens under Lenses');
   if (lensExists) {
     for (const link of idea.lenses) {
       if (!lensExists(link)) add('lens-missing', `Lens not found: ${linkName(link)}`, true);
@@ -619,7 +619,7 @@ export interface NewIdea {
   helpful: readonly string[];
   /** Link targets for `courses`; the Context Accelerator when left out. */
   courses?: readonly string[];
-  /** The text under `## Learn`: a line per lens. */
+  /** The text under `## Lenses`: a line per lens. */
   learn?: string;
 }
 
@@ -656,7 +656,7 @@ function yamlText(value: string): string {
 }
 const topicLines = (topic: string) => (topic ? [`topic: ${yamlText(topic)}`] : []);
 
-/** The text of a new idea file, with an empty `## Questions`. */
+/** The text of a new idea file, with an empty `## Tests`. */
 export function renderIdeaFile({ id, priority, topic, outcome, why, requires, helpful, courses, learn }: NewIdea): string {
   const whyText = oneParagraph(why);
   const learnText = cleanValue(learn);
@@ -667,8 +667,8 @@ export function renderIdeaFile({ id, priority, topic, outcome, why, requires, he
     `## Requires\n${linkLines(requires)}`,
     `## Helpful first\n${linkLines(helpful)}`,
     `## Why it matters\n${whyText ? `${whyText}\n` : ''}`,
-    `## Learn\n${learnText ? `${learnText}\n` : ''}`,
-    '## Questions\n',
+    `## Lenses\n${learnText ? `${learnText}\n` : ''}`,
+    '## Tests\n',
   ].join('\n');
 }
 
@@ -1233,7 +1233,7 @@ export function renderQuestion(question: NewQuestion & { id: string }): string {
 
 /**
  * The change that puts `segment` (a rendered question) at the end of the
- * `## Questions` section of `text` (a file as stored), a blank line after the
+ * `## Tests` section of `text` (a file as stored), a blank line after the
  * question before it; the heading is added at the end of the file when it is
  * missing. Nothing else in the file is touched. Refuses while the section
  * holds a pending suggestion.
@@ -1241,9 +1241,9 @@ export function renderQuestion(question: NewQuestion & { id: string }): string {
 export function questionChanges(text: string, segment: string): Changes {
   const { sectionOf, pendingIn } = scanFile(text);
   const block = segment.endsWith('\n') ? segment : `${segment}\n`;
-  const section = sectionOf('questions');
+  const section = sectionOf('tests');
   if (!section) {
-    return { changes: [{ from: text.length, to: text.length, insert: `${gapAtEnd(text)}## Questions\n${block}` }] };
+    return { changes: [{ from: text.length, to: text.length, insert: `${gapAtEnd(text)}## Tests\n${block}` }] };
   }
   if (pendingIn(section.from, section.to)) return { error: PENDING_QUESTIONS_ERROR };
   const last = section.body.filter((line) => line.text.trim() !== '').at(-1);
@@ -1300,7 +1300,7 @@ const sameQuestion = (a: IdeaQuestion, b: IdeaQuestion) =>
 
 const SEGMENT_HEADING = /^#{1,4}\s+(.+)$/;
 
-/** The question segments among the lines under `## Questions`, in order:
+/** The question segments among the lines under `## Tests`, in order:
  *  each with its heading line and the lines up to the next heading. */
 function questionSegments(body: readonly Line[], isHidden: (pos: number) => boolean) {
   const segments: Array<{ type: string; heading: Line; lines: Line[] }> = [];
@@ -1328,7 +1328,7 @@ const lineEnd = (line: Line) => line.from + line.text.length;
  */
 function findQuestion(text: string, index: number, before: IdeaQuestion) {
   const { isHidden, sectionOf, pendingIn, markedIn } = scanFile(text);
-  const section = sectionOf('questions');
+  const section = sectionOf('tests');
   // A suggestion can hide which question is meant: a suggested heading is not one yet
   const moved = { error: section && pendingIn(section.from, section.to) ? PENDING_QUESTIONS_ERROR : QUESTION_MOVED_ERROR };
   const segments = section ? questionSegments(section.body, isHidden) : [];
@@ -1471,7 +1471,7 @@ export interface IdeaEdit {
   courses: string[];
   outcome: string;
   why: string;
-  /** The text under `## Learn`, as written: a line per lens. */
+  /** The text under `## Lenses`, as written: a line per lens. */
   learn: string;
   /** Names of the ideas that must come first. */
   requires: string[];
@@ -1510,7 +1510,7 @@ export function ideaAsEdit(name: string, idea: ParsedIdea, dependents?: Dependen
 /** Why these values cannot be written to an idea file, or null (the name has
  *  its own check, `ideaNameProblem`). */
 export function ideaEditProblem(edit: Partial<Pick<IdeaEdit, 'topic' | 'courses' | 'outcome' | 'why' | 'learn'>>): string | null {
-  const texts = [['The outcome', edit.outcome], ['Why it matters', edit.why], ['Learn', edit.learn]] as const;
+  const texts = [['The outcome', edit.outcome], ['Why it matters', edit.why], ['Lenses', edit.learn]] as const;
   for (const [label, value] of texts) {
     if (/^#{1,2}(?!#)/m.test(cleanValue(value))) return `${label} cannot have a line that starts with # or ##: that starts a new part of the file.`;
   }
@@ -1529,7 +1529,7 @@ const sameIdeas = (a: readonly string[], b: readonly string[]) => sameList(a.map
  * parts the user changed are written: the frontmatter `priority`, `topic`
  * (its line is added after `priority`, and removed when emptied) and
  * `courses`, the outcome paragraph, the text under `## Why it matters` and
- * `## Learn`, and the link lines of `## Requires` and `## Helpful first` (as
+ * `## Lenses`, and the link lines of `## Requires` and `## Helpful first` (as
  * `requirementChanges` does). A part that was not there is added in the
  * format's order; an emptied section keeps its heading (an empty section is
  * fine in the format), emptied `courses` lose their key. The `id`, the
@@ -1656,7 +1656,7 @@ export function ideaEditChanges(text: string, before: IdeaEdit, after: IdeaEdit)
   }
   const sections = [
     { name: 'why it matters' as const, title: 'Why it matters', wanted: want.why, isChanged: changed.why, later: SECTIONS.slice(3) },
-    { name: 'learn' as const, title: 'Learn', wanted: want.learn, isChanged: changed.learn, later: SECTIONS.slice(4) },
+    { name: 'lenses' as const, title: 'Lenses', wanted: want.learn, isChanged: changed.learn, later: SECTIONS.slice(4) },
   ];
   for (const { name, title, wanted, isChanged, later } of sections) {
     if (!isChanged) continue;

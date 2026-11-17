@@ -123,10 +123,10 @@ export function fakeIdeas({ count = 150, cycle = false }: FakeIdeaOptions = {}):
         '## Why it matters',
         `Without the ${subject}, the ideas that build on it make no sense. (Made up.)`,
         '',
-        '## Learn',
+        '## Lenses',
         ...(noLens ? [] : ['- Start with [[../Lenses/Demo Lens|the demo lens]] (5 minutes).']),
         '',
-        '## Questions',
+        '## Tests',
         ...Array.from({ length: questions }, (_, q) => [
           '#### Question: Open',
           `id:: ${uuid()}`,

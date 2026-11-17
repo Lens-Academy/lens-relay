@@ -165,11 +165,12 @@ concept and its direct children (backlinkers in `Concepts/` whose parents includ
 ## Concept map page (Context Accelerator)
 
 `/concept-map` (••• menu, "Concept Map") draws the idea files of `Lens Edu/Context Accelerator LOs/` as a graph: one
-file per idea, `## Requires` and `## Helpful first` hold wikilinks to other ideas, a link to a file that does not
+file per idea (frontmatter `id`, `priority`, `topic`, `courses`; the outcome paragraph; then `## Requires`,
+`## Helpful first`, `## Why it matters`, `## Lenses`, `## Tests`; only these heading names are read). `## Requires` and `## Helpful first` hold wikilinks to other ideas, a link to a file that does not
 exist is an idea "not written yet". Four views (Map, Order, Table, Walk through) and a side panel; links that can edit also add an
 idea, create a not-written-yet one, change an idea's two requirement lists (only those lines are rewritten) and add a
-question (one typed `#### Question: Open|Choice` segment appended to `## Questions`). They also edit every part of an
-idea ("Edit": name, outcome, priority, topic, courses, why, learn, both lists), rename it, delete it, and edit or delete a
+question (one typed `#### Question: Open|Choice` segment appended to `## Tests`). They also edit every part of an
+idea ("Edit": name, outcome, priority, topic, courses, why, the lenses, both lists), rename it, delete it, and edit or delete a
 question. Rules of every edit: only the part that changed is rewritten and the rest of the file stays byte for byte;
 the save carries what the form was opened with and writes nothing when the file no longer says that; a part that
 holds a pending suggestion or a comment is refused. An emptied section keeps its heading. A rename is the relay's
@@ -186,7 +187,7 @@ several options are right (the platform refuses them without it).
   (`renameLinkChanges`, `removeLinkChanges`) and editing or deleting a question (`questionEditChanges`,
   `questionDeleteChanges`). Pure. The platform reads the same files for the learner's
   tree, so the format is a contract: change it on both sides or not at all.
-- `src/components/ConceptMapPage/`: the page, the three views, the panel, the two forms, and `useIdeaMap.ts` (reads
+- `src/components/ConceptMapPage/`: the page, the four views, the panel, the two forms, and `useIdeaMap.ts` (reads
   the folder through `useSnapshots`, writes through `createDocument` and `withLiveDoc`). Everything but the hook
   imports only `contexts/AuthContext`, `lib/relay-api` (`PathExistsError`), `components/DocLink` and `lib/idea-map`,
   so the page can be built outside the editor with another `useIdeaMap`: keep it that way.
@@ -207,7 +208,7 @@ several options are right (the platform refuses them without it).
     Topic grid (boxes only, links for the concept pointed at), Tree (`idea-map-tree.ts`: every concept under the one
     it builds on most directly), Organic (`idea-map-organic.ts`: groups as islands, one arrow per strongly linked
     pair), Left to right / Top to bottom (`idea-map-layered.ts`: columns by dagre, square lines on tracks of their
-    own), Left to right (ELK) and Around one concept. A new layout has to pass the checks every layout passes in
+    own) and Around one concept. A new layout has to pass the checks every layout passes in
     `idea-map-layouts.test.ts` (no box on another, the same drawing every time, no line through a box where it
     promises that).
   - Topics: the frontmatter `topic:` of a concept file is the author's own group ("Topic (yours)" in Group by, a
@@ -218,9 +219,6 @@ several options are right (the platform refuses them without it).
     what a chain of Requires says already (the transitive reduction). Pointing at a concept or selecting it lights
     its whole chain (`chainOf`) and dims the rest. A `quiet` line (between groups, outside the tree, all of the grid)
     is drawn only while it is part of that chain.
-  - ELK (`src/lib/idea-map-elk.ts`, loaded by `idea-map-elk-load.ts`, the one file that imports the `elkjs`
-    package): made off the page as a promise, in a chunk of its own (1.5 MB) fetched when the layout is first
-    chosen; the page's own left-to-right drawing stands in until it answers or when it cannot be loaded.
   - `mapView.ts` has the view that shows the map whole (below the row of controls, `CONTROL_ROOM`); a map shown
     whole is fitted again when its frame changes size, one moved or zoomed by hand is left alone.
   - Walk through (`IdeaWalkView.tsx`, `WalkOverview.tsx`, `WalkStep.tsx`, orders in `src/lib/idea-map-walk.ts`): the

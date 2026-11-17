@@ -34,7 +34,7 @@ export interface IdeaFields {
   why: string;
   /** Link targets of the `courses` list, one per line in the form. */
   courses: string[];
-  /** The text under `## Learn`, as written. */
+  /** The text under `## Lenses`, as written. */
   learn: string;
 }
 
@@ -282,7 +282,7 @@ export function IdeaForm({ mode, initial, graph, fileNames, picks, onPicks, befo
         {mode.kind !== 'requirements' && (
           <>
             <div className="mt-4">
-              <label htmlFor="idea-learn" className={LABEL}>Learn</label>
+              <label htmlFor="idea-learn" className={LABEL}>Lenses</label>
               <GrowingTextarea
                 id="idea-learn"
                 className="lens-input w-full font-mono text-xs"

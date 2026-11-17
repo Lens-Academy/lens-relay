@@ -10,7 +10,7 @@ const COLUMNS: Array<{ id: IdeaSortColumn; label: string; title?: string; number
   { id: 'step', label: 'Step', title: 'Step 1 needs nothing first', number: true },
   { id: 'requires', label: 'Requires' },
   { id: 'neededFor', label: 'Needed for' },
-  { id: 'lenses', label: 'Lenses', title: 'Lenses under Learn', number: true },
+  { id: 'lenses', label: 'Lenses', title: 'Links under ## Lenses', number: true },
   { id: 'questions', label: 'Questions', number: true },
   { id: 'problems', label: 'Problems' },
 ];

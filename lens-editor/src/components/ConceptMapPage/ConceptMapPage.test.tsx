@@ -19,7 +19,7 @@ const graph = buildIdeaGraph([
   {
     name: 'Instrumental convergence',
     docId: 'ic',
-    text: file(1, 'high', `Explain why agents share sub-goals.\n\n## Helpful first\n- [[Orthogonality thesis]]\n\n## Why it matters\nIt underlies the risk argument.\n\n## Learn\n- Start with [[../Lenses/A lens|the first lens]] (11 minutes).\n- [[../Lenses/Not there]]\n\n## Questions\n${QUESTION}${QUESTION}`),
+    text: file(1, 'high', `Explain why agents share sub-goals.\n\n## Helpful first\n- [[Orthogonality thesis]]\n\n## Why it matters\nIt underlies the risk argument.\n\n## Lenses\n- Start with [[../Lenses/A lens|the first lens]] (11 minutes).\n- [[../Lenses/Not there]]\n\n## Tests\n${QUESTION}${QUESTION}`),
   },
   {
     name: 'Power-seeking',
@@ -139,7 +139,7 @@ describe('ConceptMapPage', () => {
       // (the box to select it,) name, priority, topic, step, requires, needed for, lenses, questions, problems
       expect(cells).toEqual(['Instrumental convergence', 'High', '', '1', '0', '1 · Power-seeking', '2', '2', 'Lens not found: Not there']);
       expect(rows()[3].querySelectorAll('td')[3].textContent).toBe('Risk arguments');
-      expect(rows()[0].querySelector('td:last-child')!.textContent).toBe('No outcomeNo questionsNo lens under Learn');
+      expect(rows()[0].querySelector('td:last-child')!.textContent).toBe('No outcomeNo questionsNo lens under Lenses');
       expect(rows()[2].querySelector('td:last-child')!.textContent).toBe('Not written yet');
 
       await userEvent.click(screen.getByRole('button', { name: /Questions/ }));
@@ -218,7 +218,7 @@ describe('ConceptMapPage', () => {
       expect(panel.getByText('Explain why agents share sub-goals.')).toBeTruthy();
       expect(panel.getByText('It underlies the risk argument.')).toBeTruthy();
       expect([...screen.getByTestId('idea-questions').querySelectorAll('li')].map((li) => li.textContent)).toEqual(['OpenWhy?EditDelete', 'OpenWhy?EditDelete']);
-      // Learn lines as written: the alias as a link, a lens with no file marked
+      // Lenses lines as written: the alias as a link, a lens with no file marked
       const lens = panel.getByRole('link', { name: 'the first lens' });
       expect(lens.closest('li')!.textContent).toBe('Start with the first lens (11 minutes).');
       expect(panel.getByText('Not there').tagName).toBe('SPAN');
@@ -434,11 +434,11 @@ describe('ConceptMapPage', () => {
       await userEvent.type(screen.getByLabelText('Name'), 'Goals');
       expect(screen.getByLabelText('Courses')).toHaveProperty('value', '../courses/in-development/Context Accelerator');
       fireEvent.change(screen.getByLabelText('Courses'), { target: { value: '../courses/A\n\n ../courses/B ' } });
-      fireEvent.change(screen.getByLabelText('Learn'), { target: { value: '- [[../Lenses/A lens]]\n## Questions' } });
+      fireEvent.change(screen.getByLabelText('Lenses'), { target: { value: '- [[../Lenses/A lens]]\n## Tests' } });
       await userEvent.click(screen.getByRole('button', { name: 'Create concept' }));
-      expect(screen.getByRole('alert').textContent).toMatch(/^Learn cannot/);
+      expect(screen.getByRole('alert').textContent).toMatch(/^Lenses cannot/);
       expect(map.createIdea).not.toHaveBeenCalled();
-      fireEvent.change(screen.getByLabelText('Learn'), { target: { value: '- [[../Lenses/A lens]]: first' } });
+      fireEvent.change(screen.getByLabelText('Lenses'), { target: { value: '- [[../Lenses/A lens]]: first' } });
       await userEvent.click(screen.getByRole('button', { name: 'Create concept' }));
       await waitFor(() => expect(map.createIdea).toHaveBeenCalledWith(expect.objectContaining({
         name: 'Goals', courses: ['../courses/A', '../courses/B'], learn: '- [[../Lenses/A lens]]: first',
@@ -805,7 +805,7 @@ describe('ConceptMapPage', () => {
     const CHOICE = '#### Question: Choice\nid:: c\ncontent:: Which?\noptions::\n- [x] A\n- B\nshuffle:: true\nmax-select:: 1\nexplanation:: Because.\n';
     const OPEN = '#### Question: Open\nid:: o\ncontent:: Why?\nSay it in your words.\nassessment-instructions::\n- 60: a\n- 40: b\nmax-words:: 80\n';
     const withQuestions = () => buildIdeaGraph([
-      { name: 'Goals', docId: 'go', text: file(1, 'high', `Say what a goal is.\n\n## Questions\n${OPEN}\n${RANKING}\n${CHOICE}`) },
+      { name: 'Goals', docId: 'go', text: file(1, 'high', `Say what a goal is.\n\n## Tests\n${OPEN}\n${RANKING}\n${CHOICE}`) },
       { name: 'Plans', docId: 'pl', text: file(2, 'low', 'Plan.\n\n## Requires\n- [[Goals]]\n') },
       { name: 'Aims', docId: 'ai', text: file(3, 'low', 'Aim.\n\n## Requires\n- [[Goals]]\n\n## Helpful first\n- [[Plans]]\n') },
       { name: 'Hopes', docId: 'ho', text: file(4, 'low', 'Hope.\n\n## Helpful first\n- [[Goals]]\n') },
@@ -821,7 +821,7 @@ describe('ConceptMapPage', () => {
       expect(screen.getByLabelText('Outcome')).toHaveProperty('value', 'Explain why agents share sub-goals.');
       expect(screen.getByLabelText('Priority')).toHaveProperty('value', 'high');
       expect(screen.getByLabelText('Why it matters')).toHaveProperty('value', 'It underlies the risk argument.');
-      expect(screen.getByLabelText('Learn')).toHaveProperty('value', '- Start with [[../Lenses/A lens|the first lens]] (11 minutes).\n- [[../Lenses/Not there]]');
+      expect(screen.getByLabelText('Lenses')).toHaveProperty('value', '- Start with [[../Lenses/A lens|the first lens]] (11 minutes).\n- [[../Lenses/Not there]]');
       expect(screen.getByLabelText('Courses')).toHaveProperty('value', '');
       expect(names('helpful')).toEqual(['Orthogonality thesis']);
       expect(box('Instrumental convergence').textContent).toBe('Instrumental convergenceThis concept');
