@@ -3,7 +3,6 @@ import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   IDEAS_FOLDER,
-  IDEAS_SHARED_FOLDER,
   WRITE_IT_FIRST,
   ideaAsEdit,
   ideaKey,
@@ -67,7 +66,7 @@ type FocusTarget = { to: 'panel' } | { to: 'idea'; key: string } | { to: 'find' 
  */
 export function ConceptMapPage() {
   const [params, setParams] = useSearchParams();
-  // ?folder= picks a test set next to the real folder (local relay only)
+  // ?folder= picks a test set next to the real folder; only a local relay has them (useIdeaMap reads the real folder anywhere else)
   const wanted = params.get('folder');
   const folder = wanted?.startsWith(IDEAS_FOLDER) ? wanted : IDEAS_FOLDER;
   const view: ViewId = VIEWS.find((v) => v.id === params.get('view'))?.id ?? 'map';
@@ -449,7 +448,7 @@ function ConceptMap({ folder, onFolder, view, onView }: {
             <p className="px-6 py-6 text-sm text-gray-500">Loading…</p>
           ) : map.total === 0 ? (
             <p className="px-6 py-6 text-sm text-gray-500">
-              {map.profiles ? 'No concepts in this profile yet.' : `No concepts in ${IDEAS_SHARED_FOLDER}/${folder} yet.`}{canEdit && ' Add the first one with "Add concept".'}
+              {map.profiles ? 'No concepts in this profile yet.' : `No concepts in ${map.folderPath.replace(/^\//, '')} yet.`}{canEdit && ' Add the first one with "Add concept".'}
             </p>
           ) : !loaded ? (
             <p className="px-6 py-6 text-sm text-gray-500" role="status">Reading {map.read} of {map.total} concepts…</p>

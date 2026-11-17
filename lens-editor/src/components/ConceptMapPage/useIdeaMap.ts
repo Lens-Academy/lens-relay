@@ -78,7 +78,7 @@ export interface IdeaProfiles {
 export interface IdeaMap {
   /** The folder shown, as a path in the tree ("/Lens Edu/Context Accelerator LOs"). */
   folderPath: string;
-  /** Folders that hold ideas: the real one, and test sets next to it on a local relay. */
+  /** Folders that hold ideas: the real one, and (on a local relay only) test sets next to it. */
   folders: string[];
   graph: IdeaGraph;
   /** Names of every file in the folder, skipped ones (`_Template`) included. */
@@ -90,7 +90,7 @@ export interface IdeaMap {
   ready: boolean;
   /** Read every file again. */
   refresh: () => void;
-  /** The doc a Learn link points to (bare uuid), or null. */
+  /** The doc a link under `## Lenses` points to (bare uuid), or null. */
   lensDoc: (link: string) => string | null;
   /**
    * Write a new idea file; resolves once it is on the map and its text is
@@ -104,7 +104,7 @@ export interface IdeaMap {
   /** Change an idea's requirements from `before` to `after`; resolves to an
    *  error to show, or null. */
   saveRequirements: (key: string, before: Picks, after: Picks) => Promise<string | null>;
-  /** Add a question at the end of an idea's `## Questions`; resolves to an
+  /** Add a question at the end of an idea's `## Tests`; resolves to an
    *  error to show, or null. */
   addQuestion: (key: string, question: NewQuestion) => Promise<string | null>;
   /**
@@ -160,12 +160,18 @@ export interface IdeaMap {
 }
 
 /**
- * The ideas of `Lens Edu/<folder>/` as a graph, read through the snapshot
+ * The ideas of `Lens Edu/Context Accelerator LOs/` (on a local relay: of the
+ * folder asked for) as a graph, read through the snapshot
  * cache (three files at a time, lib/embed-docs.ts) and kept fresh while the
  * page is open: every file is read again when the page opens, on window
  * focus and every few minutes (useSnapshots).
  */
-export function useIdeaMap(folder: string = IDEAS_FOLDER): IdeaMap {
+export function useIdeaMap(asked: string = IDEAS_FOLDER): IdeaMap {
+  // Anywhere but on a local relay there is the real folder and nothing else:
+  // a `?folder=` from a local link must not make the page read, offer or
+  // (with "Add concept") create a folder next to it.
+  const testSets = import.meta.env.VITE_LOCAL_RELAY === 'true';
+  const folder = testSets ? asked : IDEAS_FOLDER;
   const { metadata, folderDocs } = useNavigation();
   const { displayName } = useDisplayName();
   const displayNameRef = useRef(displayName);
@@ -176,13 +182,13 @@ export function useIdeaMap(folder: string = IDEAS_FOLDER): IdeaMap {
 
   const folders = useMemo(() => {
     const found = new Set<string>([IDEAS_FOLDER]);
-    for (const path of Object.keys(metadata)) {
+    for (const path of testSets ? Object.keys(metadata) : []) {
       if (!path.startsWith(shared)) continue;
       const top = path.slice(shared.length).split('/')[0];
       if (top.toLowerCase().startsWith(IDEAS_FOLDER.toLowerCase()) && !/\.\w+$/.test(top)) found.add(top);
     }
     return [...found].sort((a, b) => a.length - b.length || a.localeCompare(b));
-  }, [metadata, shared]);
+  }, [metadata, shared, testSets]);
 
   const files = useMemo(() => {
     const prefix = `${folderPath}/`;

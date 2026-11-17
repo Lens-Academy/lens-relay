@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import * as Y from 'yjs';
@@ -52,11 +52,11 @@ Explain why power helps with most goals.
 ## Why it matters
 It is the core of the risk argument. %% keep this %%
 
-## Learn
+## Lenses
 - Start with [[../Lenses/A lens|the first lens]] (11 minutes).
 - [[../Lenses/Not there]]
 
-## Questions
+## Tests
 #### Question: Open
 id:: 22222222-2222-4222-8222-222222222222
 content:: Why?
@@ -108,6 +108,8 @@ beforeEach(() => {
 });
 
 describe('useIdeaMap', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it('reads the idea files directly in the folder, not _Template or subfolders', async () => {
     const { result } = renderMap();
     await waitFor(() => expect(result.current.read).toBe(2));
@@ -118,14 +120,23 @@ describe('useIdeaMap', () => {
     expect(result.current.folderPath).toBe('/Lens Edu/Context Accelerator LOs');
   });
 
-  it('lists the test folders next to the real one, and reads the one asked for', async () => {
+  it('on a local relay lists the test folders next to the real one, and reads the one asked for', async () => {
+    vi.stubEnv('VITE_LOCAL_RELAY', 'true');
     const { result } = renderMap('Context Accelerator LOs (fake 150)');
     await waitFor(() => expect(result.current.read).toBe(1));
     expect(result.current.folders).toEqual(['Context Accelerator LOs', 'Context Accelerator LOs (fake 150)']);
     expect(result.current.graph.nodes.map((n) => n.name)).toEqual(['Wobbly teapot (fake 001)']);
   });
 
-  it('finds the file of a Learn link and reports a lens that has none', async () => {
+  it('anywhere else knows the real folder only, whatever folder is asked for', async () => {
+    const { result } = renderMap('Context Accelerator LOs (fake 150)');
+    await waitFor(() => expect(result.current.read).toBe(2));
+    expect(result.current.folders).toEqual(['Context Accelerator LOs']);
+    expect(result.current.folderPath).toBe('/Lens Edu/Context Accelerator LOs');
+    expect(result.current.graph.nodes.map((n) => n.name)).toEqual(['Instrumental convergence', 'Orthogonality thesis', 'Power-seeking']);
+  });
+
+  it('finds the file of a link under Lenses and reports a lens that has none', async () => {
     const { result } = renderMap();
     await waitFor(() => expect(result.current.read).toBe(2));
     expect(result.current.lensDoc('../Lenses/A lens')).toBe('lens');
@@ -788,16 +799,17 @@ describe('useIdeaMap', () => {
         '',
         '## Why it matters',
         '',
-        '## Learn',
+        '## Lenses',
         '',
-        '## Questions',
+        '## Tests',
         '$',
       ].join('\n')));
       // The folder is there already: it is not created again
       expect(folderDoc.getMap('filemeta_v0').size).toBe(1);
     });
 
-    it('makes the folder first when it does not exist yet', async () => {
+    it('makes the folder first when it does not exist yet (a new test set on a local relay)', async () => {
+      vi.stubEnv('VITE_LOCAL_RELAY', 'true');
       vi.mocked(createDocument).mockImplementation(async (_folderDoc, _path, _type, text) => {
         texts.created = text!;
         return 'created';
