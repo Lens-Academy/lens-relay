@@ -171,8 +171,6 @@ describe('layoutFor', () => {
     const { graph, keys, edges, heightOf } = fixtureMap(40);
     expect(layoutFor(drawnAs('columns'), { graph, edges, heightOf, sizes: SIZES })).toEqual({ ...layoutLayered(keys, edges, heightOf, SIZES), frames: [] });
     expect(layoutFor(drawnAs('rows'), { graph, edges, heightOf, sizes: SIZES })).toEqual({ ...layoutLayered(keys, edges, heightOf, SIZES, 'down'), frames: [] });
-    // ELK's layout is made elsewhere, as a promise: until it is there, the page's own
-    expect(layoutFor(drawnAs('elk'), { graph, edges, heightOf, sizes: SIZES })).toEqual(layoutFor(drawnAs('columns'), { graph, edges, heightOf, sizes: SIZES }));
   });
 
   it('has nothing to draw for an empty map, whatever the layout', () => {
@@ -440,5 +438,6 @@ describe('layoutFor', () => {
       layoutFor(choice, { graph, edges, heightOf, sizes: SIZES });
       expect(performance.now() - start).toBeLessThan(1500);
     }
-  });
+    // Forty drawings in all: more than the default 5 s on a busy machine
+  }, 60_000);
 });

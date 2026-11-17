@@ -28,7 +28,7 @@ describe('the layout switch of the drawn map', () => {
   it('starts left to right, with no frames and no "Group by"', () => {
     render(<IdeaMapDrawing {...views} />);
     expect(screen.getByLabelText<HTMLSelectElement>('Layout').value).toBe('columns');
-    expect([...screen.getByLabelText<HTMLSelectElement>('Layout').options].map((option) => option.text)).toEqual(['Groups', 'Topic grid', 'Tree', 'Organic', 'Left to right', 'Top to bottom', 'Left to right (ELK)', 'Around one concept']);
+    expect([...screen.getByLabelText<HTMLSelectElement>('Layout').options].map((option) => option.text)).toEqual(['Groups', 'Topic grid', 'Tree', 'Organic', 'Left to right', 'Top to bottom', 'Around one concept']);
     // Each says what it is good for
     for (const option of screen.getByLabelText<HTMLSelectElement>('Layout').options) expect(option.title.length).toBeGreaterThan(20);
     expect(screen.queryByLabelText('Group by')).toBeNull();
@@ -188,17 +188,6 @@ describe('the layout switch of the drawn map', () => {
     fireEvent.pointerEnter(box('Alone'));
     expect(dimmed()).toEqual(['A1', 'A2', 'A3', 'B1', 'B2', 'B3']);
     expect(chain('near') + chain('far')).toBe(0);
-  });
-
-  it('ELK: the page\'s own drawing stands in, and says so when ELK cannot be loaded', async () => {
-    render(<IdeaMapDrawing {...views} />);
-    choose('Layout', 'elk');
-    expect(screen.getByTestId('map-elk-note').textContent).toContain('laying out');
-    expect(document.querySelectorAll('[data-idea]')).toHaveLength(7);
-    // The package is not there in the tests
-    expect(await screen.findByText(/ELK could not be loaded/)).toBeTruthy();
-    expect(document.querySelectorAll('[data-idea]')).toHaveLength(7);
-    expect(lines()).toHaveLength(7);
   });
 
   it('shows the whole map again after the layout changed', () => {
