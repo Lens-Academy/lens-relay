@@ -1040,8 +1040,15 @@ function mergeChanges(changes: TextChange[]): TextChange[] {
   return merged;
 }
 
-/** `text` with `changes` made (they are in text order and do not overlap). */
+/** Whether `changes` are in text order and do not overlap: what `applyChanges` and the writer of the page take.
+ *  Made from the last one back, changes in any other order would land at positions that have moved. */
+export function inTextOrder(changes: readonly TextChange[]): boolean {
+  return changes.every((change, at) => change.from <= change.to && (at === 0 || change.from >= changes[at - 1].to));
+}
+
+/** `text` with `changes` made (they are in text order and do not overlap: anything else throws). */
 export function applyChanges(text: string, changes: readonly TextChange[]): string {
+  if (!inTextOrder(changes)) throw new Error('applyChanges: the changes are not in text order');
   let out = text;
   for (const change of [...changes].reverse()) {
     out = out.slice(0, change.from) + change.insert + out.slice(change.to);
@@ -1669,7 +1676,8 @@ function requirementLinks(scan: ReturnType<typeof scanFile>, name: string) {
  * `newName` wherever its `## Requires` and `## Helpful first` link to
  * `oldName`: only the name inside the link changes (a path before it, a
  * `#heading` and the words shown stay). No link, no changes. Refuses while
- * such a link is inside a pending suggestion.
+ * such a link is inside a pending suggestion, and when the file would not
+ * read back with just that name changed.
  */
 export function renameLinkChanges(text: string, oldName: string, newName: string): Changes {
   const scan = scanFile(text);
@@ -1681,7 +1689,18 @@ export function renameLinkChanges(text: string, oldName: string, newName: string
     const from = link.from + 2 + (link.target.length - file.length) + space.length;
     changes.push({ from, to: from + name.length, insert: newName.trim() });
   }
-  return { changes };
+  // In text order (a file may have Helpful first before Requires), as every writer needs them
+  const merged = mergeChanges(changes);
+  if (merged.length === 0) return { changes: [] };
+  // Read it back: the two lists with the new name for the old, the rest as it was
+  const was = parseIdea(text);
+  const result = parseIdea(applyChanges(text, merged));
+  const oldKey = ideaKey(oldName);
+  const keySet = (names: readonly string[]) => [...new Set(names.map(ideaKey))].sort();
+  const renamed = (names: readonly string[]) => keySet(names.map((name) => (ideaKey(name) === oldKey ? newName : name)));
+  const reads = sameList(keySet(result.requires), renamed(was.requires)) && sameList(keySet(result.helpful), renamed(was.helpful))
+    && restOf(result, ['requires', 'helpful']) === restOf(was, ['requires', 'helpful']);
+  return reads ? { changes: merged } : { error: UNSAFE_IDEA_ERROR };
 }
 
 /**

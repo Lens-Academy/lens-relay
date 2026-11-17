@@ -174,7 +174,7 @@ idea ("Edit": name, outcome, priority, topic, courses, why, the lenses, both lis
 question. Rules of every edit: only the part that changed is rewritten and the rest of the file stays byte for byte;
 the save carries what the form was opened with and writes nothing when the file no longer says that; a part that
 holds a pending suggestion or a comment is refused; a changed file is read back before it is written, and refused
-when anything but the part meant would read differently (`requirementChanges`, `ideaEditChanges`). An emptied section keeps its heading. A rename is the relay's
+when anything but the part meant would read differently (`requirementChanges`, `ideaEditChanges`, `renameLinkChanges`). Changes are always in text order (`mergeChanges`); `applyChanges` and the hook's writer refuse any other order. An emptied section keeps its heading. A rename is the relay's
 move (`movePath`, which rewrites links in other files; links it left under Requires / Helpful first are rewritten by
 `renameLinkChanges`). A delete takes the idea's links out of the other ideas' two lists, then trashes the file
 (`trashPath`: `Lens Edu/_trash/`, restorable); it stops when a file outside the map links to the idea. Questions of

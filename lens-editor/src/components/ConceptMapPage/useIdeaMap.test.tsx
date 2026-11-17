@@ -418,6 +418,26 @@ describe('useIdeaMap', () => {
       expect(text('ps')).toBe(POWER.replace('- [[Instrumental convergence]]', '- [[Convergence]]'));
     });
 
+    it('rewrites the links the relay left in a file that has Helpful first before Requires', async () => {
+      const turned = '---\nid: 11111111-1111-4111-8111-111111111111\npriority: high\n---\nExplain it.\n\n## Helpful first\n- [[Instrumental convergence]]\n- [[Kept]]\n\n## Requires\n- [[Instrumental convergence]]\n- [[Other]]\n';
+      texts.ps = turned;
+      try {
+        const text = liveDocs();
+        vi.mocked(movePath).mockResolvedValue({} as Awaited<ReturnType<typeof movePath>>);
+        const { result } = renderMap();
+        await waitFor(() => expect(result.current.read).toBe(2));
+        const convergence = ideaAsEdit('Instrumental convergence', parseIdea(texts.ic));
+        let failed: string | null = 'not run';
+        await act(async () => {
+          failed = await result.current.editIdea('instrumental convergence', convergence, { ...convergence, name: 'A much longer name for convergence' });
+        });
+        expect(failed).toBeNull();
+        expect(text('ps')).toBe(turned.replaceAll('[[Instrumental convergence]]', '[[A much longer name for convergence]]'));
+      } finally {
+        texts.ps = POWER;
+      }
+    });
+
     it('leaves a link alone that the relay rewrote already', async () => {
       const text = liveDocs();
       vi.mocked(movePath).mockImplementation(async () => {

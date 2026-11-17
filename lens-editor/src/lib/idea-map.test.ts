@@ -1758,6 +1758,29 @@ describe('renameLinkChanges', () => {
   it('gives a file the map reads with the new name', () => {
     expect(parseIdea(renamed(FILE) as string)).toMatchObject({ requires: ['New name', 'Other'], helpful: ['New name'] });
   });
+
+  it('gives its changes in text order, also for a file with Helpful first before Requires', () => {
+    const TURNED = 'Outcome.\n\n## Helpful first\n- [[Old name]]\n- [[Kept]]\n\n## Requires\n- [[Old name]]\n- [[Other]]\n\n## Lenses\n- [[Old name]]\n';
+    for (const newName of ['A much longer new name', 'X']) {
+      const result = renameLinkChanges(TURNED, 'Old name', newName);
+      if ('error' in result) throw new Error(result.error);
+      expect(result.changes.map((change) => change.from)).toEqual([...result.changes.map((change) => change.from)].sort((a, b) => a - b));
+      expect(applyChanges(TURNED, result.changes)).toBe(`Outcome.\n\n## Helpful first\n- [[${newName}]]\n- [[Kept]]\n\n## Requires\n- [[${newName}]]\n- [[Other]]\n\n## Lenses\n- [[Old name]]\n`);
+    }
+  });
+
+  it('refuses a name the file would not read back as the link', () => {
+    expect(renamed('## Requires\n- [[Old name]]\n')).toBe('## Requires\n- [[New name]]\n');
+    expect(renameLinkChanges('## Requires\n- [[Old name]]\n', 'Old name', 'New]] and [[Else')).toEqual({ error: expect.stringContaining('cannot change safely') });
+  });
+});
+
+describe('applyChanges', () => {
+  it('refuses changes that are not in text order instead of writing at stale positions', () => {
+    expect(applyChanges('abcdef', [{ from: 1, to: 2, insert: 'X' }, { from: 4, to: 5, insert: 'YY' }])).toBe('aXcdYYf');
+    expect(() => applyChanges('abcdef', [{ from: 4, to: 5, insert: 'YY' }, { from: 1, to: 2, insert: 'X' }])).toThrow(/text order/);
+    expect(() => applyChanges('abcdef', [{ from: 1, to: 3, insert: 'X' }, { from: 2, to: 5, insert: 'Y' }])).toThrow(/text order/);
+  });
 });
 
 describe('removeLinkChanges', () => {

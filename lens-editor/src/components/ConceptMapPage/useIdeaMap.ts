@@ -15,6 +15,7 @@ import {
   dependentLinkChanges,
   ideaEditChanges,
   ideaKey,
+  inTextOrder,
   ideaNameProblem,
   mergePicks,
   newQuestionProblem,
@@ -51,6 +52,9 @@ import {
 } from '../../lib/relay-api';
 import { useSnapshots } from '../ConceptRowsPanel/useConceptRows';
 import { listed } from './ideaLook';
+
+/** What a save says when its changes are not in text order (a fault of this page: nothing is written). */
+const UNORDERED_CHANGES_ERROR = 'Nothing was written to this file: the change could not be worked out safely. Edit it in the file.';
 
 /**
  * Profiles: separate sets of concepts to switch between. Optional: a hook
@@ -244,6 +248,8 @@ export function useIdeaMap(asked: string = IDEAS_FOLDER): IdeaMap {
       const ytext = doc.getText('contents');
       const outcome = changesFor(ytext.toString());
       if ('error' in outcome) return outcome.error;
+      // Written from the last change back: changes in any other order would land at positions that have moved
+      if (!inTextOrder(outcome.changes)) return UNORDERED_CHANGES_ERROR;
       const detach = attachProvenanceRegistration(doc, getActor);
       try {
         doc.transact(() => {
