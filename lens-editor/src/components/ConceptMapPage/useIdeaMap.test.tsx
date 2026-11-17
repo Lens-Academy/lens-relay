@@ -153,6 +153,17 @@ describe('useIdeaMap', () => {
   });
 
   describe('saveRequirements', () => {
+    it('says so, and does not throw, when the file cannot be opened for writing', async () => {
+      __embedDocsTesting.setConnector(async () => { throw new Error('Connection timeout'); });
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      let failed: string | null = 'not run';
+      await act(async () => {
+        failed = await result.current.saveRequirements('power-seeking', { requires: ['Instrumental convergence'], helpful: [] }, { requires: [], helpful: [] });
+      });
+      expect(failed).toMatch(/could not be opened for writing \(Connection timeout\)/);
+    });
+
     it('changes only the lines under Requires and Helpful first of the live file', async () => {
       // Someone else added a requirement and edited a sentence after the form opened
       const liveText = POWER
@@ -759,6 +770,14 @@ describe('useIdeaMap', () => {
 
   describe('createIdea', () => {
     const idea = { name: ' Goal-directedness ', priority: 'low' as const, outcome: 'Say what a goal is.', why: '', requires: ['Power-seeking'], helpful: [] };
+
+    it('creates nothing under a name a file has already (whatever its case), or when the file would not read back as typed', async () => {
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      await expect(result.current.createIdea({ ...idea, name: 'power-Seeking', requires: [] })).rejects.toThrow('Nothing was created. A file with this name already exists.');
+      await expect(result.current.createIdea({ ...idea, courses: ['a\\qb'] })).rejects.toThrow(/would not read back as typed/);
+      expect(createDocument).not.toHaveBeenCalled();
+    });
 
     it('writes the topic of a new concept into its frontmatter', async () => {
       vi.mocked(createDocument).mockImplementation(async (_folderDoc, _path, _type, text) => {

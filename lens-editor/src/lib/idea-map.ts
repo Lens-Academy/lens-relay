@@ -557,52 +557,6 @@ export function sortIdeas(nodes: readonly IdeaNode[], column: IdeaSortColumn, de
   });
 }
 
-/**
- * The map's columns, left to right, each a list of keys from top to bottom.
- * An idea stands one column right of the latest idea it requires or finds
- * helpful first, so every arrow points to the right; the ideas of a circle
- * share a column. Within a column, ideas are ordered by where their
- * neighbours stand (a few barycentre sweeps), so fewer lines cross.
- */
-export function mapColumns(graph: IdeaGraph): string[][] {
-  const before = new Map(graph.nodes.map((n) => [n.key, [...n.requires, ...n.helpful]]));
-  const after = new Map(graph.nodes.map((n) => [n.key, [...n.neededFor, ...n.helpfulFor]]));
-  const column = new Map<string, number>();
-  for (const group of stronglyConnected(graph.nodes.map((n) => n.key), (key) => before.get(key)!)) {
-    const members = new Set(group);
-    let at = 0;
-    for (const key of group) {
-      for (const first of before.get(key)!) {
-        if (!members.has(first)) at = Math.max(at, column.get(first)! + 1);
-      }
-    }
-    for (const key of group) column.set(key, at);
-  }
-  const columns: string[][] = [];
-  for (const n of graph.nodes) (columns[column.get(n.key)!] ??= []).push(n.key);
-
-  // Where an idea stands in its column, from 0 (top) to 1 (bottom): columns
-  // are centred on each other, whatever their length.
-  const place = new Map<string, number>();
-  const settle = (keys: string[]) => keys.forEach((key, i) => place.set(key, (i + 0.5) / keys.length));
-  columns.forEach(settle);
-  const sweep = (index: number, neighbours: Map<string, string[]>) => {
-    const keys = columns[index];
-    const wish = new Map(keys.map((key) => {
-      const others = neighbours.get(key)!.filter((other) => column.get(other) !== index);
-      const sum = others.reduce((total, other) => total + place.get(other)!, 0);
-      return [key, others.length > 0 ? sum / others.length : place.get(key)!];
-    }));
-    keys.sort((a, b) => wish.get(a)! - wish.get(b)!);
-    settle(keys);
-  };
-  for (let round = 0; round < 4; round++) {
-    for (let i = 1; i < columns.length; i++) sweep(i, before);
-    for (let i = columns.length - 2; i >= 0; i--) sweep(i, after);
-  }
-  return columns;
-}
-
 // ---------------------------------------------------------------------------
 // Writing
 // ---------------------------------------------------------------------------
@@ -772,7 +726,7 @@ function matchRank(key: string, wanted: string): number {
 }
 
 /** The names of the four lists, as the form shows them. */
-const LIST_NAMES = { requires: 'Requires', helpful: 'Helpful first', neededFor: 'Needed for', helpfulFor: 'Helpful for' } as const;
+export const LIST_NAMES = { requires: 'Requires', helpful: 'Helpful first', neededFor: 'Needed for', helpfulFor: 'Helpful for' } as const;
 
 /** Why an idea with no file cannot be picked under "Needed for" / "Helpful for". */
 export const WRITE_IT_FIRST = 'Write that concept first, or add this one to its Requires later.';
@@ -909,7 +863,8 @@ function linesOf(text: string): Line[] {
   return lines;
 }
 
-const SECTION_HEADING = /^##(?!#)\s*(.*?)\s*$/;
+/** A `## ` heading as `parseSections` reads one (a space after the marks), so `scanFile` and `parseIdea` cut a file the same way. */
+const SECTION_HEADING = /^##\s+(.*?)\s*$/;
 
 type Changes = { changes: TextChange[] } | { error: string };
 
@@ -966,7 +921,20 @@ const gapAtEnd = (text: string) => (text.length === 0 || text.endsWith('\n\n') ?
 export function requirementChanges(text: string, requires: readonly string[], helpful: readonly string[]): Changes {
   const edits = requirementEdits(text, scanFile(text), requires, helpful);
   if ('error' in edits) return edits;
-  return { changes: mergeChanges([...edits.changes, ...sectionInserts(text, edits.newSections)]) };
+  const merged = mergeChanges([...edits.changes, ...sectionInserts(text, edits.newSections)]);
+  if (merged.length === 0) return { changes: [] };
+  // Read it back: a file whose sections the scan cuts otherwise than the
+  // reader (a heading behind a comment, two `## Requires`) must not lose a line
+  const result = parseIdea(applyChanges(text, merged));
+  const keySet = (names: readonly string[]) => [...new Set(names.map(ideaKey))].sort();
+  const reads = sameList(keySet(result.requires), keySet(requires)) && sameList(keySet(result.helpful), keySet(helpful))
+    && restOf(result, ['requires', 'helpful']) === restOf(parseIdea(text), ['requires', 'helpful']);
+  return reads ? { changes: merged } : { error: UNSAFE_IDEA_ERROR };
+}
+
+/** Everything `parseIdea` read but `parts`, to compare a file before and after a change to those parts. */
+function restOf(idea: ParsedIdea, parts: ReadonlyArray<keyof ParsedIdea>): string {
+  return JSON.stringify({ ...idea, ...Object.fromEntries(parts.map((part) => [part, null])) });
 }
 
 /** New sections by the position they go to (several may go to the same). */
@@ -1514,7 +1482,7 @@ export function ideaEditProblem(edit: Partial<Pick<IdeaEdit, 'topic' | 'courses'
   for (const [label, value] of texts) {
     if (/^#{1,2}(?!#)/m.test(cleanValue(value))) return `${label} cannot have a line that starts with # or ##: that starts a new part of the file.`;
   }
-  if (cleanCourses(edit.courses ?? []).some((course) => /["[\]|\n]/.test(course))) return 'A course link cannot contain " [ ] or |.';
+  if (cleanCourses(edit.courses ?? []).some((course) => /["[\]|\\\n]/.test(course))) return 'A course link cannot contain " [ ] | or \\.';
   // A line break in a topic is no problem: it is written as a space
   if (cleanTopic(edit.topic).length > MAX_TOPIC) return `A topic can have at most ${MAX_TOPIC} characters.`;
   return null;
@@ -1610,6 +1578,8 @@ export function ideaEditChanges(text: string, before: IdeaEdit, after: IdeaEdit)
     for (const { key, newLines, at } of frontChanges) {
       const found = keyLines(key);
       if (found && scan.markedIn(found.first.from, found.last.to)) return { error: pendingPartError('The frontmatter') };
+      // The list is written anew from its link targets: words shown (`|`) or a `#heading` in one would be lost
+      if (found && key === 'courses' && /\[\[[^\]\n]*[|#]/.test(text.slice(found.first.from, found.last.to))) return { error: UNSAFE_IDEA_ERROR };
       if (found) {
         changes.push(newLines.length > 0
           ? { from: found.first.from, to: lineEnd(found.last), insert: newLines.join('\n') }

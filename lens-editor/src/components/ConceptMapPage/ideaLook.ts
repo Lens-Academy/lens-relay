@@ -1,5 +1,5 @@
 import type { KeyboardEvent } from 'react';
-import type { IdeaGraph, IdeaLinks, IdeaNode, Priority } from '../../lib/idea-map';
+import { LIST_NAMES, type IdeaGraph, type IdeaLinks, type IdeaNode, type Priority } from '../../lib/idea-map';
 
 /** The three priority colours, shared by the map, the steps and the legend. */
 export const PRIORITY_LOOK: Record<Priority, string> = {
@@ -92,7 +92,7 @@ export function pickByEnter(e: KeyboardEvent<HTMLElement>, pick: (keys: PickKeys
   pick({ ...pickKeys(e), byKey: true });
 }
 
-/** What each of the three views gets from the page. */
+/** What each of the four views gets from the page. */
 export interface IdeaViewProps {
   graph: IdeaGraph;
   /** The idea the side panel shows. */
@@ -121,6 +121,6 @@ export const DANGER_BUTTON = 'px-3 py-1 rounded bg-red-600 text-sm text-white ho
 
 /** The small grey word above a field of a form. */
 export const FIELD_LABEL = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400';
-export const LIST_LABEL: Record<LinkList, string> = { requires: 'Requires', helpful: 'Helpful first', neededFor: 'Needed for', helpfulFor: 'Helpful for' };
+export const LIST_LABEL: Record<LinkList, string> = LIST_NAMES;
 /** The list a shift-click adds to while `list` is the one clicks go to. */
 export const SHIFT_LIST: Record<LinkList, LinkList> = { requires: 'helpful', helpful: 'helpful', neededFor: 'helpfulFor', helpfulFor: 'helpfulFor' };

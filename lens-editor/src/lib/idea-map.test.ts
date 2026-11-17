@@ -17,7 +17,6 @@ import {
   ideaEditChanges,
   ideaEditProblem,
   ideaNameProblem,
-  mapColumns,
   mergePicks,
   neededForCircle,
   newQuestionProblem,
@@ -662,6 +661,16 @@ describe('requirementChanges', () => {
     return applyChanges(text, result.changes);
   };
 
+  it('refuses a file whose sections it cuts otherwise than the reader does, instead of taking links out of another part', () => {
+    const front = '---\nid: 11111111-1111-4111-8111-111111111111\npriority: high\n---\nOutcome.\n\n';
+    // A remark before a heading: the reader sees the heading, the scan of the stored text does not
+    const remark = `${front}## Requires\n- [[A]]\n\n{>>rename?<<}## Why it matters\nSee [[Other]] for context.\n- [[Solo]]\n\n## Tests\n`;
+    expect(requirementChanges(remark, ['A', 'B'], [])).toEqual({ error: expect.stringMatching(/cannot change safely/) });
+    // No space after the marks is no heading, for both: the list is added, the line under it stays
+    const noSpace = `${front}##Requires\n- [[A]]\n\n## Why it matters\nWhy.\n`;
+    expect(rewrite(noSpace, ['B'], [])).toBe(`${front}##Requires\n- [[A]]\n\n## Requires\n- [[B]]\n\n## Why it matters\nWhy.\n`);
+  });
+
   it('changes nothing when the lists already say it', () => {
     expect(requirementChanges(POWER, ['Instrumental convergence'], [])).toEqual({ changes: [] });
     expect(requirementChanges(POWER, ['instrumental Convergence'], [])).toEqual({ changes: [] });
@@ -793,32 +802,6 @@ describe('sortIdeas', () => {
     const before = g.nodes.map((n) => n.name);
     sortIdeas(g.nodes, 'name', true);
     expect(g.nodes.map((n) => n.name)).toEqual(before);
-  });
-});
-
-describe('mapColumns', () => {
-  it('puts what comes first on the left: a chain is one idea per column', () => {
-    const graph = buildIdeaGraph(ideas({ C: ['B'], B: ['A'], A: [] }));
-    expect(mapColumns(graph)).toEqual([['a'], ['b'], ['c']]);
-  });
-
-  it('counts "helpful first" too, so every arrow points to the right', () => {
-    const graph = buildIdeaGraph(files({ 'Instrumental convergence': INSTRUMENTAL, 'Power-seeking': POWER }));
-    expect(mapColumns(graph)).toEqual([['orthogonality thesis'], ['instrumental convergence'], ['power-seeking']]);
-  });
-
-  it('keeps the ideas of a circle in one column and holds every idea once', () => {
-    const graph = buildIdeaGraph(ideas({ A: [], B: ['A', 'D'], C: ['B'], D: ['C'], E: ['D'], Self: ['Self'] }));
-    expect(mapColumns(graph)).toEqual([['a', 'self'], ['b', 'c', 'd'], ['e']]);
-  });
-
-  it('orders a column by where its neighbours are, so fewer lines cross', () => {
-    const graph = buildIdeaGraph(ideas({ A1: [], A2: [], B1: ['A2'], B2: ['A1'] }));
-    expect(mapColumns(graph)).toEqual([['a1', 'a2'], ['b2', 'b1']]);
-  });
-
-  it('is empty for no ideas', () => {
-    expect(mapColumns(buildIdeaGraph([]))).toEqual([]);
   });
 });
 
@@ -1480,8 +1463,10 @@ describe('ideaEditProblem', () => {
     expect(ideaEditProblem({ outcome: 'One.\n## Requires' })).toMatch(/^The outcome cannot/);
     expect(ideaEditProblem({ why: '# Top' })).toMatch(/^Why it matters cannot/);
     expect(ideaEditProblem({ learn: '- a\n##b' })).toMatch(/^Lenses cannot/);
-    expect(ideaEditProblem({ courses: ['A "quoted" course'] })).toBe('A course link cannot contain " [ ] or |.');
-    expect(ideaEditProblem({ courses: ['A|B'] })).toBe('A course link cannot contain " [ ] or |.');
+    expect(ideaEditProblem({ courses: ['A "quoted" course'] })).toBe('A course link cannot contain " [ ] | or \\.');
+    // A backslash would be read as a YAML escape inside the quotes
+    expect(ideaEditProblem({ courses: ['a\\qb'] })).toMatch(/^A course link cannot contain/);
+    expect(ideaEditProblem({ courses: ['A|B'] })).toBe('A course link cannot contain " [ ] | or \\.');
   });
 
   it('takes a topic of up to 80 characters; line breaks and spaces around it do not count', () => {
@@ -1717,7 +1702,11 @@ describe('ideaEditChanges', () => {
 
   it('refuses text that would start a new part of the file, in a changed part only', () => {
     expect(edit(FILE, { why: 'One.\n## Two' })).toEqual({ error: expect.stringMatching(/^Why it matters cannot/) });
-    expect(edit(FILE, { courses: ['a"b'] })).toEqual({ error: 'A course link cannot contain " [ ] or |.' });
+    // The list is written anew from its targets: one with words shown or a #heading is left to the file
+    const shown = FILE.replace('Context Accelerator]]"', 'Context Accelerator|CA]]"');
+    expect(shown).not.toBe(FILE);
+    expect(ideaEditChanges(shown, ideaAsEdit('', parseIdea(shown)), { ...ideaAsEdit('', parseIdea(shown)), courses: ['../courses/Another'] })).toEqual({ error: expect.stringMatching(/cannot change safely/) });
+    expect(edit(FILE, { courses: ['a"b'] })).toEqual({ error: 'A course link cannot contain " [ ] | or \\.' });
     const odd = FILE.replace('Explain why it seeks power.', '# Explain why it seeks power.');
     expect(saved(odd, { why: 'New.' })).toBe(odd.replace('It changes what we expect.\nOn two lines.', 'New.'));
   });

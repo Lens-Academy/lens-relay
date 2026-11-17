@@ -240,7 +240,7 @@ export function useIdeaMap(asked: string = IDEAS_FOLDER): IdeaMap {
     const node = graph.byKey.get(ideaKey(key));
     if (!node?.docId) return 'This concept has no file yet.';
     const getActor = () => humanActor(displayNameRef.current ?? '');
-    const result = await withLiveDoc(`${RELAY_ID}-${node.docId}`, ({ doc }) => {
+    const write = withLiveDoc(`${RELAY_ID}-${node.docId}`, ({ doc }) => {
       const ytext = doc.getText('contents');
       const outcome = changesFor(ytext.toString());
       if ('error' in outcome) return outcome.error;
@@ -258,6 +258,14 @@ export function useIdeaMap(asked: string = IDEAS_FOLDER): IdeaMap {
       }
       return '';
     });
+    let result: string | null;
+    try {
+      result = await write;
+    } catch (error) {
+      // No connection to the file (a timeout): an error to show like any other,
+      // so a save of several files can still say what it wrote before
+      return `The file could not be opened for writing (${error instanceof Error ? error.message : String(error)}). Nothing was written to it. Try again.`;
+    }
     if (result === null) return 'Another file was opened for editing meanwhile. Try again.';
     return result || null;
   }, [graph]);
@@ -288,8 +296,19 @@ export function useIdeaMap(asked: string = IDEAS_FOLDER): IdeaMap {
     // under Needed for / Helpful for?
     const links = dependentEdits(graph, { name: title, requires: idea.requires }, { neededFor: [], helpfulFor: [] }, { neededFor, helpfulFor }, textOf);
     if ('error' in links) throw new Error(`Nothing was created. ${links.error}`);
+    const taken = ideaNameProblem(title, files.map((f) => f.name));
+    if (taken) throw new Error(`Nothing was created. ${taken}`);
     if (!folderDoc.getMap('filemeta_v0').has(`/${folder}`)) createFolder(folderDoc, `/${folder}`);
-    const text = renderIdeaFile({ ...idea, id: generateUUID() });
+    const id = generateUUID();
+    const text = renderIdeaFile({ ...idea, id });
+    // Read it back: typed text that breaks the frontmatter or starts a part of
+    // its own must not become a file that reads as another concept
+    const reads = parseIdea(text);
+    const sameNames = (a: readonly string[], b: readonly string[]) => a.map(ideaKey).join('\n') === b.map(ideaKey).join('\n');
+    if (reads.id !== id || reads.priority !== idea.priority || reads.warnings.length > 0 || reads.questions > 0
+      || !sameNames(reads.requires, idea.requires) || !sameNames(reads.helpful, idea.helpful)) {
+      throw new Error('Nothing was created: the file would not read back as typed. Take out unusual characters (a \\ in a course link, a line of ---, a heading) and try again.');
+    }
     const docId = await createDocument(folderDoc, `/${folder}/${title}.md`, 'markdown', text);
     // Shown at once; the read after it tells whether the text arrived
     // (createDocument only logs when writing it fails).
@@ -303,7 +322,7 @@ export function useIdeaMap(asked: string = IDEAS_FOLDER): IdeaMap {
         + `${linked.error} Close this form; "Edit concept" can add the rest.`,
       );
     }
-  }, [folderDocs, folder, graph, textOf, linkDependents]);
+  }, [folderDocs, folder, graph, files, textOf, linkDependents]);
 
   const saveRequirements = useCallback<IdeaMap['saveRequirements']>((key, before, after) => editFile(key, (text) => {
     const live = parseIdea(text);
@@ -417,9 +436,14 @@ export function useIdeaMap(asked: string = IDEAS_FOLDER): IdeaMap {
         return `Nothing was deleted: ${outside.join(', ')} ${outside.length === 1 ? 'links' : 'link'} to this concept too. Take that link out first, or delete the file in the file tree.`;
       }
     }
+    const unlinked: string[] = [];
     for (const linker of linkers) {
       const failed = await editFile(linker.key, (text) => removeLinkChanges(text, node.name));
-      if (failed) return `${trashed ? 'The concept is deleted, but its link is still in' : 'The concept is not deleted. In'} "${linker.name}": ${failed}`;
+      if (failed) {
+        return `${trashed ? 'The concept is deleted, but its link is still in' : 'The concept is not deleted. In'} "${linker.name}": ${failed}`
+          + (unlinked.length > 0 ? ` The link is already taken out of ${listed(unlinked)}.` : '');
+      }
+      unlinked.push(linker.name);
     }
     if (trashed) return null;
     try {
