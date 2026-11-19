@@ -17,7 +17,7 @@ const mockMetadata: FolderMetadata = {
   '/Lens/Projects': { id: 'folder-proj', type: 'folder', version: 0 },
   '/Lens/Projects/Alpha.md': { id: 'doc-alpha', type: 'markdown', version: 0 },
   '/Lens Edu/Course Notes.md': { id: 'doc-course', type: 'markdown', version: 0 },
-  '/Lens/_trash/Projects/Alpha.md': { id: 'doc-alpha-old', type: 'markdown', version: 0, trashed_at: 1 },
+  '/Lens/_trash/Projects/Alpha.md': { id: 'doc-alpha-old', type: 'markdown', version: 0 },
 };
 
 const mockOnSelect = vi.fn();

@@ -75,11 +75,10 @@ function extractFileName(path: string): string {
 
 /**
  * Whether a metadata path is inside its shared folder's trash,
- * e.g. "/Lens/_trash/Notes/Old.md". The relay also stamps `trashed_at` on
- * every entry there; either one is enough.
+ * e.g. "/Lens/_trash/Notes/Old.md".
  */
-function isTrashed(path: string, trashedAt: number | undefined): boolean {
-  return trashedAt != null || path.split('/')[2] === '_trash';
+function isTrashed(path: string): boolean {
+  return path.split('/')[2] === '_trash';
 }
 
 export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: QuickSwitcherProps) {
@@ -105,8 +104,9 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
         name,
         displayPath,
         id: meta.id,
-        trashed: isTrashed(path, meta.trashed_at),
-        target: prepareFuzzyTarget(displayPath) });
+        trashed: isTrashed(path),
+        target: prepareFuzzyTarget(displayPath),
+      });
     }
     return entries;
   }, [metadata]);
