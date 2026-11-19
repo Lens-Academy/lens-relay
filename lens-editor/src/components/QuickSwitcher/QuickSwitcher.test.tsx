@@ -98,7 +98,7 @@ describe('QuickSwitcher', () => {
     const options = screen.getAllByRole('option');
     const trashed = options.find(o => o.textContent?.includes('_trash'));
     const live = options.find(o => !o.textContent?.includes('_trash'));
-    expect(trashed?.textContent).toContain('In trash');
+    expect(trashed?.textContent).toContain('Trashed');
     expect(trashed?.querySelector('[title^="In the trash"]')).toBeTruthy();
     expect(live?.querySelector('[title^="In the trash"]')).toBeNull();
   });
