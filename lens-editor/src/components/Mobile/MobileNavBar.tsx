@@ -49,6 +49,7 @@ export function MobileNavBar({ onOpenQuickSwitcher }: MobileNavBarProps) {
       : []),
     ...(access.review ? [{ label: 'Review suggestions', action: () => navigate('/review') }] : []),
     ...(access.recent ? [{ label: 'Recent changes', action: () => navigate('/recent') }] : []),
+    ...(access.conceptMap ? [{ label: 'Concept map', action: () => navigate('/concept-map') }] : []),
     ...(access.promote ? [{ label: 'Promote to production', action: () => navigate('/promote') }] : []),
     ...(access.addSource ? [{ label: 'Add source', action: () => navigate('/add-source') }] : []),
   ];

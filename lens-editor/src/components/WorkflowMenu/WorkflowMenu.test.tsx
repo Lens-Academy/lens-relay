@@ -108,22 +108,22 @@ describe('WorkflowMenu', () => {
   }
 
   it('offers view and suggest links only the pages they can use', async () => {
-    expect(await openMenuAs('view', null, true)).toEqual(['Recent Changes']);
+    expect(await openMenuAs('view', null, true)).toEqual(['Recent Changes', 'Concept Map']);
     cleanup();
-    expect(await openMenuAs('suggest', EDU_FOLDER_ID, false)).toEqual(['Recent Changes']);
+    expect(await openMenuAs('suggest', EDU_FOLDER_ID, false)).toEqual(['Recent Changes', 'Concept Map']);
   });
 
   it('offers Lens Edu workflows only to edit links that include Lens Edu', async () => {
     expect(await openMenuAs('edit', 'some-other-folder', false)).toEqual(['Review Suggestions', 'Recent Changes']);
     cleanup();
     expect(await openMenuAs('edit', EDU_FOLDER_ID, false)).toEqual([
-      'Review Suggestions', 'Recent Changes', 'Add Source',
+      'Review Suggestions', 'Recent Changes', 'Concept Map', 'Add Source',
     ]);
   });
 
   it('offers Promote to Production only to admin links that include Lens Edu', async () => {
     expect(await openMenuAs('admin', EDU_FOLDER_ID, false)).toEqual([
-      'Review Suggestions', 'Recent Changes', 'Add Source', 'Promote to Production',
+      'Review Suggestions', 'Recent Changes', 'Concept Map', 'Add Source', 'Promote to Production',
     ]);
     cleanup();
     expect(await openMenuAs('admin', 'some-other-folder', false)).toEqual(['Review Suggestions', 'Recent Changes']);
