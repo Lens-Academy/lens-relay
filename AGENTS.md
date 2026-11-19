@@ -341,6 +341,11 @@ A `read` of a concept file starts with its place in the concept graph (`parent-c
 their paths up, child concepts with counts; `crates/relay/src/mcp/tools/concept_graph.rs`), computed like the editor's
 header; same doc, "Concept graph" (parsing rules tagged "concept graph rules v1 #N" in both).
 
+**Cap transcripts in MCP `read`** (`crates/relay/src/mcp/tools/cap_transcripts.rs`): a `read` of a document that links
+Cap videos (`cap.so/s/<id>`) ends with each video's transcript, which Cap makes itself and serves for public shares. A
+transcript not ready yet, or a private or silent video, gets a one-line reason instead; finished transcripts are cached in
+memory. lens-platform's `core/cap_recordings.py` reads Cap the same way for links posted in Discord.
+
 **Course checks in MCP replies** (`crates/relay/src/mcp/tools/course_checks.rs`): an MCP
 `edit` or `create` of a `Lens Edu/**/*.md` file other than an article ends with lens-platform's
 Jev writing checks on the paragraphs it changed (`POST /api/content/course-checks`), after the
