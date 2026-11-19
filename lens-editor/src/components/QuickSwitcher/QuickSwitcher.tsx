@@ -18,6 +18,8 @@ interface FileEntry {
   name: string;
   displayPath: string;
   id: string;
+  /** In the shared folder's `_trash/`, so marked as such in the row. */
+  trashed: boolean;
   /** Pre-processed search target, built once per metadata change. */
   target: FuzzyTarget;
 }
@@ -71,6 +73,14 @@ function extractFileName(path: string): string {
   return last.replace(/\.md$/, '');
 }
 
+/**
+ * Whether a metadata path is inside its shared folder's trash,
+ * e.g. "/Lens/_trash/Notes/Old.md".
+ */
+function isTrashed(path: string): boolean {
+  return path.split('/')[2] === '_trash';
+}
+
 export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: QuickSwitcherProps) {
   const { metadata } = useNavigation();
   const [query, setQuery] = useState('');
@@ -89,7 +99,14 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
       if (meta.type === 'folder') continue;
       const name = extractFileName(path);
       const displayPath = pathToDisplayString(path);
-      entries.push({ path, name, displayPath, id: meta.id, target: prepareFuzzyTarget(displayPath) });
+      entries.push({
+        path,
+        name,
+        displayPath,
+        id: meta.id,
+        trashed: isTrashed(path),
+        target: prepareFuzzyTarget(displayPath),
+      });
     }
     return entries;
   }, [metadata]);
@@ -280,13 +297,28 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
                       on the left, the ltr isolate keeps the path itself in order,
                       and text-left keeps paths that fit where they were. */}
                   <span
-                    className="text-sm font-medium text-gray-900 truncate min-w-0 flex-1 text-left [direction:rtl]"
+                    className={`text-sm font-medium truncate min-w-0 flex-1 text-left [direction:rtl] ${
+                      item.entry.trashed ? 'text-gray-500' : 'text-gray-900'
+                    }`}
                     title={item.entry.displayPath}
                   >
                     <bdi dir="ltr">
                       <HighlightedName name={item.entry.displayPath} ranges={item.ranges} />
                     </bdi>
                   </span>
+                  {/* The cut start of a long path can hide its _trash folder,
+                      so a trashed file also says so where nothing is cut. */}
+                  {item.entry.trashed && (
+                    <span
+                      className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-gray-600 bg-gray-100"
+                      title="In the trash: purged after the retention period unless moved out"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                      Trashed
+                    </span>
+                  )}
                 </div>
               );
             })}

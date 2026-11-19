@@ -17,6 +17,7 @@ const mockMetadata: FolderMetadata = {
   '/Lens/Projects': { id: 'folder-proj', type: 'folder', version: 0 },
   '/Lens/Projects/Alpha.md': { id: 'doc-alpha', type: 'markdown', version: 0 },
   '/Lens Edu/Course Notes.md': { id: 'doc-course', type: 'markdown', version: 0 },
+  '/Lens/_trash/Projects/Alpha.md': { id: 'doc-alpha-old', type: 'markdown', version: 0 },
 };
 
 const mockOnSelect = vi.fn();
@@ -88,6 +89,18 @@ describe('QuickSwitcher', () => {
     await userEvent.type(input, 'course');
     const options = screen.getAllByRole('option');
     expect(options[0].textContent).toContain('Lens Edu/Course Notes');
+  });
+
+  it('marks files in the trash, and only those', async () => {
+    renderSwitcher();
+    const input = screen.getByPlaceholderText('Type to search...');
+    await userEvent.type(input, 'Alpha');
+    const options = screen.getAllByRole('option');
+    const trashed = options.find(o => o.textContent?.includes('_trash'));
+    const live = options.find(o => !o.textContent?.includes('_trash'));
+    expect(trashed?.textContent).toContain('Trashed');
+    expect(trashed?.querySelector('[title^="In the trash"]')).toBeTruthy();
+    expect(live?.querySelector('[title^="In the trash"]')).toBeNull();
   });
 
   it('excludes folder entries from results', async () => {
