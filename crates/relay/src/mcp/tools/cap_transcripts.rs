@@ -135,11 +135,12 @@ async fn fetch(video_id: &str) -> Result<Transcript, String> {
         .send()
         .await
         .map_err(unreachable)?;
-    if page.status().is_server_error() {
-        return Err(format!("Cap answered {}", page.status()));
-    }
+    // Only a 404 means the video is gone; any other failure (a 5xx, a 429
+    // rate limit, a bot challenge) is passing, so the AI is told to retry.
     let (owner, status) = if page.status() == reqwest::StatusCode::NOT_FOUND {
         (None, None)
+    } else if !page.status().is_success() {
+        return Err(format!("Cap answered {}", page.status()));
     } else {
         parse_share_page(&page.text().await.map_err(unreachable)?)
     };
