@@ -83,6 +83,13 @@ interface Placed {
 }
 
 const BASE_PREFETCH = 2;
+/**
+ * Seconds of audio queued ahead of what is heard. Speechify synthesizes far
+ * faster than it is heard, so without this bound the whole page would be
+ * fetched (and paid for) at once, and again from the new place after every
+ * jump, restart or speed change.
+ */
+export const LOOKAHEAD_SECONDS = 15;
 const RESTART_DEBOUNCE_MS = 250;
 
 /** Sentences fetched ahead: more at high speed, where each covers less time. */
@@ -117,6 +124,8 @@ export class ReadAloudEngine {
   private queued = 0;
   /** The unit whose audio is going into the player now; null when all is queued. */
   private feeding: number | null = null;
+  /** `feeding` waits off the timeline until the listener is within LOOKAHEAD_SECONDS of it. */
+  private held = false;
   private paused = false;
   private active = false;
   private raf = 0;
@@ -135,6 +144,8 @@ export class ReadAloudEngine {
       source: PAGE_SOURCE,
     };
     this.player.onEmpty = () => this.finish();
+    // Progress reports keep coming in a background tab, where frames stop.
+    this.player.onProgress = () => this.release();
   }
 
   // -- store interface (useSyncExternalStore) --
@@ -206,14 +217,23 @@ export class ReadAloudEngine {
     this.entries = entries;
     for (const placed of this.timeline) placed.unit = remap(placed.unit);
     if (this.feeding != null) {
-      const j = remap(this.feeding);
+      // The held sentence is not queued yet: it is whatever follows the last one queued.
+      const last = this.timeline[this.timeline.length - 1]?.unit ?? -1;
+      const j = this.held && last >= 0 ? last + 1 : remap(this.feeding);
       if (j < 0) {
         // The sentence being fed was edited away: carry on from where the
         // caller says the listener is.
         this.startAt(Math.min(current ?? 0, units.length - 1));
         return;
       }
-      this.feeding = j;
+      if (j < units.length) {
+        this.feeding = j;
+      } else {
+        // The page now ends with what is queued.
+        this.feeding = null;
+        this.held = false;
+        this.player.drain();
+      }
     }
     const heard = this.heardPlacement();
     this.update({ current: heard?.unit ?? this.feeding ?? null });
@@ -320,6 +340,7 @@ export class ReadAloudEngine {
     this.timeline = [];
     this.queued = 0;
     this.feeding = null;
+    this.held = false;
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.emitHighlight(null);
@@ -350,6 +371,7 @@ export class ReadAloudEngine {
       this.timeline = [];
       this.queued = 0;
       this.feeding = null;
+      this.held = false;
       this.update({ status: this.paused ? 'paused' : 'loading' });
       this.restartTimer = setTimeout(() => {
         this.restartTimer = null;
@@ -387,6 +409,7 @@ export class ReadAloudEngine {
       }
     }
     this.feeding = index;
+    this.held = false;
     this.update({ current: index, status: this.paused ? 'paused' : 'loading' });
     this.lastHighlight = null;
     this.feed();
@@ -415,7 +438,7 @@ export class ReadAloudEngine {
         if (event.type === 'audio') {
           entry.chunks.push(event.pcm);
           entry.bytes += event.pcm.byteLength;
-          if (this.feedingEntry() === entry) {
+          if (this.feedingEntry() === entry && !this.held) {
             this.player.push(event.pcm);
             this.queued += event.pcm.byteLength / 2 / PCM_SAMPLE_RATE;
           }
@@ -435,7 +458,7 @@ export class ReadAloudEngine {
       }
       console.warn('[read-aloud] sentence skipped:', err);
     }
-    if (this.feedingEntry() === entry) this.advance();
+    if (this.feedingEntry() === entry && !this.held) this.advance();
   }
 
   private addTimings(entry: Entry, msg: Extract<StreamEvent, { type: 'timestamps' }>) {
@@ -481,6 +504,15 @@ export class ReadAloudEngine {
       return;
     }
     this.feeding = next;
+    this.held = this.queued - this.player.playbackTime > LOOKAHEAD_SECONDS;
+    if (!this.held) this.feed();
+    this.prefetch();
+  }
+
+  /** Feed the held unit once the listener has come close enough to it. */
+  private release() {
+    if (!this.held || this.queued - this.player.playbackTime > LOOKAHEAD_SECONDS) return;
+    this.held = false;
     this.feed();
     this.prefetch();
   }
@@ -509,6 +541,7 @@ export class ReadAloudEngine {
   private tick = () => {
     this.raf = 0;
     if (!this.active) return;
+    this.release();
     const placed = this.heardPlacement();
     if (placed && placed.unit >= 0) {
       const t = this.player.playbackTime - placed.start;
