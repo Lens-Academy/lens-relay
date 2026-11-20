@@ -85,9 +85,9 @@ interface Placed {
 const BASE_PREFETCH = 2;
 /**
  * Seconds of audio queued ahead of what is heard. Speechify synthesizes far
- * faster than it is heard, so without this bound the whole page was fetched
- * (and paid for) in the first minute, and again from the new place after every
- * jump, pause-and-restart or speed change.
+ * faster than it is heard, so without this bound the whole page would be
+ * fetched (and paid for) at once, and again from the new place after every
+ * jump, restart or speed change.
  */
 export const LOOKAHEAD_SECONDS = 15;
 const RESTART_DEBOUNCE_MS = 250;
@@ -217,10 +217,9 @@ export class ReadAloudEngine {
     this.entries = entries;
     for (const placed of this.timeline) placed.unit = remap(placed.unit);
     if (this.feeding != null) {
-      let j = remap(this.feeding);
       // The held sentence is not queued yet: it is whatever follows the last one queued.
       const last = this.timeline[this.timeline.length - 1]?.unit ?? -1;
-      if (j < 0 && this.held && last >= 0) j = last + 1;
+      const j = this.held && last >= 0 ? last + 1 : remap(this.feeding);
       if (j < 0) {
         // The sentence being fed was edited away: carry on from where the
         // caller says the listener is.

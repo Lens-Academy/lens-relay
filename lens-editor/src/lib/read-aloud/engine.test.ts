@@ -130,6 +130,34 @@ describe('ReadAloudEngine', () => {
     expect(requested.length).toBeLessThanOrEqual(ahead);
   });
 
+  it('tops up the queue on the player\'s progress reports alone (a background tab has no frames)', async () => {
+    const { engine, player, requested } = setup();
+    engine.setUnits(Array.from({ length: 100 }, (_, i) => ({ text: `Sentence ${i}` })));
+    engine.play(0);
+    await flush();
+    const queued = player.queued.length;
+    const fetched = requested.length;
+    player.playbackTime = 20;
+    (player as unknown as { onProgress: (() => void) | null }).onProgress?.();
+    await flush();
+    expect(player.queued.length).toBeGreaterThan(queued);
+    expect(requested.length).toBeGreaterThan(fetched);
+  });
+
+  it('queues a sentence inserted right after the last queued one', async () => {
+    const { engine, player, requested } = setup();
+    const units = Array.from({ length: 40 }, (_, i) => ({ text: `Sentence ${i}` }));
+    engine.setUnits(units);
+    engine.play(0);
+    await flush();
+    const at = player.queued.length; // the first unit not queued yet
+    engine.setUnits([...units.slice(0, at), { text: 'Inserted i' }, ...units.slice(at)], null);
+    player.playbackTime = 10;
+    runFrame();
+    await flush();
+    expect(requested).toContain('Inserted i');
+  });
+
   it('keeps playing when an edit removes the sentence waiting to be queued', async () => {
     const { engine, player, requested } = setup();
     const units = Array.from({ length: 40 }, (_, i) => ({ text: `Sentence ${i}` }));
