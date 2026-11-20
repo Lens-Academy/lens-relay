@@ -312,7 +312,9 @@ resolves / re-anchors, and `edit` warns when it removes quoted text. Measure anc
 
 **Read-aloud in the editor** (`lens-editor/src/lib/read-aloud/`, `server/tts/`): a Listen button on Markdown and HTML
 pages plays the page through Speechify (simba-3.2, the platform's model and voice), sentence by sentence with word
-highlighting, after lens-platform's immersion reader but without its audio cache. The editor server proxies
+highlighting, after lens-platform's immersion reader but without its audio cache. It queues at most
+`LOOKAHEAD_SECONDS` (15 s) of audio ahead of what is heard, so a jump, restart or speed change throws away little
+(before, it fetched the whole page at once and again after every jump). The editor server proxies
 `POST /api/tts/stream` (any valid share link; `SPEECHIFY_API_KEY`, per-link hourly character cap
 `TTS_CHARS_PER_HOUR`); without the key the button hides. Markdown: `Editor/extensions/readAloud.ts` maps sentences to
 source positions (`markdown-reading.ts`), so it works with CodeMirror's virtualised DOM. HTML: the preview frame's

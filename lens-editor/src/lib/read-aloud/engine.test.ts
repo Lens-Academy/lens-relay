@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PAGE_SOURCE, ReadAloudEngine, prefetchDepthFor, type FetchSpeech, type ReadAloudHighlight } from './engine';
+import { LOOKAHEAD_SECONDS, PAGE_SOURCE, ReadAloudEngine, prefetchDepthFor, type FetchSpeech, type ReadAloudHighlight } from './engine';
 import { TtsUnavailableError, type StreamEvent } from './api';
 import type { PcmPlayer } from './player';
 
@@ -102,6 +102,55 @@ describe('ReadAloudEngine', () => {
     player.onEmpty?.();
     expect(engine.getSnapshot()).toMatchObject({ status: 'idle', current: null, open: true });
     expect(highlights.at(-1)).toBeNull();
+  });
+
+  it('fetches only a little ahead of what is heard, also after a jump', async () => {
+    const { engine, player, requested } = setup();
+    const units = Array.from({ length: 300 }, (_, i) => ({ text: `Sentence ${i}` }));
+    engine.setUnits(units);
+    engine.play(0);
+    await flush();
+    // Each sentence is 1 s of audio: queued up to the look-ahead, plus a few being fetched.
+    const ahead = LOOKAHEAD_SECONDS + prefetchDepthFor(1.5) + 2;
+    expect(requested.length).toBeLessThanOrEqual(ahead);
+    expect(player.queued.length).toBeGreaterThanOrEqual(LOOKAHEAD_SECONDS);
+
+    // Playback moves on: the queue is topped up.
+    player.playbackTime = 30;
+    runFrame();
+    await flush();
+    expect(requested.length).toBeGreaterThan(ahead);
+    expect(requested.length).toBeLessThanOrEqual(30 + ahead);
+
+    // A click on a later sentence costs the sentences near it, not the rest of the page.
+    requested.length = 0;
+    engine.play(200);
+    await flush();
+    expect(requested[0]).toBe('Sentence 200');
+    expect(requested.length).toBeLessThanOrEqual(ahead);
+  });
+
+  it('keeps playing when an edit removes the sentence waiting to be queued', async () => {
+    const { engine, player, requested } = setup();
+    const units = Array.from({ length: 40 }, (_, i) => ({ text: `Sentence ${i}` }));
+    engine.setUnits(units);
+    engine.play(0);
+    await flush();
+    const queued = player.queued.length;
+    const next = queued; // 1 s sentences, no pauses: the first one not queued yet
+    const edited = units.filter((_, i) => i !== next);
+    engine.setUnits(edited, null);
+    expect(player.queued.length).toBe(queued); // no restart
+    requested.length = 0;
+    player.playbackTime = 10;
+    runFrame();
+    await flush();
+    expect(player.queued.length).toBeGreaterThan(queued);
+    expect(requested).not.toContain(`Sentence ${next}`);
+
+    // An edit that ends the page with what is queued drains it.
+    engine.setUnits(edited.slice(0, player.queued.length), null);
+    expect(player.drained).toBe(true);
   });
 
   it('skips and pauses', async () => {
