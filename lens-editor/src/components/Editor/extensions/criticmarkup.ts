@@ -843,6 +843,10 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
       read: (view) => this.measure(view),
       write: (pos) => this.place(pos),
     });
+    /** Re-places the buttons when a floating label (the word count) comes or goes. */
+    private readonly labels = new MutationObserver(() => {
+      if (this.active) this.schedule();
+    });
     /** Scrolling only matters while a change is selected. */
     private readonly onScroll = () => {
       if (this.active) this.schedule();
@@ -857,6 +861,10 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
       this.dom.addEventListener('click', (e) => this.click(e));
       view.dom.appendChild(this.dom);
       this.active = this.activeWidget(view);
+      // The word count is a sibling of the editor's container, drawn by React
+      // after the selection changed, so this measure may come before it.
+      const wrapper = view.dom.parentElement?.parentElement;
+      if (wrapper) this.labels.observe(wrapper, { childList: true });
       window.addEventListener('scroll', this.onScroll, { capture: true, passive: true });
       window.addEventListener('resize', this.onScroll);
       window.visualViewport?.addEventListener('resize', this.onScroll);
@@ -871,6 +879,7 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
 
     destroy() {
       this.dom.remove();
+      this.labels.disconnect();
       window.removeEventListener('scroll', this.onScroll, { capture: true });
       window.removeEventListener('resize', this.onScroll);
       window.visualViewport?.removeEventListener('resize', this.onScroll);
@@ -957,6 +966,8 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
       let left = inMargin ? textRight + gap : Math.min(textRight, editor.right - gap) - width;
       left = Math.max(left, editor.left + gap);
       let top = this.uncoveredBottom(view, left + width / 2, vis) - height - gap;
+      top = this.aboveFloatingLabels(left, width, top, height, gap);
+      const covered = inMargin ? 0 : Math.max(height + 2 * gap, vis.bottom - top);
       if (!inMargin) {
         // Over the text: never cover the cursor.
         const head = view.coordsAtPos(view.state.selection.main.head);
@@ -968,8 +979,26 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
         widget: active.widget,
         left: left - editor.left,
         top: top - editor.top,
-        covered: inMargin ? 0 : height + 2 * gap,
+        covered,
       };
+    }
+
+    /**
+     * Move the buttons up above any label floating over the editor's bottom
+     * (the selected word count). Those labels let clicks through, so
+     * `uncoveredBottom`'s hit test cannot see them; they say so with
+     * `data-floats-over-editor` instead.
+     */
+    private aboveFloatingLabels(left: number, width: number, top: number, height: number, gap: number) {
+      const labels = Array.from(document.querySelectorAll<HTMLElement>('[data-floats-over-editor]'))
+        .map((el) => el.getBoundingClientRect())
+        .filter((r) => r.width > 0 && r.height > 0)
+        .sort((a, b) => b.bottom - a.bottom);
+      for (const r of labels) {
+        const overlaps = r.left < left + width + gap && r.right > left - gap && r.top < top + height + gap && r.bottom > top - gap;
+        if (overlaps) top = r.top - height - gap;
+      }
+      return top;
     }
 
     private place(pos: StickyPlacement) {
