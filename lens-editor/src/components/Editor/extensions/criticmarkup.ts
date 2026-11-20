@@ -843,6 +843,8 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
       read: (view) => this.measure(view),
       write: (pos) => this.place(pos),
     });
+    /** The editor's wrapper in Editor.tsx, which also holds its floating labels. */
+    private wrapper: HTMLElement | null = null;
     /** Re-places the buttons when a floating label (the word count) comes or goes. */
     private readonly labels = new MutationObserver(() => {
       if (this.active) this.schedule();
@@ -863,8 +865,8 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
       this.active = this.activeWidget(view);
       // The word count is a sibling of the editor's container, drawn by React
       // after the selection changed, so this measure may come before it.
-      const wrapper = view.dom.parentElement?.parentElement;
-      if (wrapper) this.labels.observe(wrapper, { childList: true });
+      this.wrapper = view.dom.parentElement?.parentElement ?? null;
+      if (this.wrapper) this.labels.observe(this.wrapper, { childList: true });
       window.addEventListener('scroll', this.onScroll, { capture: true, passive: true });
       window.addEventListener('resize', this.onScroll);
       window.visualViewport?.addEventListener('resize', this.onScroll);
@@ -990,7 +992,8 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
      * `data-floats-over-editor` instead.
      */
     private aboveFloatingLabels(left: number, width: number, top: number, height: number, gap: number) {
-      const labels = Array.from(document.querySelectorAll<HTMLElement>('[data-floats-over-editor]'))
+      if (!this.wrapper) return top;
+      const labels = Array.from(this.wrapper.querySelectorAll<HTMLElement>('[data-floats-over-editor]'))
         .map((el) => el.getBoundingClientRect())
         .filter((r) => r.width > 0 && r.height > 0)
         .sort((a, b) => b.bottom - a.bottom);
