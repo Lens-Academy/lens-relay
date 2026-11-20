@@ -443,6 +443,18 @@ pub fn map_hunks(input: &PolicyInput) -> Result<Vec<RawHunk>, SuggestReason> {
     Ok(out)
 }
 
+/// The hunk replacing `raw[raw_from..raw_from + raw_len]`, for a caller that
+/// already knows the range is plain text and holds no insertion point. It
+/// guards the deleted non-whitespace text (rules 4 and 6).
+pub fn raw_replacement(raw: &str, raw_from: usize, raw_len: usize, new_text: &str) -> RawHunk {
+    RawHunk {
+        raw_from,
+        raw_len,
+        new_text: new_text.to_string(),
+        guard: non_whitespace_ranges(raw, raw_from, raw_from + raw_len),
+    }
+}
+
 /// Rules 4–6: every guard range (deleted non-whitespace text, word-split
 /// neighbours) must be attributed to an `ai:` actor.
 pub fn check_provenance(

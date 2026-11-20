@@ -33,6 +33,7 @@ import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceRead
 import { codeBlockCopyButton } from './extensions/codeBlockCopyButton';
 import { videoCutButtons, videoCutCallback, type VideoCutLine } from './extensions/videoCutButtons';
 import { sharedFolds } from './extensions/sharedFolds';
+import { remoteReplaceCaret } from './extensions/remoteReplaceCaret';
 import { readAloud } from './extensions/readAloud';
 import { VideoCutDock } from './VideoCutDock';
 import { countSelections, formatSelectionCount, type SelectionCount } from '../../lib/selection-count';
@@ -60,6 +61,8 @@ import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { ContextMenu } from './ContextMenu';
 import { getContextMenuItems } from './extensions/criticmarkup-context-menu';
 import type { ContextMenuItem } from './extensions/criticmarkup-context-menu';
+import { sourceLinkMenuItem, type SourceLinkMenuTarget } from '../SourceLinksBar/sourceLinkMenu';
+import { pageUndoManager } from '../SourceLinksBar/localSwap';
 import { resolvePageName } from '../../lib/document-resolver';
 import { openDocInNewTab, urlForDoc } from '../../lib/url-utils';
 import { newDocPathForLink, type NewLinkTarget } from '../../lib/wikilink-create';
@@ -96,6 +99,9 @@ interface EditorProps {
    *  it (or read-only) following such a link does nothing. */
   createLinkedDoc?: (target: Extract<NewLinkTarget, { path: string }>) => Promise<string>;
   initialSuggestionMode?: boolean;
+  /** The page's sources, for "Import and link this source" on a right-click.
+   *  Only the main editor passes it. */
+  sourceLinkTargetRef?: React.RefObject<SourceLinkMenuTarget | null>;
 }
 
 /**
@@ -136,7 +142,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, onCommentClick, metadata, currentFilePath, getFolderDoc, folderNames, createLinkedDoc, initialSuggestionMode = false }: EditorProps) {
+export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, onCommentClick, metadata, currentFilePath, getFolderDoc, folderNames, createLinkedDoc, initialSuggestionMode = false, sourceLinkTargetRef }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [initialSuggestionModeOnMount] = useState(initialSuggestionMode);
@@ -287,9 +293,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         },
       };
 
-      const items = markupItems.length > 0
-        ? [...markupItems, addCommentItem]
-        : [addCommentItem];
+      const sourceItem = sourceLinkMenuItem(view, clickPos, sourceLinkTargetRef?.current ?? null);
+      const items = [...markupItems, ...(sourceItem ? [sourceItem] : []), addCommentItem];
 
       e.preventDefault();
       setContextMenu({
@@ -297,7 +302,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         position: { x: e.clientX, y: e.clientY },
       });
     },
-    []
+    [sourceLinkTargetRef]
   );
 
   // Store wikilink context in ref to avoid re-creating editor when metadata changes
@@ -531,6 +536,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         // before yCollab, whose writes it splits by author
         keepAuthorship(ydoc, ytext),
         yCollab(ytext, null, { undoManager }),
+        pageUndoManager.of(undoManager),
+        // Another person's replacement leaves the caret after it, not before
+        remoteReplaceCaret(ytext),
         remoteCarets({ ytext, awareness: provider.awareness }),
         // Must come after yCollab: reads the Y.Text during plugin update()
         authorshipExtension(ytext),
@@ -580,6 +588,15 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         ...(onDocChange ? [EditorView.updateListener.of((update) => {
           if (update.docChanged) { onDocChange(); return; }
         })] : []),
+        // The sources bar holds back a URL while it is being typed, and keeps
+        // out of the caret's way
+        EditorView.updateListener.of((update) => {
+          if (update.selectionSet || update.docChanged || update.focusChanged) {
+            sourceLinkTargetRef?.current?.editorChanged?.(update.view);
+          }
+        }),
+        // and the editor keeps the caret from scrolling up under it
+        EditorView.scrollMargins.of(() => ({ top: sourceLinkTargetRef?.current?.scrollMargin?.() ?? 0 })),
       ],
     });
 

@@ -2,7 +2,7 @@ use crate::server::Server;
 use serde_json::Value;
 use std::sync::Arc;
 
-use super::{blob, course_checks, validate_content};
+use super::{blob, course_checks, source_link_note, validate_content};
 
 pub const ARTICLE_CREATE_BLOCK_MESSAGE: &str = "New files in Lens Edu/articles cannot be created with the generic MCP create or move tools. Use the Lens Editor Add Article feature or MCP import_source, then poll import_status. That workflow performs source-aware extraction, normalization, deterministic validation, mandatory LLM source-fidelity review, evidence retention, and review provenance; bypassing it tends to create substantial downstream cleanup work for Lens staff, including Elias and Luc. If an exceptional manual article is truly necessary, first explain this intended workflow and its consequences to the user and obtain explicit permission. The user must then create the file in the articles folder themselves; MCP may edit that existing file afterward.";
 
@@ -62,7 +62,7 @@ pub(crate) async fn execute_checked(
     }
 
     // Session identity for provenance attribution + comment author labels.
-    let (author, attribution) = {
+    let (author, attribution, can_import) = {
         let session = server
             .mcp_sessions
             .get_session(session_id)
@@ -74,6 +74,7 @@ pub(crate) async fn execute_checked(
                 actor: session.ai_actor.clone(),
                 suggestion_author: session.author_name.clone(),
             },
+            source_link_note::session_can_import(&session.access),
         )
     };
 
@@ -120,7 +121,11 @@ pub(crate) async fn execute_checked(
     // the all-suggestions-accepted view the course checks read. It gets no
     // validator check: only edit has one.
     let checks = course_checks::after_write(server, file_path, None, content, None, platform).await;
-    Ok(format!("Created {}{}", file_path, checks))
+    let note = can_import
+        .then(|| source_link_note::create_note(file_path, content))
+        .flatten()
+        .unwrap_or_default();
+    Ok(format!("Created {}{}{}", file_path, checks, note))
 }
 
 async fn create_html_file(
@@ -177,6 +182,50 @@ mod tests {
     use crate::mcp::tools::blob;
     use crate::mcp::tools::test_helpers::*;
     use serde_json::json;
+
+    fn importing_session(server: &Arc<Server>) -> String {
+        let mut access = default_access();
+        access.raw_token = Some("tok".to_string());
+        server.mcp_sessions.create_session(access, None, None)
+    }
+
+    // Prevents: an agent finishing a page without being told its links could
+    // live in the library
+    #[tokio::test]
+    async fn create_ends_with_a_note_about_sources() {
+        let server = build_blob_test_server_with_folder().await;
+        let sid = importing_session(&server);
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Reading.md", "content": "[a](https://example.com/a)"}),
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.starts_with(
+                "Created Lens/Reading.md\n\nExternal links: this page links to 1 source"
+            ),
+            "{result}"
+        );
+        assert!(result.contains("link_from \"Lens/Reading.md\""), "{result}");
+    }
+
+    // Prevents: a note about a tool the session can't use: without a token to
+    // forward, the importer would turn it down
+    #[tokio::test]
+    async fn create_says_nothing_to_a_session_that_cannot_import() {
+        let server = build_blob_test_server_with_folder().await;
+        let sid = setup_session_no_reads(&server);
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Reading.md", "content": "[a](https://example.com/a)"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, "Created Lens/Reading.md");
+    }
 
     #[tokio::test]
     async fn create_json_stores_blob() {

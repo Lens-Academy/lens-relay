@@ -100,6 +100,8 @@ doc.getMap('activity_v0')    // direct AI edits: event id → { ts, actor, kind,
 doc.getMap('folds_v0')       // folded headings and indented blocks, shared by everyone on the page:
                              // fold id → { anchor (Y.RelativePosition JSON of the folded line's start), at }
                              // (src/components/Editor/extensions/sharedFolds.ts); the text itself is unchanged
+doc.getMap('link_offers_v0') // links nobody should be asked about again on this page: url → { at, by }
+                             // (src/lib/link-offers.ts); the import-and-link offer bar reads and writes it
 doc.getMap('comments_v0')    // HTML pages only: comment threads, thread id → Y.Map { anchor, status, createdAt,
                              // createdBy, resolvedAt?, resolvedBy?, seen?, originalQuote?, messages: Y.Map<id, {…}> }
                              // (src/components/HtmlEditor/comments/thread-store.ts; the relay's comments MCP tool)

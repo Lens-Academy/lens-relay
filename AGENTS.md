@@ -49,7 +49,7 @@ docs/                 # Operational documentation
 | Component | Location | Description |
 |-----------|----------|-------------|
 | **relay-server** | `crates/` | Rust-based CRDT sync server (y-sweet). Custom HMAC auth fixes for service accounts. |
-| **lens-editor** | `lens-editor/` | Web-based editor for relay documents. React + CodeMirror + yjs. Connects to relay-server via WebSocket. Includes Discord API proxy bridge (Express backend) and the import APIs the relay MCP tools proxy to: `/api/add-article` (`import_source`, `import_status`) and `/api/attachments/import` (`import_attachment`). |
+| **lens-editor** | `lens-editor/` | Web-based editor for relay documents. React + CodeMirror + yjs. Connects to relay-server via WebSocket. Includes Discord API proxy bridge (Express backend) and the import APIs the relay MCP tools proxy to: `/api/add-article` (`import_source`, `import_status`, and `link_from` link-backs) and `/api/attachments/import` (`import_attachment`). |
 | **relay-git-sync** | External: `No-Instructions/relay-git-sync` | Syncs relay shared folders to GitHub repos via webhooks. Runs as Docker container on production server. |
 | **Relay.md plugin** | External: `No-Instructions/Relay` | Obsidian plugin for real-time collaboration via relay-server. |
 
@@ -278,6 +278,22 @@ in the source (`upstream_key` in its frontmatter) and found again by its text wh
 nothing but the files records which lenses exist. Off until `ILIAD_SYNC_COURSE` names the course file; only
 the production server writes, and `npx tsx scripts/iliad-sync.ts` runs it against a directory. Operating it:
 `docs/server-ops.md`, "Iliad course sync".
+
+**Import and link sources** (`docs/plans/2026-11-02-import-and-link-sources.md`,
+`lens-editor/src/components/SourceLinksBar/`, `lens-editor/server/add-article/source-links.ts`,
+`crates/relay/src/server/link_source.rs`, `crates/relay/src/mcp/tools/source_link_note.rs`): a Markdown page linking to
+external articles or videos gets a one-line offer in the editor, and `create`/`edit` end with the same offer for agents.
+Accepting imports each source and replaces its link with a wikilink, directly for a person and through the edit policy
+for an agent. `POST /api/add-article` with `linkBack` (MCP `import_source` with `link_from`) links what is already in the
+library at once and records a link-back on the job for the rest, so the server finishes the swap (`POST /doc/link-source`)
+after the tab is closed. A failed import leaves the link as it was. Pages under `Lens Edu/` are refused, because the
+platform leaves a wikilink to an article as literal text. A dismissal is for everyone, through the page's `link_offers_v0` map; an ignored
+offer is remembered per browser. The library lookup is an in-memory index on the editor server, refreshed from
+`POST /doc/frontmatters` at most every 15 minutes (`server/add-article/library-index.ts`), and matches more strictly
+than the importer's dedup (`sameSource`), because a wrong match rewrites a page. The scanner exists twice,
+`shared/external-links.ts` and `crates/y-sweet-core/src/external_links.rs`, and both run
+`shared/external-link-cases.json`. Deploy the relay before the editor: without the two relay endpoints, lookups stay
+empty and swaps end `failed`.
 
 **Trash instead of delete** (`crates/relay/src/server/trash.rs`,
 `crates/relay/src/mcp/tools/delete_doc.rs`): the MCP `delete` tool (Admin/Edit only)

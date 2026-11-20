@@ -61,6 +61,7 @@ import { importVideo } from "../add-video/pipeline";
 import { resolveVideoEmbeds } from "./video-embeds";
 import { maybeCreateLens } from "../lens-doc";
 import { DuplicateDocumentError } from "./duplicate";
+import { frontmatterText, parseFrontmatter } from "../yaml";
 
 const WORK_BASE = "/tmp/articles";
 const EVIDENCE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -89,6 +90,8 @@ function relayArticleFolder(): string {
 interface ExistingArticleMatch {
   path: string;
   stubContent?: string;
+  /** The spelling that matched: the stored source_url but for a trailing slash. */
+  matchedUrl?: string;
 }
 
 interface ArticleImportBehavior {
@@ -154,6 +157,7 @@ async function processYouTubeVideo(
       signal?.throwIfAborted();
       console.warn(`[add-article] could not read ${existingPath} to see whether it is a video stub: ${err}`);
     }
+    if (content !== null) job.title ??= documentTitle(content);
     if (content !== null && isStub(content, VIDEO_STUB)) {
       job.relay_url = editorOpenUrl(topFolder + existingPath);
       if (behavior.stubOnly) {
@@ -211,7 +215,7 @@ async function processYouTubeVideo(
   job.title = payload.title;
   job.updated_at = new Date().toISOString();
 
-  await importVideo(job.id, payload, job.created_at, {
+  const { mdPath } = await importVideo(job.id, payload, job.created_at, {
     createLens: behavior.createLens,
     replaceExisting,
     stubPath,
@@ -224,9 +228,14 @@ async function processYouTubeVideo(
       job.updated_at = new Date().toISOString();
     },
   });
+  job.relay_path = mdPath;
   console.log(
     `[add-article] Imported video transcript for ${job.url} ("${payload.title}")`,
   );
+}
+
+function documentTitle(markdown: string): string | undefined {
+  return frontmatterText(parseFrontmatter(markdown)?.title);
 }
 
 async function findExistingArticle(
@@ -235,12 +244,13 @@ async function findExistingArticle(
 ): Promise<ExistingArticleMatch | null> {
   const variants = dedupUrlVariants(...urls);
   const result = await checkRelayArticleUrls(variants, signal);
-  const path = variants.map((variant) => result.found[variant]).find(Boolean);
-  if (!path) return null;
+  const matchedUrl = variants.find((variant) => result.found[variant]);
+  if (!matchedUrl) return null;
+  const path = result.found[matchedUrl]!;
   const stub = variants
     .map((variant) => result.stubs[variant])
     .find((candidate) => candidate?.path === path);
-  return { path, stubContent: stub?.content };
+  return { path, stubContent: stub?.content, matchedUrl };
 }
 
 // Serializes the resolve-filename → write step across concurrently-running jobs
@@ -409,12 +419,15 @@ export async function processArticle(
         throw new DuplicateDocumentError(
           `This URL was already imported: ${topFolder}${existing.path}`,
           topFolder + existing.path,
+          existing.matchedUrl,
         );
       }
       if (isStubOnly) {
+        job.title ??= documentTitle(existing.stubContent);
         throw new DuplicateDocumentError(
           `An article stub already exists for this URL: ${topFolder}${existing.path}`,
           topFolder + existing.path,
+          existing.matchedUrl,
         );
       }
       existingStub = existing;

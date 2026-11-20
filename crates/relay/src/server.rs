@@ -53,6 +53,7 @@ use y_sweet_core::{
         DebouncedSyncProtocolEventSender, DocumentUpdatedEvent, EventDispatcher, EventEnvelope,
         EventSender, SyncProtocolEventSender, UnifiedEventDispatcher, WebhookSender,
     },
+    external_links,
     link_indexer::{self, LinkIndexer},
     metrics::RelayMetrics,
     recent_changes_index::RecentChangesIndex,
@@ -65,6 +66,7 @@ use y_sweet_core::{
 };
 use yrs::{GetString, Map, ReadTxn, Text, Transact, WriteTxn};
 
+mod link_source;
 mod trash;
 pub use trash::{
     restore_hint as trash_restore_hint, InboundRef, PurgeReport, PurgedEntry, TrashError,
@@ -4853,6 +4855,8 @@ impl Server {
             .route("/doc/check", post(handle_check_documents))
             .route("/doc/check-video-ids", post(handle_check_video_ids))
             .route("/doc/check-source-urls", post(handle_check_source_urls))
+            .route("/doc/frontmatters", post(handle_doc_frontmatters))
+            .route("/doc/link-source", post(link_source::handle_link_source))
             .route(
                 "/doc/attachment",
                 post(handle_upsert_attachment).layer(DefaultBodyLimit::max(30 * 1024 * 1024)),
@@ -6685,6 +6689,69 @@ async fn handle_check_source_urls(
     }
 
     Ok(Json(CheckSourceUrlsResponse { found, stubs }))
+}
+
+#[derive(Deserialize)]
+struct DocFrontmattersRequest {
+    folder: String,
+    subfolder: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DocFrontmatter {
+    /// Full path, e.g. "Lens Edu/articles/x.md".
+    path: String,
+    /// The raw leading `---` block, or "" when the doc's head has none.
+    frontmatter: String,
+}
+
+#[derive(Serialize)]
+struct DocFrontmattersResponse {
+    docs: Vec<DocFrontmatter>,
+}
+
+/// The frontmatter of every Markdown doc under a folder, for the editor
+/// server's library index (it keeps the URL spelling rules, so it does the
+/// matching). Reads every doc, one at a time.
+async fn handle_doc_frontmatters(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Json(body): Json<DocFrontmattersRequest>,
+) -> Result<Json<DocFrontmattersResponse>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    let prefix = match &body.subfolder {
+        Some(sub) => format!("{}/{}/", body.folder, sub),
+        None => format!("{}/", body.folder),
+    };
+    let mut matching_paths: Vec<String> = server_state
+        .doc_resolver()
+        .all_paths()
+        .into_iter()
+        .filter(|p| p.starts_with(&prefix) && p.ends_with(".md") && !p.contains("/_trash/"))
+        .collect();
+    matching_paths.sort_unstable();
+
+    let mut docs = Vec::with_capacity(matching_paths.len());
+    for path in matching_paths {
+        let doc_id = match server_state.doc_resolver().resolve_path(&path) {
+            Some(info) => info.doc_id,
+            None => continue,
+        };
+        if server_state.ensure_doc_loaded(&doc_id).await.is_err() {
+            continue;
+        }
+        // Longer than the duplicate check's head: a block cut off here reads as
+        // no frontmatter, and the article would drop out of the library index.
+        let head = match read_doc_head(&server_state, &doc_id, 32_000) {
+            Some(h) => h,
+            None => continue,
+        };
+        let frontmatter = external_links::frontmatter_of(&head).to_string();
+        docs.push(DocFrontmatter { path, frontmatter });
+    }
+
+    Ok(Json(DocFrontmattersResponse { docs }))
 }
 
 #[derive(Deserialize)]
@@ -9629,6 +9696,98 @@ mod test {
             body["stubs"]["https://ai-safety-atlas.com/chapters/v1/risks/introduction/"].is_null()
         );
         assert!(body["found"]["https://unimported.example/x"].is_null());
+    }
+
+    async fn post_doc_frontmatters(
+        server: &Arc<Server>,
+        body: JsonValue,
+    ) -> (StatusCode, JsonValue) {
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/doc/frontmatters")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(JsonValue::Null),
+        )
+    }
+
+    // Prevents: the library index missing an article, listing a trashed one,
+    // or a body's text being read as frontmatter
+    #[tokio::test]
+    async fn doc_frontmatters_lists_each_docs_raw_block() {
+        let server = Server::new_for_test();
+        let (a, b, c, d, e) = (
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            "33333333-3333-4333-8333-333333333333",
+            "44444444-4444-4444-8444-444444444444",
+            "55555555-5555-4555-8555-555555555555",
+        );
+        insert_test_folder_doc(
+            &server,
+            "Lens Edu",
+            &[
+                ("/articles/a.md", a, "markdown"),
+                ("/articles/none.md", b, "markdown"),
+                ("/articles/long.md", c, "markdown"),
+                ("/_trash/articles/old.md", d, "markdown"),
+                ("/Lenses/l.md", e, "markdown"),
+            ],
+        )
+        .await;
+        let block = "---\ntitle: A\nsource_url: https://example.com/a\n---\n";
+        insert_test_content_doc(&server, a, &format!("{block}\nBody.\n---\nmore")).await;
+        insert_test_content_doc(&server, b, "No frontmatter.\n---\nnot: this\n---\n").await;
+        // Closes past the head the endpoint reads.
+        let long = format!("---\ntitle: L\nnote: {}\n---\n", "x".repeat(40_000));
+        insert_test_content_doc(&server, c, &long).await;
+        insert_test_content_doc(&server, d, block).await;
+        insert_test_content_doc(&server, e, block).await;
+
+        let (status, body) = post_doc_frontmatters(
+            &server,
+            json!({ "folder": "Lens Edu", "subfolder": "articles" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            json!({ "docs": [
+                { "path": "Lens Edu/articles/a.md", "frontmatter": block },
+                { "path": "Lens Edu/articles/long.md", "frontmatter": "" },
+                { "path": "Lens Edu/articles/none.md", "frontmatter": "" },
+            ]})
+        );
+
+        // Without a subfolder: the whole folder, still no trash.
+        let (status, body) = post_doc_frontmatters(&server, json!({ "folder": "Lens Edu" })).await;
+        assert_eq!(status, StatusCode::OK);
+        let paths: Vec<&str> = body["docs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|doc| doc["path"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "Lens Edu/Lenses/l.md",
+                "Lens Edu/articles/a.md",
+                "Lens Edu/articles/long.md",
+                "Lens Edu/articles/none.md",
+            ]
+        );
     }
 
     // Frontmatter-precise: a URL that appears only in the body must NOT match
