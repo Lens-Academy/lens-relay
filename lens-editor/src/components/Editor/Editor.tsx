@@ -641,6 +641,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         <div
           className="pointer-events-none absolute bottom-2 right-4 z-20 rounded-md border border-gray-200 bg-white/95 px-2 py-0.5 text-xs text-gray-600 shadow-sm tabular-nums"
           data-testid="selection-count"
+          // The floating accept/reject buttons stay clear of it (criticmarkup.ts)
+          data-floats-over-editor=""
           aria-live="polite"
         >
           {formatSelectionCount(selectionCount)}
