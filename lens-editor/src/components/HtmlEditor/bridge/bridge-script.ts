@@ -10,6 +10,7 @@ import {
 import { installPageServices } from './page-services';
 import { installCommentLayer } from './comment-layer';
 import { installTtsLayer } from './tts-layer';
+import { isQuickSwitcherKey } from '../../../lib/quick-switcher-key';
 import { readAnchor } from '../anchoring/types';
 
 // Bumped whenever comment placements are re-measured; scroll-state messages
@@ -113,10 +114,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   // handlers (its window listeners run after ours). The parent honours it only
   // with user activation.
   const onQuickSwitchKey = (event: KeyboardEvent): void => {
-    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
-    const key = event.key.toLowerCase();
-    if (key !== 'o' && key !== 'k') return;
-    if (event.defaultPrevented) return;
+    if (!isQuickSwitcherKey(event)) return;
     event.preventDefault();
     if (nonce !== null) postToParent({ type: 'shortcut', payload: { key: 'o' } });
   };

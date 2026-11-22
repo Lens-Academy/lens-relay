@@ -499,7 +499,7 @@ function DefaultLanding() {
         ) : (
           <p className="text-gray-500">
             Choose a file from the sidebar, or press{' '}
-            <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">Ctrl+K</kbd>
+            <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">{/Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'}</kbd>
             {' '}to open the quick switcher.
           </p>
         )}
