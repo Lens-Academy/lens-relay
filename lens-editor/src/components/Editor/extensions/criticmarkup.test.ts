@@ -1,12 +1,14 @@
 // src/components/Editor/extensions/criticmarkup.test.ts
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, afterEach } from 'vitest';
 import { EditorState, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { markdown } from '@codemirror/lang-markdown';
-import { syntaxTree } from '@codemirror/language';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { syntaxTree, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
+import { tags } from '@lezer/highlight';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSelection, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
 import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, commentClickCallback } from './criticmarkup';
-import { toggleSourceMode } from './livePreview';
+import { livePreview, toggleSourceMode } from './livePreview';
 
 describe('CriticMarkup Extension', () => {
   let cleanup: (() => void) | undefined;
@@ -834,6 +836,81 @@ describe('CriticMarkup Extension', () => {
       // Color class applied to entire range, but delimiters visible (not hidden)
       expect(hasClass(view, 'cm-deletion')).toBe(true);
       expect(hasClass(view, 'cm-hidden-syntax')).toBe(false);
+    });
+  });
+
+  describe('Line through suggestions, with the editor stylesheet', () => {
+    // index.css, and Editor.tsx's Markdown with a stand-in for
+    // defaultHighlightStyle's strikethrough: the same spans, with a class
+    // happy-dom can select (it rejects style-mod's generated ͼ classes)
+    const stylesheet = readFileSync('src/index.css', 'utf8').replace(/^@import .*$/m, '');
+    const meta = (author: string) => JSON.stringify({ author, timestamp: 1760000000000 });
+
+    function createStyledEditor(doc: string) {
+      const style = document.createElement('style');
+      style.textContent = `${stylesheet}\n.test-strikethrough { text-decoration: line-through; }`;
+      document.head.appendChild(style);
+      const view = new EditorView({
+        parent: document.body,
+        state: EditorState.create({
+          doc,
+          selection: { anchor: doc.length },
+          extensions: [
+            syntaxHighlighting(HighlightStyle.define([{ tag: tags.strikethrough, class: 'test-strikethrough' }])),
+            markdown({ base: markdownLanguage }),
+            livePreview(),
+            criticMarkupExtension(),
+          ],
+        }),
+      });
+      return { view, cleanup: () => { view.destroy(); style.remove(); } };
+    }
+
+    /** The visible text drawn with a line through it, one entry per struck run of a line. */
+    function struckRuns(view: EditorView): string[] {
+      const runs: string[] = [];
+      for (const line of view.contentDOM.querySelectorAll('.cm-line')) {
+        let run = '';
+        const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (getComputedStyle(node.parentElement!).fontSize === '0px') continue;
+          let struck = false;
+          for (let el = node.parentElement; el && el !== view.contentDOM; el = el.parentElement) {
+            if (getComputedStyle(el).textDecoration.includes('line-through')) struck = true;
+          }
+          if (struck) {
+            run += node.textContent;
+          } else if (run) {
+            runs.push(run);
+            run = '';
+          }
+        }
+        if (run) runs.push(run);
+      }
+      return runs;
+    }
+
+    it('draws no line through substitutions, but keeps it on deletions in them and on real ~~strike~~', () => {
+      const { view, cleanup: c } = createStyledEditor([
+        `A substitution: {~~${meta('Elias')}@@old text~>new text~~} here.`,
+        `Mark's edit in its new text: {~~${meta('Elias')}@@old text~>new {--${meta('Mark')}@@text--}{++${meta('Mark')}@@words++}~~} here.`,
+        `Mark's edit in its old text: {~~${meta('Elias')}@@old {--${meta('Mark')}@@text--}{++${meta('Mark')}@@words++}~>new text~~} here.`,
+        `A deletion: {--${meta('Elias')}@@deleted words--} here.`,
+        'A real ~~strike~~ and {~~old text~>new text~~} beside it.',
+      ].join('\n'));
+      cleanup = c;
+
+      expect(struckRuns(view)).toEqual(['text', 'text', 'deleted words', '~~strike~~']);
+    });
+
+    it('draws no line through a substitution\'s text in source mode', () => {
+      const { view, cleanup: c } = createStyledEditor('{~~old text~>new text~~} and ~~strike~~');
+      cleanup = c;
+
+      toggleSourceMode(view, true);
+
+      // The substitution's ~~ delimiters are Markdown strikethrough marks there
+      expect(struckRuns(view)).toEqual(['~~', '~~', '~~strike~~']);
     });
   });
 
