@@ -140,6 +140,8 @@ export type BridgeToParent =
   | { type: 'current-described'; payload: { id: string; anchor: HtmlAnchor | null } }
   | { type: 'page-problems'; payload: { problems: PageProblem[] } }
   | { type: 'storage-ops'; payload: { ops: StorageOp[] } }
+  /** The page moved to another #fragment (an in-page link); the editor mirrors it in its URL. */
+  | { type: 'fragment'; payload: { hash: string } }
   /** The page's sentences; with `play`, a request to play from that one. */
   | { type: 'tts-units'; payload: { units: TtsUnit[]; play?: number } }
   | { type: 'tts-user-scrolled'; payload: Record<string, never> }

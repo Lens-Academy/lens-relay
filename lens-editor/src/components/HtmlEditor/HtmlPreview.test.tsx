@@ -193,6 +193,38 @@ describe('HtmlPreview', () => {
   });
 });
 
+describe('HtmlPreview links to a place in the page', () => {
+  afterEach(() => {
+    cleanup();
+    window.history.replaceState(null, '', window.location.pathname);
+  });
+
+  it('opens the page at the editor URL\'s #fragment', () => {
+    window.history.replaceState(null, '', window.location.pathname + '#t42');
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<head></head><p id="t42">x</p>');
+    const { container } = render(<HtmlPreview ytext={ytext} />);
+    expect(container.querySelector('iframe')!.getAttribute('srcdoc')).toContain('getElementById("t42")');
+  });
+
+  it('mirrors an in-page move in the editor URL, ignoring unsafe or missing fragments', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p id="t5">x</p>');
+    render(<HtmlPreview ytext={ytext} debounceMs={0} />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+    const move = (hash: unknown) => dispatchFromBridge(iframe, {
+      nonce: '__test_nonce__',
+      message: { type: 'fragment', payload: { hash } } as BridgeToParent,
+    });
+    await act(async () => { move('#t5'); });
+    expect(window.location.hash).toBe('#t5');
+    await act(async () => { move('#"><img src=x>'); move(''); move(7); });
+    expect(window.location.hash).toBe('#t5');
+  });
+});
+
 describe('HtmlPreview bridge integration', () => {
   it('calls onThreadClicked with the thread id when the bridge reports a click', async () => {
     const doc = new Y.Doc();

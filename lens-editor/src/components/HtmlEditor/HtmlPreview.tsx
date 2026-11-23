@@ -19,7 +19,7 @@ import {
 } from './bridge/protocol';
 import { PAGE_SOURCE, type ReadAloudEngine } from '../../lib/read-aloud/engine';
 import { applyReadAloudKey, isReadAloudKey } from '../../lib/read-aloud/keys';
-import { buildSrcDoc } from './runtime/page-runtime';
+import { buildSrcDoc, safeFragment } from './runtime/page-runtime';
 import { readAnchor, type HtmlAnchor } from './anchoring/types';
 import { withoutLegacyTextAnchors } from './comments/legacy';
 
@@ -273,10 +273,11 @@ function isPageProblemList(value: unknown): value is PageProblem[] {
   ));
 }
 
-function previewSrcDoc(source: string, storageKey: string | undefined): string {
+function previewSrcDoc(source: string, storageKey: string | undefined, fragment: string | null = null): string {
   return buildSrcDoc(withoutLegacyTextAnchors(source), {
     bridgeSource: BRIDGE_SOURCE,
     storageSeed: readPageStorage(storageKey),
+    fragment,
   });
 }
 
@@ -386,7 +387,9 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
   const [debounced, setDebounced] = useState(content);
   const [frames, setFrames] = useState<PreviewFrame[]>(() => [{
     id: 1,
-    srcDoc: previewSrcDoc(content, storageKey),
+    // Only the first frame opens at the URL's #fragment; rebuilds after an
+    // edit restore the reader's scroll instead.
+    srcDoc: previewSrcDoc(content, storageKey, window.location.hash),
     state: 'active',
   }]);
   const [nonce] = useState(() => makeNonce());
@@ -757,6 +760,15 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
           const deferredFrame = framesRef.current.find(candidate => candidate.id === deferredFrameId);
           if (deferredFrame) restoreFrameLayout(deferredFrame);
         }
+        return;
+      }
+
+      if (message.type === 'fragment') {
+        if (frame.state !== 'active' || !isObject(message.payload)) return;
+        const hash = typeof message.payload.hash === 'string' ? safeFragment(message.payload.hash) : null;
+        if (!hash) return;
+        // The URL a reader copies now links to this place in the page.
+        window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + hash);
         return;
       }
 

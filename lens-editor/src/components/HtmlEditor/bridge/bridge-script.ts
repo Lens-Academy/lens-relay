@@ -307,11 +307,29 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   };
   win.addEventListener('message', messageListener);
   win.addEventListener('scroll', scheduleScrollState);
+  // In a srcdoc frame a "#id" link resolves against the editor's URL, so
+  // following it would navigate the frame away from the page. Scroll to the
+  // target here instead (unless the page already handled the click), and tell
+  // the editor, which puts the fragment in its URL so the link can be shared.
+  const onFragmentClick = (event: MouseEvent): void => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const link = (event.target as Element | null)?.closest?.('a[href^="#"]');
+    const href = link?.getAttribute('href') ?? '';
+    const target = href.length > 1 ? doc.getElementById(decodeURIComponent(href.slice(1))) : null;
+    if (!target) return;
+    if (!event.defaultPrevented) {
+      event.preventDefault();
+      target.scrollIntoView();
+    }
+    if (nonce !== null) postToParent({ type: 'fragment', payload: { hash: href } });
+  };
+  win.addEventListener('click', onFragmentClick);
 
   const cleanup = (): void => {
     win.removeEventListener('message', messageListener);
     win.removeEventListener('scroll', scheduleScrollState);
     win.removeEventListener('keydown', onQuickSwitchKey);
+    win.removeEventListener('click', onFragmentClick);
     if (scrollFrame !== null) {
       win.cancelAnimationFrame(scrollFrame);
       scrollFrame = null;
