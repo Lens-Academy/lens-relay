@@ -241,36 +241,23 @@ pub fn parse(raw: &str) -> Vec<Span> {
                     let (del_content, del_author, del_ts) = extract_metadata(del_inner);
                     let after_del = close + 3;
 
-                    // Check for adjacent {++...++}
-                    if after_del + 2 < len
-                        && bytes[after_del] == b'{'
-                        && bytes[after_del + 1] == b'+'
-                        && bytes[after_del + 2] == b'+'
-                    {
-                        if let Some(ins_close) = find_closing(raw, after_del + 3, "++}") {
-                            let ins_inner = &raw[after_del + 3..ins_close];
-                            let (ins_content, ins_author, ins_ts) = extract_metadata(ins_inner);
+                    // Adjacent {++...++} by the same author: one suggestion
+                    if let Some(ins_close) = paired_insertion_close(raw, after_del, &del_author) {
+                        let ins_inner = &raw[after_del + 3..ins_close];
+                        let (ins_content, _, ins_ts) = extract_metadata(ins_inner);
 
-                            if !plain.is_empty() {
-                                spans.push(Span::Plain(std::mem::take(&mut plain)));
-                            }
-
-                            let author = if del_author != "Unknown" {
-                                del_author
-                            } else {
-                                ins_author
-                            };
-                            let timestamp = del_ts.or(ins_ts);
-
-                            spans.push(Span::Suggestion {
-                                deleted: del_content.to_string(),
-                                inserted: ins_content.to_string(),
-                                author,
-                                timestamp,
-                            });
-                            i = ins_close + 3;
-                            continue;
+                        if !plain.is_empty() {
+                            spans.push(Span::Plain(std::mem::take(&mut plain)));
                         }
+
+                        spans.push(Span::Suggestion {
+                            deleted: del_content.to_string(),
+                            inserted: ins_content.to_string(),
+                            author: del_author,
+                            timestamp: del_ts.or(ins_ts),
+                        });
+                        i = ins_close + 3;
+                        continue;
                     }
 
                     // Standalone deletion
@@ -327,6 +314,19 @@ pub fn parse(raw: &str) -> Vec<Span> {
 /// Find the closing delimiter starting from `start` position in `raw`.
 fn find_closing(raw: &str, start: usize, delimiter: &str) -> Option<usize> {
     raw[start..].find(delimiter).map(|offset| start + offset)
+}
+
+/// When the insertion `{++...++}` at `after_del`, right after a deletion by
+/// `del_author`, is one suggestion with it (a replacement, so both by one
+/// author), where its closing `++}` starts. Text someone types just after
+/// another author's deletion is a suggestion of its own, not part of theirs.
+fn paired_insertion_close(raw: &str, after_del: usize, del_author: &str) -> Option<usize> {
+    if !raw[after_del..].starts_with("{++") {
+        return None;
+    }
+    let ins_close = find_closing(raw, after_del + 3, "++}")?;
+    let (_, ins_author, _) = extract_metadata(&raw[after_del + 3..ins_close]);
+    (ins_author == del_author).then_some(ins_close)
 }
 
 pub fn accepted_view(spans: &[Span]) -> String {
@@ -418,14 +418,9 @@ fn span_raw_length(raw: &str, span: &Span, raw_start: usize) -> usize {
             {
                 if let Some(del_close) = find_closing(raw, raw_start + 3, "--}") {
                     let after_del = del_close + 3;
-                    if after_del + 2 < raw.len()
-                        && bytes[after_del] == b'{'
-                        && bytes[after_del + 1] == b'+'
-                        && bytes[after_del + 2] == b'+'
-                    {
-                        if let Some(ins_close) = find_closing(raw, after_del + 3, "++}") {
-                            return ins_close + 3 - raw_start;
-                        }
+                    let (_, del_author, _) = extract_metadata(&raw[raw_start + 3..del_close]);
+                    if let Some(ins_close) = paired_insertion_close(raw, after_del, &del_author) {
+                        return ins_close + 3 - raw_start;
                     }
                     return after_del - raw_start;
                 }
@@ -815,6 +810,19 @@ pub fn merge_edit(
         std::collections::HashSet::new();
 
     for r in &merged_regions {
+        // A suggestion that adds nothing to the accepted view (a standalone
+        // deletion) is a zero-width segment. Where the diff starts a region
+        // right at it, neither that region nor the one before collects it, so
+        // it is kept as it is here, ahead of the region.
+        for (si, seg) in segments.iter().enumerate() {
+            if seg.is_suggestion
+                && seg.accepted_text.is_empty()
+                && seg_positions[si].0 == r.old_start
+                && emitted_suggestions.insert(si)
+            {
+                replacement.push_str(&seg.raw_text);
+            }
+        }
         if !r.is_change {
             // Equal region: emit raw text from segments
             replacement.push_str(&collect_raw_for_equal(
@@ -1311,6 +1319,44 @@ mod tests {
         assert_eq!(base_view(&spans), "The user@@example.com address.");
     }
 
+    /// Elias's deletion, and Mark's insertion just after it
+    const TWO_AUTHORS: &str = r#"a {--{"author":"Elias","timestamp":1700000000000}@@old--}{++{"author":"Mark","timestamp":1700000060000}@@new++} b"#;
+
+    #[test]
+    fn a20_deletion_and_insertion_by_two_authors_are_two_suggestions() {
+        let spans = parse(TWO_AUTHORS);
+        assert_eq!(
+            spans,
+            vec![
+                Span::Plain("a ".into()),
+                Span::Suggestion {
+                    deleted: "old".into(),
+                    inserted: "".into(),
+                    author: "Elias".into(),
+                    timestamp: Some(1700000000000),
+                },
+                Span::Suggestion {
+                    deleted: "".into(),
+                    inserted: "new".into(),
+                    author: "Mark".into(),
+                    timestamp: Some(1700000060000),
+                },
+                Span::Plain(" b".into()),
+            ]
+        );
+        assert_eq!(accepted_view(&spans), "a new b");
+        assert_eq!(base_view(&spans), "a old b");
+    }
+
+    #[test]
+    fn a21_deletion_without_metadata_and_insertion_with_are_two_suggestions() {
+        let raw = r#"{--old--}{++{"author":"Mark","timestamp":1700000060000}@@new++}"#;
+        let spans = parse(raw);
+        assert_eq!(spans.len(), 2);
+        assert!(matches!(&spans[0], Span::Suggestion { author, .. } if author == "Unknown"));
+        assert!(matches!(&spans[1], Span::Suggestion { author, .. } if author == "Mark"));
+    }
+
     // --- Group D: spans_covering_accepted_range() ---
 
     #[test]
@@ -1375,6 +1421,16 @@ mod tests {
         let covered = spans_covering_accepted_range(&spans, 3, 3);
         assert_eq!(covered.len(), 1);
         assert_eq!(covered[0].span_index, 1);
+    }
+
+    #[test]
+    fn d09_raw_positions_of_two_authors_suggestions() {
+        let spans = parse(TWO_AUTHORS);
+        let insertion_at = TWO_AUTHORS.find("{++").unwrap();
+        assert_eq!(
+            compute_raw_positions(TWO_AUTHORS, &spans),
+            vec![0, 2, insertion_at, TWO_AUTHORS.len() - 2]
+        );
     }
 
     // --- Group B: merge_edit() ---
@@ -2061,6 +2117,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn b40_standalone_deletion_where_an_edit_region_starts_is_kept() {
+        // The edit changes the word before the deletion; the diff's next region
+        // starts right at it
+        let raw = r#"Hello {--{"author":"Elias","timestamp":1700000000000}@@beautiful --}world."#;
+        let edit = merge_edit(raw, "Hello world", "Hi world", "AI", 1700000000000).unwrap();
+        let result = apply_merge(raw, &edit);
+        assert!(
+            result.contains(r#"{--{"author":"Elias","timestamp":1700000000000}@@beautiful --}"#),
+            "{}",
+            result
+        );
+        let spans = parse(&result);
+        assert_eq!(accepted_view(&spans), "Hi world.");
+        assert_eq!(base_view(&spans), "Hello beautiful world.");
+    }
+
+    #[test]
+    fn b41_insertion_where_a_standalone_deletion_is_keeps_it() {
+        let raw = r#"Hello {--{"author":"Elias","timestamp":1700000000000}@@beautiful --}world."#;
+        let edit =
+            merge_edit(raw, "Hello world", "Hello there world", "AI", 1700000000000).unwrap();
+        let result = apply_merge(raw, &edit);
+        assert!(
+            result.contains(r#"{--{"author":"Elias","timestamp":1700000000000}@@beautiful --}"#),
+            "{}",
+            result
+        );
+        let spans = parse(&result);
+        assert_eq!(accepted_view(&spans), "Hello there world.");
+        assert_eq!(base_view(&spans), "Hello beautiful world.");
+    }
+
+    #[test]
+    fn b42_edit_of_insertion_keeps_another_authors_deletion_before_it() {
+        let edit = merge_edit(TWO_AUTHORS, "a new", "a newer", "AI", 1700000000000).unwrap();
+        let result = apply_merge(TWO_AUTHORS, &edit);
+        assert!(
+            result.contains(r#"{--{"author":"Elias","timestamp":1700000000000}@@old--}"#),
+            "Elias's deletion kept as it was: {}",
+            result
+        );
+        let spans = parse(&result);
+        assert_eq!(accepted_view(&spans), "a newer b");
+        assert_eq!(base_view(&spans), "a old b");
+    }
+
     // --- Input validation: reject CriticMarkup in AI input ---
 
     #[test]
@@ -2174,6 +2277,15 @@ mod tests {
         let footer = render_pending_summary(&spans, &accepted).unwrap();
         assert!(footer.contains("Unknown"));
         assert!(!footer.contains("ago"));
+    }
+
+    #[test]
+    fn c13_two_authors_suggestions_listed_apart() {
+        let spans = parse(TWO_AUTHORS);
+        let accepted = accepted_view(&spans);
+        let footer = render_pending_summary(&spans, &accepted).unwrap();
+        assert!(footer.contains("L1: {--old--} (Elias)"), "{}", footer);
+        assert!(footer.contains("L1: {++new++} (Mark)"), "{}", footer);
     }
 
     #[test]
