@@ -279,7 +279,7 @@ describe('installBridge comment layer', () => {
   });
 
   it('follows in-page #links itself and tells the editor, so the frame never navigates away', () => {
-    setupBody('<a id="a" href="#t5">to 5</a><a id="b" href="#t6">to 6</a><a id="c" href="#nope">x</a><p id="t5">5</p><p id="t6">6</p>');
+    setupBody('<a id="a" href="#t5">to 5</a><a id="b" href="#t6">to 6</a><a id="c" href="#nope">x</a><a id="d" href="#%E0%A4%A">bad</a><p id="t5">5</p><p id="t6">6</p>');
     cleanup = installBridge(window);
     send({ type: 'init', payload: {} });
     sent = [];
@@ -298,8 +298,9 @@ describe('installBridge comment layer', () => {
     document.getElementById('b')!.addEventListener('click', e => e.preventDefault(), { once: true });
     click('b');
     expect(scrolled).toEqual(['t5']);
-    // A link to nothing on the page is not reported.
+    // A link to nothing on the page, or a malformed one, is not reported.
     click('c');
+    click('d');
     expect(sent.filter(e => e.message.type === 'fragment').map(e => e.message.payload)).toEqual([{ hash: '#t5' }, { hash: '#t6' }]);
   });
 

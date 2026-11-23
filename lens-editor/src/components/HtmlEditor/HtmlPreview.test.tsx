@@ -208,6 +208,26 @@ describe('HtmlPreview links to a place in the page', () => {
     expect(container.querySelector('iframe')!.getAttribute('srcdoc')).toContain('getElementById("t42")');
   });
 
+  it('keeps the fragment for the first frame that has content (a cold open syncs after mounting)', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState(null, '', window.location.pathname + '#t42');
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    const { container } = render(<HtmlPreview ytext={ytext} debounceMs={10} />);
+    const srcdocs = () => Array.from(container.querySelectorAll('iframe')).map(f => f.getAttribute('srcdoc') ?? '');
+    expect(srcdocs().some(s => s.includes('getElementById("t42")'))).toBe(false);
+    await act(async () => { ytext.insert(0, '<head></head><p id="t42">x</p>'); });
+    await act(async () => { vi.advanceTimersByTime(50); });
+    expect(srcdocs().some(s => s.includes('getElementById("t42")'))).toBe(true);
+    // Later edits keep the reader's scroll: no fragment again.
+    await act(async () => { ytext.insert(ytext.length, '<p>more</p>'); });
+    await act(async () => { vi.advanceTimersByTime(50); });
+    const latest = srcdocs().filter(s => s.includes('<p>more</p>'));
+    expect(latest.length).toBeGreaterThan(0);
+    expect(latest.every(s => !s.includes('getElementById("t42")'))).toBe(true);
+    vi.useRealTimers();
+  });
+
   it('mirrors an in-page move in the editor URL, ignoring unsafe or missing fragments', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');

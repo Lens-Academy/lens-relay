@@ -385,11 +385,13 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
 }, handleRef) {
   const [content, setContent] = useState(() => ytext.toString());
   const [debounced, setDebounced] = useState(content);
+  // The URL's #fragment goes to the first frame built from real content. On a
+  // cold open the document syncs after mounting, so that may be a rebuild;
+  // after it, rebuilds restore the reader's scroll instead.
+  const pendingFragmentRef = useRef<string | null>(safeFragment(window.location.hash));
   const [frames, setFrames] = useState<PreviewFrame[]>(() => [{
     id: 1,
-    // Only the first frame opens at the URL's #fragment; rebuilds after an
-    // edit restore the reader's scroll instead.
-    srcDoc: previewSrcDoc(content, storageKey, window.location.hash),
+    srcDoc: previewSrcDoc(content, storageKey, content.trim() ? pendingFragmentRef.current : null),
     state: 'active',
   }]);
   const [nonce] = useState(() => makeNonce());
@@ -560,7 +562,9 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
   }, [content, debounceMs]);
 
   useEffect(() => {
-    const nextSrcDoc = previewSrcDoc(debounced, storageKey);
+    const fragment = debounced.trim() ? pendingFragmentRef.current : null;
+    if (fragment) pendingFragmentRef.current = null;
+    const nextSrcDoc = previewSrcDoc(debounced, storageKey, fragment);
     const activeFrame = framesRef.current.find(frame => frame.state === 'active') ?? framesRef.current[0];
     const shouldCaptureUiState = activeFrame?.srcDoc !== nextSrcDoc
       && (hasDetailsElementMarkup(activeFrame?.srcDoc ?? '') || hasDetailsElementMarkup(nextSrcDoc));
