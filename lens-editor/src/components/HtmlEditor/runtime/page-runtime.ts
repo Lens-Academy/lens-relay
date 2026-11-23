@@ -114,6 +114,26 @@ export interface RuntimeHeadOptions {
   bridgeSource: string;
   /** Per-viewer localStorage contents to seed the page's storage shim with. */
   storageSeed?: Record<string, string> | null;
+  /** The editor URL's #fragment: the page opens there (a link to one turn of a
+   *  transcript, say). Only plain ids pass; see safeFragment. */
+  fragment?: string | null;
+}
+
+const FRAGMENT_RE = /^#?([A-Za-z0-9_.:-]{1,200})$/;
+
+/** A fragment safe to put into the page: a plain id, at most 200 characters. */
+export function safeFragment(hash: string | null | undefined): string | null {
+  const m = FRAGMENT_RE.exec(hash ?? '');
+  return m ? `#${m[1]}` : null;
+}
+
+/** Scrolls to the element once the page has rendered (scripts that build the
+ *  page have run by then). The page cannot see the fragment in its own
+ *  location: a sandboxed srcdoc frame has an opaque origin, and the browser
+ *  refuses history.replaceState there (checked in Chromium, 23 Nov 2026). */
+function fragmentScript(fragment: string): string {
+  const id = fragment.slice(1);
+  return `<script>addEventListener("load",function(){var t=document.getElementById(${JSON.stringify(id)});if(t)t.scrollIntoView()});</script>`;
 }
 
 /** Everything the editor adds in front of the author's markup. */
@@ -127,6 +147,8 @@ export function runtimeHead(source: string, options: RuntimeHeadOptions): string
   if (options.storageSeed && Object.keys(options.storageSeed).length > 0) {
     parts.push(`<script>window.__lensStorageSeed=${scriptSafeJson(options.storageSeed)};</script>`);
   }
+  const fragment = safeFragment(options.fragment);
+  if (fragment) parts.push(fragmentScript(fragment));
   parts.push(`<script>${options.bridgeSource}</script>`);
   // Error line numbers count the injected lines; the bridge subtracts them so
   // problems point at the author's own source lines.

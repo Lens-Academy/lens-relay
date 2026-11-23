@@ -90,6 +90,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   const pageServices = installPageServices(win, {
     onProblems: problems => postToParent({ type: 'page-problems', payload: { problems } }),
     onStorage: ops => postToParent({ type: 'storage-ops', payload: { ops } }),
+    onFragment: hash => { if (nonce !== null) postToParent({ type: 'fragment', payload: { hash } }); },
   });
 
   const comments = installCommentLayer(win, {

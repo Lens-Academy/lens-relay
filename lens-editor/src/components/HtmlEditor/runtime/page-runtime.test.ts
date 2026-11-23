@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSrcDoc, hasOwnImportMap, IMPORT_MAP, PAGE_CSP } from './page-runtime';
+import { buildSrcDoc, hasOwnImportMap, IMPORT_MAP, PAGE_CSP, safeFragment } from './page-runtime';
 
 const opts = { bridgeSource: '/*bridge*/' };
 
@@ -71,5 +71,29 @@ describe('runtime contract', () => {
     expect(PAGE_CSP).not.toMatch(/script-src [^;]*\bhttps:(?!\/\/)/);
     expect(PAGE_CSP).toContain('img-src * data: blob:');
     expect(PAGE_CSP).toContain('connect-src * data: blob:');
+  });
+});
+
+describe('opening a page at a fragment (#t42 links)', () => {
+  it('scrolls to the element the fragment names once the page has loaded', () => {
+    const out = buildSrcDoc('<head></head><body><p id="t42">x</p></body>', { ...opts, fragment: '#t42' });
+    expect(out).toContain('addEventListener("load",function(){var t=document.getElementById("t42")');
+    expect(out.indexOf('getElementById("t42")')).toBeLessThan(out.indexOf('<body>'));
+  });
+
+  it('adds nothing without a fragment', () => {
+    expect(buildSrcDoc('<head></head>', opts)).not.toContain('getElementById');
+    expect(buildSrcDoc('<head></head>', { ...opts, fragment: '' })).not.toContain('getElementById');
+  });
+
+  it('accepts only plain ids, so a URL cannot inject markup or script', () => {
+    expect(safeFragment('#t42')).toBe('#t42');
+    expect(safeFragment('t42')).toBe('#t42');
+    expect(safeFragment('#chapter-3_a.b:c')).toBe('#chapter-3_a.b:c');
+    expect(safeFragment('#')).toBeNull();
+    expect(safeFragment('#a"b')).toBeNull();
+    expect(safeFragment('#</script><script>alert(1)')).toBeNull();
+    expect(safeFragment('#' + 'x'.repeat(201))).toBeNull();
+    expect(buildSrcDoc('<head></head>', { ...opts, fragment: '#</script>' })).not.toContain('getElementById');
   });
 });
