@@ -226,7 +226,8 @@ backlinks are the ones persisted before the restart, refreshed doc by doc. Rules
   exclude each other through the indexer's step lock, a fair tokio mutex: await it (`lock_step`) from
   async code, never block on it there, never hold it across a store write, and take it before any DashMap
   shard or awareness lock. Anything new that rewrites filemeta, wikilinks and backlinks together outside
-  the worker must take it too.
+  the worker must take it too. A folder move holds it for a batch of documents at a time
+  (`FOLDER_MOVE_DOCS_PER_STEP`) and writes each changed doc to the store once, after the last batch.
 - A rename is applied to filemeta before the worker rewrites the wikilinks. The reindex therefore never
   indexes a doc while a folder has a rename the worker has not applied (it waits; if the worker shows no
   activity for 30s it leaves those docs' backlinks as persisted and says so in `/ready` as
