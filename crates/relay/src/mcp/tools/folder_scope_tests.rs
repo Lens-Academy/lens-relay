@@ -64,6 +64,34 @@ async fn grep_scoped_key_without_path_sees_only_its_folder() {
 }
 
 #[tokio::test]
+async fn glob_scoped_key_without_path_sees_only_its_folder() {
+    let fx = three_folder_fixture().await;
+    for pattern in [
+        "**/*",
+        "**",
+        "*/*",
+        "Lens*/**",
+        "Lens/*",
+        "Lens Edu Private/*",
+    ] {
+        let res = call_as(
+            &fx.server,
+            &fx.scoped,
+            "glob",
+            json!({ "pattern": pattern }),
+        )
+        .await;
+        assert!(!is_tool_error(&res), "{pattern}: {res}");
+        assert_no_other_folder(&result_text(&res), pattern);
+    }
+    let res = call_as(&fx.server, &fx.scoped, "glob", json!({"pattern": "**/*"})).await;
+    assert_eq!(
+        result_text(&res),
+        "Lens Edu/Inside.md\nLens Edu/学习笔记.md"
+    );
+}
+
+#[tokio::test]
 async fn grep_unscoped_key_sees_all_three_folders() {
     let fx = three_folder_fixture().await;
     let res = call_as(
@@ -73,6 +101,17 @@ async fn grep_unscoped_key_sees_all_three_folders() {
         json!({"pattern": "needle", "output_mode": "files_with_matches"}),
     )
     .await;
+    assert_eq!(
+        result_text(&res),
+        "Lens Edu Private/O'Brien-Núñez notes.md\nLens Edu Private/Secret.md\n\
+         Lens Edu/Inside.md\nLens Edu/学习笔记.md\nLens/Outside.md\nLens/Заметки.md"
+    );
+}
+
+#[tokio::test]
+async fn glob_unscoped_key_sees_all_three_folders() {
+    let fx = three_folder_fixture().await;
+    let res = call_as(&fx.server, &fx.unscoped, "glob", json!({"pattern": "**/*"})).await;
     assert_eq!(
         result_text(&res),
         "Lens Edu Private/O'Brien-Núñez notes.md\nLens Edu Private/Secret.md\n\

@@ -37,6 +37,8 @@ pub fn execute_scoped(
 
     let mut matched: Vec<String> = all_paths
         .into_iter()
+        // A folder-scoped key only ever sees its own folder, path or no path.
+        .filter(|p| super::in_folder(p, folder))
         .filter(|p| {
             if let Some(ref pfx) = prefix {
                 // Only include paths under the scope folder
