@@ -303,8 +303,10 @@ export class SourceLinksSession {
 
   /**
    * Files each URL not seen before as this person's, if they wrote it on this
-   * visit everywhere it is on the page, or as known. Moved or copied text keeps
-   * who wrote it (keepAuthorship), so moving an old link doesn't make it new.
+   * visit everywhere it is on the page, or as known. Text this person moves,
+   * pastes or restores with undo counts as theirs (isOwnClient covers carrier and
+   * paste IDs); a link on the page when it opened is known from the first scan,
+   * so moving it doesn't make it new.
    */
   private sortNewLinks(text: string, links: ExternalLink[]) {
     const unsorted = links.filter((link) => !this.known.has(link.url) && !this.added.has(link.url));

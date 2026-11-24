@@ -11,7 +11,8 @@ the page depends on.
 - **The offer goes to whoever adds the link, as they add it.** Nothing is imported or linked unless someone accepts.
   Links already on a page when it opens are never offered, nor are links someone else, an agent or Obsidian adds while
   it is open: the editor offers a link only if this visit's own edits wrote its URL (Yjs keeps the writer's clientID on
-  every character, and moved or copied text keeps its writer, so moving an old link doesn't make it new). A URL also on
+  every character). Text this person moves, pastes or restores with undo counts as theirs, but a link already on the
+  page when it opened is known from the first scan, so moving it doesn't make it new. A URL also on
   the page in text this person didn't write is not new either. Existing pages get no offers at all; an agent's `create`
   and `edit` carry the offer for the links they write. Right-clicking any link can still import it.
 - **Ask once, and never block.** Every link is offered once. Dismissing records it in the page's `link_offers_v0` Y.Map,
