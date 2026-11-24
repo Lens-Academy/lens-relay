@@ -5,6 +5,10 @@
 use super::test_helpers::*;
 use serde_json::json;
 
+// === AC8: a scoped key whose folder name did not resolve is refused ===
+
+// Prevents: a key whose folder uuid no longer resolves to a folder name
+// skipping every folder check and acting as an all-folders key.
 #[tokio::test]
 async fn unresolved_folder_key_is_refused_every_tool() {
     let fx = three_folder_fixture().await;
@@ -33,6 +37,8 @@ async fn unresolved_folder_key_is_refused_every_tool() {
     let res = super::dispatch_tool(&fx.server, "create_session", &json!({}), &access).await;
     assert!(is_tool_error(&res), "create_session: {res}");
 }
+
+// === AC1: grep with no path stays inside the key's folder ===
 
 #[tokio::test]
 async fn grep_scoped_key_without_path_sees_only_its_folder() {
@@ -63,6 +69,8 @@ async fn grep_scoped_key_without_path_sees_only_its_folder() {
     assert_eq!(result_text(&res), "No matches found.");
 }
 
+// === AC2: glob with no path stays inside the key's folder ===
+
 #[tokio::test]
 async fn glob_scoped_key_without_path_sees_only_its_folder() {
     let fx = three_folder_fixture().await;
@@ -91,6 +99,28 @@ async fn glob_scoped_key_without_path_sees_only_its_folder() {
     );
 }
 
+// === AC4: get_links leaves out links to and from other folders ===
+
+#[tokio::test]
+async fn get_links_scoped_key_sees_only_links_inside_its_folder() {
+    let fx = three_folder_fixture().await;
+    let res = call_as(
+        &fx.server,
+        &fx.scoped,
+        "get_links",
+        json!({"file_path": "Lens Edu/Inside.md"}),
+    )
+    .await;
+    assert!(!is_tool_error(&res), "{res}");
+    assert_eq!(
+        result_text(&res),
+        "Backlinks (documents linking to this):\n- Lens Edu/学习笔记.md\n\n\
+         Forward links (documents this links to):\n- Lens Edu/学习笔记.md\n"
+    );
+}
+
+// === AC5: an all-folders key sees all three folders, as before ===
+
 #[tokio::test]
 async fn grep_unscoped_key_sees_all_three_folders() {
     let fx = three_folder_fixture().await;
@@ -116,5 +146,24 @@ async fn glob_unscoped_key_sees_all_three_folders() {
         result_text(&res),
         "Lens Edu Private/O'Brien-Núñez notes.md\nLens Edu Private/Secret.md\n\
          Lens Edu/Inside.md\nLens Edu/学习笔记.md\nLens/Outside.md\nLens/Заметки.md"
+    );
+}
+
+#[tokio::test]
+async fn get_links_unscoped_key_sees_links_across_folders() {
+    let fx = three_folder_fixture().await;
+    let res = call_as(
+        &fx.server,
+        &fx.unscoped,
+        "get_links",
+        json!({"file_path": "Lens Edu/Inside.md"}),
+    )
+    .await;
+    assert_eq!(
+        result_text(&res),
+        "Backlinks (documents linking to this):\n- Lens Edu Private/Secret.md\n\
+         - Lens Edu/学习笔记.md\n- Lens/Outside.md\n\n\
+         Forward links (documents this links to):\n- Lens Edu Private/Secret.md\n\
+         - Lens Edu/学习笔记.md\n- Lens/Outside.md\n"
     );
 }

@@ -30,10 +30,15 @@ pub async fn execute_scoped(
         .ok_or_else(|| format!("Error: Document not found: {}", file_path))?;
 
     // --- Backlinks ---
-    let backlink_paths = read_backlinks(server, &doc_info.folder_doc_id, &doc_info.uuid).await;
+    let mut backlink_paths = read_backlinks(server, &doc_info.folder_doc_id, &doc_info.uuid).await;
 
     // --- Forward links ---
-    let forward_link_paths = read_forward_links(server, &doc_info.doc_id).await;
+    let mut forward_link_paths = read_forward_links(server, &doc_info.doc_id).await;
+
+    // A folder-scoped key sees only the links inside its folder (checked on
+    // the resolved paths); the others are left out without an error.
+    backlink_paths.retain(|p| super::in_folder(p, folder));
+    forward_link_paths.retain(|p| super::in_folder(p, folder));
 
     // Format output
     let mut output = String::new();
