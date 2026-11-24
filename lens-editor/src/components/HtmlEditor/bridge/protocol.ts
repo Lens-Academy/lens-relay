@@ -133,13 +133,15 @@ export type BridgeToParent =
   | { type: 'thread-clicked'; payload: { id: string } }
   | { type: 'anchor-captured'; payload: AnchorCapture }
   | { type: 'comment-mode-exit'; payload: Record<string, never> }
-  /** An editor shortcut pressed in the page: C (Comment mode) or Ctrl/Cmd+O (quick switcher). */
+  /** An editor shortcut pressed in the page: C (Comment mode) or Ctrl/Cmd+K or +O (quick switcher; sent as 'o'). */
   | { type: 'shortcut'; payload: { key: 'c' | 'o' } }
   | { type: 'selection-changed'; payload: { rect: Rect | null } }
   | { type: 'legacy-described'; payload: { anchors: Record<string, HtmlAnchor | null> } }
   | { type: 'current-described'; payload: { id: string; anchor: HtmlAnchor | null } }
   | { type: 'page-problems'; payload: { problems: PageProblem[] } }
   | { type: 'storage-ops'; payload: { ops: StorageOp[] } }
+  /** The page moved to another #fragment (an in-page link); the editor mirrors it in its URL. */
+  | { type: 'fragment'; payload: { hash: string } }
   /** The page's sentences; with `play`, a request to play from that one. */
   | { type: 'tts-units'; payload: { units: TtsUnit[]; play?: number } }
   | { type: 'tts-user-scrolled'; payload: Record<string, never> }

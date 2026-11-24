@@ -254,7 +254,7 @@ describe('installBridge comment layer', () => {
     expect(sent.some(e => e.message.type === 'shortcut')).toBe(false);
   });
 
-  it('forwards Ctrl/Cmd+O for the quick switcher, unless the page took it', () => {
+  it('forwards Ctrl/Cmd+O and +K for the quick switcher, unless the page took it', () => {
     setupBody('<p id="p">text</p><input id="i">');
     cleanup = installBridge(window);
     send({ type: 'init', payload: {} });
@@ -268,14 +268,42 @@ describe('installBridge comment layer', () => {
     // Prevented at once, so the browser does not offer to open a file; also from a field.
     expect(press(document.getElementById('p')!, { key: 'o', ctrlKey: true }).defaultPrevented).toBe(true);
     expect(press(document.getElementById('i')!, { key: 'o', metaKey: true }).defaultPrevented).toBe(true);
-    expect(quickSwitch()).toHaveLength(2);
+    expect(press(document.getElementById('p')!, { key: 'k', ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(quickSwitch()).toHaveLength(3);
 
     sent = [];
     press(document.getElementById('p')!, { key: 'o' });
     press(document.getElementById('p')!, { key: 'O', ctrlKey: true, shiftKey: true });
+    press(document.getElementById('p')!, { key: 'k', metaKey: true, shiftKey: true });
     document.getElementById('p')!.addEventListener('keydown', e => e.preventDefault(), { once: true });
     press(document.getElementById('p')!, { key: 'o', ctrlKey: true });
     expect(quickSwitch()).toHaveLength(0);
+  });
+
+  it('follows in-page #links itself and tells the editor, so the frame never navigates away', () => {
+    setupBody('<a id="a" href="#t5">to 5</a><a id="b" href="#t6">to 6</a><a id="c" href="#nope">x</a><a id="d" href="#%E0%A4%A">bad</a><p id="t5">5</p><p id="t6">6</p>');
+    cleanup = installBridge(window);
+    send({ type: 'init', payload: {} });
+    sent = [];
+    const scrolled: string[] = [];
+    for (const id of ['t5', 't6']) {
+      document.getElementById(id)!.scrollIntoView = () => { scrolled.push(id); };
+    }
+    const click = (id: string) => {
+      const e = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+      document.getElementById(id)!.dispatchEvent(e);
+      return e;
+    };
+    expect(click('a').defaultPrevented).toBe(true);
+    expect(scrolled).toEqual(['t5']);
+    // A page that handles the click itself keeps control; the editor still hears of it.
+    document.getElementById('b')!.addEventListener('click', e => e.preventDefault(), { once: true });
+    click('b');
+    expect(scrolled).toEqual(['t5']);
+    // A link to nothing on the page, or a malformed one, is not reported.
+    click('c');
+    click('d');
+    expect(sent.filter(e => e.message.type === 'fragment').map(e => e.message.payload)).toEqual([{ hash: '#t5' }, { hash: '#t6' }]);
   });
 
   it('describes legacy inline comments from where their markers render', () => {

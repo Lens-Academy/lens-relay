@@ -9,6 +9,7 @@ import {
 } from './path-validation.ts';
 import {
   PromotionError,
+  type PromotionBranch,
   type PromotionChangesResponse,
   type PromotionConfig,
   type PromotionDiffResponse,
@@ -30,6 +31,8 @@ const gitQueuesByRepoDir = new Map<string, Promise<void>>();
 interface PromotionReadCache {
   heads: BranchHeads | null;
   lastFetchMs: number;
+  /** Counts invalidations, so a fetch that started before one does not store what it read. */
+  generation: number;
   changes: { heads: BranchHeads; files: PromotionFileChange[]; generatedAt: string } | null;
 }
 
@@ -41,7 +44,7 @@ const readCachesByRepoDir = new Map<string, PromotionReadCache>();
 function getOrCreateReadCache(key: string): PromotionReadCache {
   let cache = readCachesByRepoDir.get(key);
   if (!cache) {
-    cache = { heads: null, lastFetchMs: 0, changes: null };
+    cache = { heads: null, lastFetchMs: 0, changes: null, generation: 0 };
     readCachesByRepoDir.set(key, cache);
   }
   return cache;
@@ -58,7 +61,9 @@ interface GitPromotionService {
   getDiff(path: string): Promise<PromotionDiffResponse>;
   createPromotionBranch(
     request: Pick<PromotionPrRequest, 'paths'>,
-  ): Promise<{ branch: string; mainSha: string; sourceStagingSha: string }>;
+  ): Promise<PromotionBranch>;
+  /** Drop the cached branch heads, so the next read fetches production again. */
+  forgetFetched(): void;
 }
 
 export async function spawnFile(command: string, args: string[], options: { cwd: string }): Promise<{ stdout: string; stderr: string }> {
@@ -348,9 +353,15 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
     if (cache.heads && Date.now() - cache.lastFetchMs < fetchMinIntervalMs) {
       return cache.heads;
     }
+    // forgetFetched runs outside the git lock, while a read may be part-way
+    // through its fetch: that read's heads predate the merge, so it must not
+    // store them as fresh.
+    const generation = cache.generation;
     const heads = await fetchBranches();
-    cache.heads = heads;
-    cache.lastFetchMs = Date.now();
+    if (cache.generation === generation) {
+      cache.heads = heads;
+      cache.lastFetchMs = Date.now();
+    }
     return heads;
   }
 
@@ -376,6 +387,7 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
     cache.heads = null;
     cache.changes = null;
     cache.lastFetchMs = 0;
+    cache.generation += 1;
   }
 
   async function getChangedFiles(): Promise<PromotionFileChange[]> {
@@ -464,6 +476,8 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
   }
 
   return {
+    forgetFetched: invalidatePromotionCache,
+
     getChanges() {
       return withGitLock(async () => {
         await ensureRepo();
@@ -590,6 +604,7 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
           branch,
           mainSha: heads.mainSha,
           sourceStagingSha: heads.stagingSha,
+          headSha: await git(['rev-parse', 'HEAD']),
         };
       });
     },

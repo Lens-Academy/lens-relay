@@ -1,0 +1,27 @@
+{
+ "slug": "exponential-growth-of-parameters-in-notable-ai-systems",
+ "title": "Exponential growth of parameters in notable AI systems",
+ "subtitle": "Parameters are variables in an AI system whose values are adjusted during training to establish how input data gets transformed into the desired output; for example, the connection weights in an artificial neural network.",
+ "note": "Estimates are based on AI literature with uncertainty up to a factor of 10. The regression lines show a sharp rise in parameters since 2010, driven by the success of deep learning methods that leverage neural networks and massive datasets.",
+ "chartTypes": [
+  "ScatterPlot"
+ ],
+ "selectedEntityNames": [
+  "1.2x/year between 1950–2010",
+  "Theseus",
+  "Deep Blue",
+  "Perceptron (1960)",
+  "AlexNet",
+  "GPT-1",
+  "Transformer (2017)",
+  "Switch",
+  "2.2x/year between 2010–2026"
+ ],
+ "xAxis": {
+  "label": "Publication date"
+ },
+ "yAxis": {
+  "scaleType": "log",
+  "canChangeScaleType": true
+ }
+}

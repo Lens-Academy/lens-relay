@@ -5,6 +5,16 @@ import { formatTimestamp } from '../../lib/format-timestamp';
 import { AddCommentForm } from './AddCommentForm';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useMenuPopover } from '../Menu/useMenuPopover';
+import {
+  buildThreadReading,
+  textOffsetAtPoint,
+  threadSource,
+  unitAtOffset,
+  useCommentReadAloudEngine,
+  useHeardInThread,
+  useReadAloudPlaying,
+  type HeardInMessage,
+} from './commentReadAloud';
 
 export interface CommentCardProps {
   thread: ThreadView;
@@ -153,6 +163,20 @@ export function CommentCard(props: CommentCardProps): ReactElement {
   const canResolve = !resolved && actions?.onResolve != null;
   const cardRef = useRef<HTMLDivElement>(null);
 
+  // Read-aloud: while audio plays, a click on a message's text reads the
+  // thread from there (commentReadAloud.ts), and the heard sentence is marked.
+  const readAloud = useCommentReadAloudEngine();
+  const listening = useReadAloudPlaying(readAloud);
+  const heard = useHeardInThread(readAloud, thread);
+  const readFrom = (message: MessageView, offset: number): boolean => {
+    if (!readAloud?.isPlaying) return false; // Paused since the render
+    const reading = buildThreadReading(thread);
+    const unit = unitAtOffset(reading, message.id, offset);
+    if (unit == null) return false;
+    readAloud.playOther(threadSource(thread), reading.units, unit);
+    return true;
+  };
+
   // A click on the card opens it and puts the cursor in its reply bar, as in
   // Notion; a click on a button or in a field inside it stops before here
   const handleCardClick = () => {
@@ -195,6 +219,8 @@ export function CommentCard(props: CommentCardProps): ReactElement {
             onReact={onReact}
             onResolve={index === 0 && canResolve ? () => actions?.onResolve?.(thread) : undefined}
             onCopyLink={actions?.onCopyLink ? () => actions.onCopyLink!(thread) : undefined}
+            heard={heard?.messageId === message.id ? heard : null}
+            onReadFrom={listening ? (offset) => readFrom(message, offset) : undefined}
           />
         ))}
       </div>
@@ -247,9 +273,37 @@ interface CommentRowProps {
   /** Resolves the thread: on its first message */
   onResolve?: () => void;
   onCopyLink?: () => void;
+  /** The part of this message being read aloud. */
+  heard?: HeardInMessage | null;
+  /** While audio plays: read aloud from this character of the body; false when nothing was started. */
+  onReadFrom?: (offset: number) => boolean;
 }
 
-function CommentRow({ message, onEdit, onDelete, onReact, onResolve, onCopyLink }: CommentRowProps) {
+/** The body with the heard sentence (and word) marked, as the page marks them. */
+function HeardBody({ body, heard }: { body: string; heard: HeardInMessage | null | undefined }) {
+  if (!heard) return <>{body}</>;
+  const { sentence, word } = heard;
+  const inSentence = word && word.start >= sentence.start && word.end <= sentence.end ? word : null;
+  return (
+    <>
+      {body.slice(0, sentence.start)}
+      <span className="lens-comment-read-sentence">
+        {inSentence ? (
+          <>
+            {body.slice(sentence.start, inSentence.start)}
+            <span className="lens-comment-read-word">{body.slice(inSentence.start, inSentence.end)}</span>
+            {body.slice(inSentence.end, sentence.end)}
+          </>
+        ) : (
+          body.slice(sentence.start, sentence.end)
+        )}
+      </span>
+      {body.slice(sentence.end)}
+    </>
+  );
+}
+
+function CommentRow({ message, onEdit, onDelete, onReact, onResolve, onCopyLink, heard, onReadFrom }: CommentRowProps) {
   const [editing, setEditing] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const { open: pickerOpen, setOpen: setPickerOpen, toggle: togglePicker, position: pickerAt, buttonRef: pickerButton, menuRef: pickerMenu } = useMenuPopover(236);
@@ -301,7 +355,17 @@ function CommentRow({ message, onEdit, onDelete, onReact, onResolve, onCopyLink 
           <span className="lens-comment-time">{formatTimestamp(timestamp)}</span>
         )}
       </div>
-      <p className="lens-comment-body">{body}</p>
+      <p
+        className={`lens-comment-body${onReadFrom ? ' is-listenable' : ''}`}
+        onClick={onReadFrom && ((e) => {
+          // A drag that selects text is not a click on a sentence.
+          if (!window.getSelection()?.isCollapsed) return;
+          const offset = textOffsetAtPoint(e.currentTarget, e.clientX, e.clientY);
+          if (offset != null && onReadFrom(offset)) e.stopPropagation();
+        })}
+      >
+        <HeardBody body={body} heard={heard} />
+      </p>
       {(message.reactions?.length ?? 0) > 0 && (
         <div className="lens-comment-reactions">
           {message.reactions!.map((r) => (

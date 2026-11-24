@@ -1,0 +1,21 @@
+{
+ "slug": "annual-professional-service-robots-installed-by-area",
+ "title": "Annual professional service robots installed globally, by application area",
+ "note": "Example machines that are not classified as robots: software (e.g., voice assistants), remote-controlled drones, self-driving cars, “smart” washing machines.",
+ "chartTypes": [
+  "DiscreteBar",
+  "SlopeChart",
+  "LineChart"
+ ],
+ "tab": "slope",
+ "selectedEntityNames": [
+  "Agriculture",
+  "Hospitality",
+  "Professional cleaning",
+  "Transportation and logistics",
+  "Medical and healthcare"
+ ],
+ "yAxis": {
+  "min": 0
+ }
+}

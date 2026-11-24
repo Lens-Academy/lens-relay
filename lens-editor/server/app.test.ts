@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { Hono } from "hono";
-import { createApp } from "./app";
+import { createApp, createPromotionRouteService } from "./app";
+import type { PromotionMerge, PromotionPrResponse } from "./promotion/types";
 import { signShareToken } from "./share-token";
 
 // Prevents: the production server wiring (prod-server.ts → createApp) silently
@@ -96,5 +97,69 @@ describe("production app (createApp)", () => {
     expect(resp.status).toBe(404);
     expect(resp.headers.get("content-type")).toContain("application/json");
     expect(await resp.json()).toEqual({ error: "Promotion is disabled" });
+  });
+});
+
+describe("createPromotionRouteService", () => {
+  // Fakes for both services: what is under test is the order of the steps.
+  function servicesWith(merges: PromotionMerge[]) {
+    const events: string[] = [];
+    let forgotten = 0;
+    let made = 0;
+    const git = {
+      getChanges: async () => ({
+        mainSha: "m",
+        generatedAt: "t",
+        files: ["a.md", "b.md"].map((path) => ({ path, oldPath: null, status: "modified" as const, additions: 1, deletions: 1, isBinary: false })),
+        curriculum: { courses: [], modules: [], memberships: {} },
+      }),
+      getStatus: async () => null,
+      getDiff: async () => null,
+      createPromotionBranch: async ({ paths }: { paths: string[] }) => {
+        const branch = `branch-${++made}`;
+        events.push(`branch ${paths.join(",")}`);
+        return { branch, mainSha: "m", sourceStagingSha: "s", headSha: `head-${made}` };
+      },
+      forgetFetched: () => {
+        forgotten += 1;
+      },
+    };
+    const github = {
+      createPullRequest: async (input: { branch: string; mainSha: string; headSha: string }): Promise<PromotionPrResponse> => {
+        events.push(`pr ${input.branch} start`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        events.push(`pr ${input.branch} end`);
+        return { branch: input.branch, prNumber: 1, prUrl: "u", mainSha: input.mainSha, merge: merges.shift()! };
+      },
+    };
+    return { service: createPromotionRouteService(git, github), events, forgotten: () => forgotten };
+  }
+
+  it("refuses a second promotion while one is under way, then takes the next", async () => {
+    const { service, events } = servicesWith(["merged", "merged"]);
+
+    const first = service.createPromotionPr({ paths: ["a.md"] });
+    await expect(service.createPromotionPr({ paths: ["b.md"] })).rejects.toMatchObject({ status: 409, code: "promotion_running" });
+    await expect(first).resolves.toMatchObject({ merge: "merged" });
+    await expect(service.createPromotionPr({ paths: ["b.md"] })).resolves.toMatchObject({ merge: "merged" });
+
+    expect(events).toEqual(["branch a.md", "pr branch-1 start", "pr branch-1 end", "branch b.md", "pr branch-2 start", "pr branch-2 end"]);
+  });
+
+  it("goes on with the next promotion after one fails", async () => {
+    const { service } = servicesWith(["merged"]);
+
+    await expect(service.createPromotionPr({ paths: ["not-changed.md"] })).rejects.toMatchObject({ code: "path_not_changed" });
+    await expect(service.createPromotionPr({ paths: ["a.md"] })).resolves.toMatchObject({ merge: "merged" });
+  });
+
+  it.each([
+    ["merged", 1],
+    ["auto-merge", 0],
+    ["open", 0],
+  ] as const)("forgets the fetched branches only after a merge (%s)", async (merge, times) => {
+    const { service, forgotten } = servicesWith([merge]);
+    await service.createPromotionPr({ paths: ["a.md"] });
+    expect(forgotten()).toBe(times);
   });
 });

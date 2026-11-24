@@ -1,7 +1,8 @@
 import { GoogleDocsClient, GoogleHttpError, loadServiceAccount, selectTab } from "./client";
+import type { DocumentTab } from "./docs-types";
 import { convertDocumentTab } from "./to-markdown";
 import { googleDocEditUrl, parseGoogleDocUrl } from "./url";
-import { PermanentImageError, type SourceAdapter } from "../types";
+import { PermanentImageError, type HostImage, type SourceAdapter } from "../types";
 import limits from "../../../shared/attachment-limits.json";
 
 // Images are fetched a few at a time: a chapter holds 80+ of them.
@@ -20,11 +21,60 @@ async function eachLimited<T>(items: T[], limit: number, fn: (item: T) => Promis
 }
 
 /** An image that failed for a reason that will not go away by retrying. */
-function lasting(err: unknown): boolean {
+function isLasting(err: unknown): boolean {
   return (
     err instanceof PermanentImageError ||
     (err instanceof GoogleHttpError && err.status >= 400 && err.status < 500 && err.status !== 429)
   );
+}
+
+/** Hosted image URLs, by a key the caller chooses, with when each was hosted. */
+export type HostedImages = Map<string, { url: string; at: number }>;
+
+export interface TabImages {
+  /** Hosted URL by inline object id. */
+  urls: Map<string, string>;
+  /** Images that failed for a lasting reason ("image <id>: <reason>"): reported, and left out. */
+  lasting: string[];
+  /** Images that failed for a passing reason: the caller fails its run, so its files keep their images. */
+  passing: string[];
+}
+
+/**
+ * Download and host every inline image of a tab, IMAGE_CONCURRENCY at a time.
+ * `hosted` keeps URLs across runs under `keyOf(id)` for IMAGE_CACHE_MS.
+ */
+export async function hostTabImages(
+  content: DocumentTab,
+  download: (contentUri: string, inlineObjectId: string) => Promise<Uint8Array>,
+  hostImage: HostImage,
+  hosted: HostedImages,
+  keyOf: (inlineObjectId: string) => string,
+): Promise<TabImages> {
+  const urls = new Map<string, string>();
+  const lasting: string[] = [];
+  const passing: string[] = [];
+  const now = Date.now();
+  await eachLimited(Object.entries(content.inlineObjects ?? {}), IMAGE_CONCURRENCY, async ([id, obj]) => {
+    const key = keyOf(id);
+    const cached = hosted.get(key);
+    if (cached && now - cached.at < IMAGE_CACHE_MS) {
+      urls.set(id, cached.url);
+      return;
+    }
+    const contentUri = obj.inlineObjectProperties?.embeddedObject?.imageProperties?.contentUri;
+    if (!contentUri) return;
+    try {
+      const url = await hostImage(await download(contentUri, id));
+      urls.set(id, url);
+      hosted.set(key, { url, at: now });
+    } catch (err) {
+      const message = `image ${id}: ${(err as Error).message}`;
+      if (isLasting(err)) lasting.push(message);
+      else passing.push(message);
+    }
+  });
+  return { urls, lasting, passing };
 }
 
 /**
@@ -36,7 +86,7 @@ export function googleDocAdapter(
   makeClient: () => GoogleDocsClient = () => new GoogleDocsClient(loadServiceAccount()),
 ): SourceAdapter {
   let client: GoogleDocsClient | null = null;
-  const hosted = new Map<string, { url: string; at: number }>();
+  const hosted: HostedImages = new Map();
 
   return {
     kind: "google-doc",
@@ -57,28 +107,9 @@ export function googleDocAdapter(
 
       // A lasting failure (wrong type, too large, gone) is reported and the image left out. A
       // passing one (network, 5xx, relay) fails the run, so the file keeps its images.
-      const urls = new Map<string, string>();
-      const passing: string[] = [];
-      const now = Date.now();
-      await eachLimited(Object.entries(content.inlineObjects ?? {}), IMAGE_CONCURRENCY, async ([id, obj]) => {
-        const key = `${binding.target}#${id}`;
-        const cached = hosted.get(key);
-        if (cached && now - cached.at < IMAGE_CACHE_MS) {
-          urls.set(id, cached.url);
-          return;
-        }
-        const contentUri = obj.inlineObjectProperties?.embeddedObject?.imageProperties?.contentUri;
-        if (!contentUri) return;
-        try {
-          const url = await hostImage(await client!.getImage(contentUri, limits.max_bytes));
-          urls.set(id, url);
-          hosted.set(key, { url, at: now });
-        } catch (err) {
-          const message = `image ${id}: ${(err as Error).message}`;
-          if (lasting(err)) warnings.push(message);
-          else passing.push(message);
-        }
-      });
+      const reader = client;
+      const { urls, lasting, passing } = await hostTabImages(content, (uri) => reader.getImage(uri, limits.max_bytes), hostImage, hosted, (id) => `${binding.target}#${id}`);
+      warnings.push(...lasting);
       if (passing.length) {
         throw new Error(`${passing.length} image(s) failed, so the file is left as it was: ${passing.join("; ")}`);
       }

@@ -1,0 +1,42 @@
+{
+ "chart": {
+  "title": "How worried are Americans about their work being automated?"
+ },
+ "columns": {
+  "dont_know": {
+   "shortName": "dont_know",
+   "titleShort": "Don't know",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "YouGov (2026) – with minor processing by Our World in Data"
+  },
+  "not_worried_at_all": {
+   "shortName": "not_worried_at_all",
+   "titleShort": "Not worried at all",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "YouGov (2026) – with minor processing by Our World in Data"
+  },
+  "not_very_worried": {
+   "shortName": "not_very_worried",
+   "titleShort": "Not very worried",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "YouGov (2026) – with minor processing by Our World in Data"
+  },
+  "fairly_worried": {
+   "shortName": "fairly_worried",
+   "titleShort": "Fairly worried",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "YouGov (2026) – with minor processing by Our World in Data"
+  },
+  "very_worried": {
+   "shortName": "very_worried",
+   "titleShort": "Very worried",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "YouGov (2026) – with minor processing by Our World in Data"
+  }
+ }
+}

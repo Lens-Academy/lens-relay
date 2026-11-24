@@ -1,0 +1,16 @@
+{
+ "slug": "annual-industrial-robots-installed",
+ "title": "New industrial robots installed per year",
+ "note": "Example machines that are not classified as robots: software (e.g., voice assistants), remote-controlled drones, self-driving cars, “smart” washing machines.",
+ "selectedEntityNames": [
+  "China",
+  "Germany",
+  "Japan",
+  "United States",
+  "South Korea"
+ ],
+ "selectedFacetStrategy": "metric",
+ "yAxis": {
+  "min": 0
+ }
+}

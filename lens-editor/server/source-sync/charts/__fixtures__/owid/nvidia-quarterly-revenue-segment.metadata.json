@@ -1,0 +1,14 @@
+{
+ "chart": {
+  "title": "NVIDIA’s quarterly revenue by market segment"
+ },
+ "columns": {
+  "revenue": {
+   "shortName": "revenue",
+   "titleShort": "NVIDIA’s quarterly revenue by market segment",
+   "shortUnit": "$",
+   "unit": "US dollars",
+   "citationShort": "NVIDIA Corporation (2026) – with major processing by Our World in Data"
+  }
+ }
+}

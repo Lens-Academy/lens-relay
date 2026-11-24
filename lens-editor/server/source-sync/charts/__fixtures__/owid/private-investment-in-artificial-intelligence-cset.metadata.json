@@ -1,0 +1,14 @@
+{
+ "chart": {
+  "title": "Estimated funding raised by privately held AI companies"
+ },
+ "columns": {
+  "estimated_investment__field_all": {
+   "shortName": "estimated_investment__field_all",
+   "titleShort": "Estimated funding raised by privately held AI companies - Field: All",
+   "shortUnit": "$",
+   "unit": "constant 2021 US dollars",
+   "citationShort": "Center for Security and Emerging Technology (2026); U.S. Bureau of Labor Statistics (2026) – with major processing by Our World in Data"
+  }
+ }
+}

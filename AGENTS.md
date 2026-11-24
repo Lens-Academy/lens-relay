@@ -330,12 +330,16 @@ resolves / re-anchors, and `edit` warns when it removes quoted text. Measure anc
 
 **Read-aloud in the editor** (`lens-editor/src/lib/read-aloud/`, `server/tts/`): a Listen button on Markdown and HTML
 pages plays the page through Speechify (simba-3.2, the platform's model and voice), sentence by sentence with word
-highlighting, after lens-platform's immersion reader but without its audio cache. The editor server proxies
+highlighting, after lens-platform's immersion reader but without its audio cache. It queues at most
+`LOOKAHEAD_SECONDS` (15 s) of audio ahead of what is heard, so a jump, restart or speed change throws away little
+(the per-link cap counts every sentence requested). The editor server proxies
 `POST /api/tts/stream` (any valid share link; `SPEECHIFY_API_KEY`, per-link hourly character cap
 `TTS_CHARS_PER_HOUR`); without the key the button hides. Markdown: `Editor/extensions/readAloud.ts` maps sentences to
 source positions (`markdown-reading.ts`), so it works with CodeMirror's virtualised DOM. HTML: the preview frame's
 `bridge/tts-layer.ts` sends the page's sentences to the parent and draws highlights and hover play buttons inside the
 frame. While audio plays a click jumps to the sentence; otherwise clicks behave as usual.
+A click on a comment's text while audio plays reads that thread from there and then stops, with Play going back to
+the page where it was (`Comments/commentReadAloud.ts`, the engine's `playOther`).
 
 **Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
 - The MCP `edit` tool applies Markdown edits directly when they only add text or change
@@ -356,6 +360,11 @@ editor and the platform validator; see `docs/concept-relationships.md` before ch
 A `read` of a concept file starts with its place in the concept graph (`parent-concepts:` frontmatter: parent concepts with
 their paths up, child concepts with counts; `crates/relay/src/mcp/tools/concept_graph.rs`), computed like the editor's
 header; same doc, "Concept graph" (parsing rules tagged "concept graph rules v1 #N" in both).
+
+**Cap transcripts in MCP `read`** (`crates/relay/src/mcp/tools/cap_transcripts.rs`): a `read` of a document that links
+Cap videos (`cap.so/s/<id>`) ends with each video's transcript, which Cap makes itself and serves for public shares. A
+transcript not ready yet, or a private or silent video, gets a one-line reason instead; finished transcripts are cached in
+memory. lens-platform's `core/cap_recordings.py` reads Cap the same way for links posted in Discord.
 
 **Course checks in MCP replies** (`crates/relay/src/mcp/tools/course_checks.rs`): an MCP
 `edit` or `create` of a `Lens Edu/**/*.md` file other than an article ends with lens-platform's

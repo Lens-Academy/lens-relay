@@ -239,6 +239,14 @@ pub async fn execute(
         output.push_str("\n\n");
         output.push_str(&footer_text);
     }
+    // Transcripts of the Cap videos the file links to, with the first chunk
+    // of a paged read: context fetched from Cap, not this file's text.
+    if offset <= 1 {
+        if let Some(block) = super::cap_transcripts::cap_transcripts_block(&accepted).await {
+            output.push_str("\n\n");
+            output.push_str(&block);
+        }
+    }
     push_range_notice(&mut output, &accepted, offset, limit);
 
     Ok(output)
@@ -452,6 +460,26 @@ mod accepted_view_tests {
             "full 3000-char line should be present; result length = {}",
             result.len()
         );
+    }
+
+    /// A real, public Cap recording through the whole `read`. Run by hand:
+    /// `cargo test -p relay read_appends_cap_transcript -- --ignored`
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn read_appends_cap_transcript_after_the_text() {
+        let server = build_test_server(&[(
+            "/Review.md",
+            "uuid-review",
+            "> **Video:** https://cap.so/s/nkw7hd9yy2jgsgq\nNotes.",
+        )])
+        .await;
+        let sid = setup_session_with_read(&server, &format!("{}-uuid-review", RELAY_ID));
+        let args = json!({ "file_path": "Lens/Review.md", "session_id": sid });
+        let result = execute(&server, &sid, &args).await.unwrap();
+
+        assert!(result.starts_with("     1\t> **Video:**"), "got: {result}");
+        assert!(result.contains("[Cap] https://cap.so/s/nkw7hd9yy2jgsgq (line 1)\n"));
+        assert!(result.contains("weekly review"), "got: {result}");
     }
 
     #[tokio::test]

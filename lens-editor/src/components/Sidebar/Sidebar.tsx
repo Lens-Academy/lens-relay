@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useDeferredValue, useMemo, useCallback } from 'react';
+import { useState, useDeferredValue, useMemo, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { SearchInput } from './SearchInput';
 import { SearchPanel } from './SearchPanel';
@@ -73,9 +73,6 @@ export function Sidebar() {
   const [moveError, setMoveError] = useState<string | null>(null);
   const [isMoving, setIsMoving] = useState(false);
 
-  // Ref for Ctrl+K keyboard shortcut focus
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
   // metadata, folderDocs, folderNames, onNavigate — destructured above (before resolution hook)
 
   // Server-side full-text search (activates when searchTerm >= 2 chars)
@@ -91,18 +88,6 @@ export function Sidebar() {
       path: docIdToPath.get(r.doc_id) ?? r.folder,
     }));
   }, [searchResults, docIdToPath]);
-
-  // Ctrl+K / Cmd+K keyboard shortcut to focus search input
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-      }
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, []);
 
   // Build tree from metadata
   const treeData = useMemo(() => {
@@ -358,7 +343,6 @@ export function Sidebar() {
       {/* Notion's sidebar top: a search row, then the Files and Course tabs */}
       <div className="px-2 pt-1 pb-1">
         <SearchInput
-          ref={searchInputRef}
           value={searchTerm}
           onChange={setSearchTerm}
           placeholder="Search"

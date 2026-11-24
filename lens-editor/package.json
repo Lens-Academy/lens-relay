@@ -65,6 +65,7 @@
     "react-router-dom": "^7.13.0",
     "react-textarea-autosize": "^8.5.9",
     "remark-breaks": "^4.0.0",
+    "sharp": "0.33.5",
     "tsx": "^4.21.0",
     "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2",

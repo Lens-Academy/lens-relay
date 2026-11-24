@@ -36,6 +36,7 @@ import { sharedFolds } from './extensions/sharedFolds';
 import { remoteReplaceCaret } from './extensions/remoteReplaceCaret';
 import { readAloud } from './extensions/readAloud';
 import { VideoCutDock } from './VideoCutDock';
+import { countSelections, formatSelectionCount, type SelectionCount } from '../../lib/selection-count';
 import { markdownTableCompartment, markdownTableExtension } from './extensions/markdownTable';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
 import { headingFlashPlugin } from './extensions/headingFlash';
@@ -153,6 +154,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // Leaving the document ends a live embed it holds
   useEffect(() => () => closeLive(), []);
   const [synced, setSynced] = useState(false);
+  // Words and characters selected, shown at the bottom right; null with no selection
+  const [selectionCount, setSelectionCount] = useState<SelectionCount | null>(null);
   // The video segment whose cut is being tuned (its from::/to:: Tune button)
   // `anchor` is the segment's heading start, mapped through every change so
   // the picker keeps writing to its own segment while text moves around it
@@ -501,6 +504,16 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         readAloud(),
         videoCutCallback.of((line, view) =>
           setCutTarget({ view, field: line.field, anchor: line.sectionFrom, version: 0, opened: Date.now() })),
+        // Count the selected words and characters for the label at the bottom right
+        EditorView.updateListener.of((u) => {
+          if (!u.selectionSet && !u.docChanged) return;
+          const ranges = u.state.selection.ranges.filter((r) => !r.empty);
+          const next = ranges.length
+            ? countSelections(ranges.map((r) => u.state.sliceDoc(r.from, r.to)))
+            : null;
+          setSelectionCount((prev) =>
+            prev?.words === next?.words && prev?.characters === next?.characters ? prev : next);
+        }),
         // Only while the cut picker is open: follow its segment and re-render
         // so its times stay current
         EditorView.updateListener.of((u) => {
@@ -613,6 +626,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
     return () => {
       // The cut picker holds this view: close it with the view
       setCutTarget(null);
+      setSelectionCount(null);
       view.destroy();
       viewRef.current = null;
     };
@@ -640,6 +654,17 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         className="flex-1 min-h-0 w-full"
         onContextMenu={handleContextMenu}
       />
+      {selectionCount && (
+        <div
+          className="pointer-events-none absolute bottom-2 right-4 z-20 rounded-md border border-gray-200 bg-white/95 px-2 py-0.5 text-xs text-gray-600 shadow-sm tabular-nums"
+          data-testid="selection-count"
+          // The floating accept/reject buttons stay clear of it (criticmarkup.ts)
+          data-floats-over-editor=""
+          aria-live="polite"
+        >
+          {formatSelectionCount(selectionCount)}
+        </div>
+      )}
       {cutTarget && metadata && currentFilePath && (
         <VideoCutDock
           view={cutTarget.view}

@@ -8,6 +8,7 @@ import {
   type PromotionStatusResponse,
 } from '../../lib/promotion-api';
 import { promotionStatusLabel } from './PromotionStatus';
+import { PromotionPrResult } from './PromotionPrResult';
 
 interface PromoteFileDialogProps {
   open: boolean;
@@ -108,7 +109,7 @@ export function PromoteFileDialog({
               Promote file to production
             </Dialog.Title>
             <Dialog.Description className="mt-1 text-sm text-gray-600">
-              Create a production promotion pull request for this file.
+              Promoting merges this file into production straight away.
             </Dialog.Description>
           </div>
 
@@ -117,7 +118,11 @@ export function PromoteFileDialog({
               <dt className="text-gray-500">File</dt>
               <dd className="break-all font-mono text-xs text-gray-800">{filePath}</dd>
               <dt className="text-gray-500">Status</dt>
-              <dd className="text-gray-800">{promotionStatusLabel(status)}</dd>
+              <dd className="text-gray-800">
+                {result?.filePath === filePath && result.response.merge === 'merged'
+                  ? 'Identical to production'
+                  : promotionStatusLabel(status)}
+              </dd>
               <dt className="text-gray-500">Changes</dt>
               <dd className="text-gray-800">
                 +{status?.additions ?? 0} / -{status?.deletions ?? 0}
@@ -152,17 +157,7 @@ export function PromoteFileDialog({
             )}
 
             {result && result.filePath === filePath && (
-              <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-                <a
-                  href={result.response.prUrl}
-                  className="font-medium underline"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Pull request #{result.response.prNumber}
-                </a>
-                <div className="mt-1 font-mono text-xs">{result.response.branch}</div>
-              </div>
+              <PromotionPrResult response={result.response} className="mt-4" />
             )}
           </div>
 

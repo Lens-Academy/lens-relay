@@ -163,3 +163,84 @@ concept and its direct children (backlinkers in `Concepts/` whose parents includ
 - `src/components/ConceptGraphPanel/`: the header, the drawing (`ConceptGraphDrawing.tsx`, loaded lazily so only concept
   files download dagre) and its data hook (reads files through the relationships panel's
   `useSnapshots`, growing the set of files to read as the walks reach them).
+
+## Concept map page (Context Accelerator)
+
+`/concept-map` (••• menu, "Concept Map") draws the idea files of `Lens Edu/Context Accelerator LOs/` as a graph: one
+file per idea (frontmatter `id`, `priority`, `topic`, `courses`; the outcome paragraph; then `## Requires`,
+`## Helpful first`, `## Why it matters`, `## Lenses`, `## Tests`; only these heading names are read). `## Requires` and `## Helpful first` hold wikilinks to other ideas, a link to a file that does not
+exist is an idea "not written yet". Four views (Map, Order, Table, Walk through) and a side panel; links that can edit also add an
+idea, create a not-written-yet one, change an idea's two requirement lists (only those lines are rewritten) and add a
+question (one typed `#### Question: Open|Choice` segment appended to `## Tests`). They also edit every part of an
+idea ("Edit": name, outcome, priority, topic, courses, why, the lenses, both lists), rename it, delete it, and edit or delete a
+question. Rules of every edit: only the part that changed is rewritten and the rest of the file stays byte for byte;
+the save carries what the form was opened with and writes nothing when the file no longer says that; a part that
+holds a pending suggestion or a comment is refused; a changed file is read back before it is written, and refused
+when anything but the part meant would read differently (`requirementChanges`, `ideaEditChanges`, `renameLinkChanges`). Changes are always in text order (`mergeChanges`); `applyChanges` and the hook's writer refuse any other order. An emptied section keeps its heading. A rename is the relay's
+move (`movePath`, which rewrites links in other files; links it left under Requires / Helpful first are rewritten by
+`renameLinkChanges`). A delete takes the idea's links out of the other ideas' two lists, then trashes the file
+(`trashPath`: `Lens Edu/_trash/`, restorable); it stops when a file outside the map links to the idea. Questions of
+types other than Open and Choice are edited in the file. In `options::` a right answer is `- [x] text` and a wrong
+one plain `- text` (the platform's parser reports `- [ ]` as an error), and `multi:: true` is written whenever
+several options are right (the platform refuses them without it).
+
+- `src/lib/idea-map.ts`: file parsing, the graph (steps, circles, problems), sorting, the
+  text of a new file, the changes for a requirements edit, the text of a new question and the change that appends
+  it, and the changes for editing an idea (`ideaEditChanges`), renaming or removing its links in other files
+  (`renameLinkChanges`, `removeLinkChanges`) and editing or deleting a question (`questionEditChanges`,
+  `questionDeleteChanges`). Pure. The platform reads the same files for the learner's
+  tree, so the format is a contract: change it on both sides or not at all.
+- `src/components/ConceptMapPage/`: the page, the four views, the panel, the two forms, and `useIdeaMap.ts` (reads
+  the folder through `useSnapshots`, writes through `createDocument` and `withLiveDoc`). Everything but the hook
+  imports only `contexts/AuthContext`, `lib/relay-api` (`PathExistsError`), `components/DocLink` and `lib/idea-map`,
+  so the page can be built outside the editor with another `useIdeaMap`: keep it that way.
+- More that the page does (each in the files named):
+  - Requirement boxes (`PickList.tsx`) are keyboard comboboxes; a typed name no concept has can be added as a link
+    to a concept "not written yet" (`pickChoices` in the lib). The concept forms also have "Needed for" and "Helpful
+    for": saving writes the link into the other concept's file (`dependentEdits`), every check before the first write.
+  - A box of the map is as tall as its name needs (measured, then laid out again); every textarea of the forms is a
+    `GrowingTextarea`. The name of a concept stays a one-line field.
+  - Several concepts can be selected (Ctrl/Cmd/Shift-click, or a box per row in the Table) to delete at once
+    (`deleteIdeas`, `deletePlan`). `IdeaMap.profiles` is optional (a switcher of separate sets, "Copy to…"): the
+    editor's hook provides none, a standalone build can.
+  - The drawing: `src/lib/idea-map-layouts.ts` has the "Layout" / "Group by" / "Links" choice and `layoutFor`, which
+    draws the map the chosen way; chosen in `MapLayoutSwitch.tsx`, kept per browser by `useMapLayoutChoice.ts` (only
+    what was chosen by hand: the rest follows the map, `resolveChoice`: a map of more than 60 concepts opens in
+    Groups, and groups are the author's topics as soon as one concept has a topic). The layouts, each with a line in
+    `MAP_LAYOUTS` on what it is good for (shown as the tooltip): Groups (a small layered map per group in a frame),
+    Topic grid (boxes only, links for the concept pointed at), Tree (`idea-map-tree.ts`: every concept under the one
+    it builds on most directly), Organic (`idea-map-organic.ts`: groups as islands, one arrow per strongly linked
+    pair), Left to right / Top to bottom (`idea-map-layered.ts`: columns by dagre, square lines on tracks of their
+    own) and Around one concept. A new layout has to pass the checks every layout passes in
+    `idea-map-layouts.test.ts` (no box on another, the same drawing every time, no line through a box where it
+    promises that).
+  - Topics: the frontmatter `topic:` of a concept file is the author's own group ("Topic (yours)" in Group by, a
+    field in the forms, a column in the Table). "Clusters (computed from the links)" is Louvain on the links; no one
+    chose those. A topic has one colour everywhere (`topicColours` in `ideaLook.ts`): its frame and the left edge of
+    its boxes.
+  - Links (`src/lib/idea-map-links.ts`): "Requires only" leaves Helpful first out; "Hide implied links" leaves out
+    what a chain of Requires says already (the transitive reduction). Pointing at a concept or selecting it lights
+    its whole chain (`chainOf`) and dims the rest. A `quiet` line (between groups, outside the tree, all of the grid)
+    is drawn only while it is part of that chain.
+  - `mapView.ts` has the view that shows the map whole (below the row of controls, `CONTROL_ROOM`); a map shown
+    whole is fitted again when its frame changes size, one moved or zoomed by hand is left alone.
+  - Walk through (`IdeaWalkView.tsx`, `WalkOverview.tsx`, `WalkStep.tsx`, orders in `src/lib/idea-map-walk.ts`): the
+    map one concept at a time, against the overwhelm of the whole graph. It opens on the topics in reading order;
+    a step shows one concept with what it builds on (left) and what it leads to (right). Four orders: Foundations
+    first (every concept after what it requires, topic by topic), Topic by topic, Backwards from a goal, Follow my
+    curiosity. Right / Left walk, a click on a neighbour is a detour, what was seen is kept per set of concepts in
+    the browser (`useWalkStore.ts`).
+  - Keyboard (keep it working when you add a control; `describe('by keyboard')` in `ConceptMapPage.test.tsx`):
+    `FindBox.tsx` lists the matches under "Find a concept" (arrows, Enter opens or picks, Escape empties, "/" goes
+    to it). `ideaKeys.ts`: arrow keys move the focus between the `[data-key]` elements of a view (`nextBox`); the
+    map follows the focus. Enter on a concept opens it, Ctrl/Cmd+Enter and Shift+Enter do what those clicks do
+    (`pickByEnter`). `formKeys.ts` (`useFormKeys`, both forms): Escape closes (asks once when something changed),
+    Ctrl/Cmd+Enter saves from any field, Enter in a one-line field moves to the next field and never saves. The
+    panel has E, R, Q, C and Delete while it holds the focus. The page moves the focus itself (`focusOn`: into the
+    panel when a concept is opened by key and after a save or cancel, back to the concept when the panel closes,
+    to the search box after a delete) and says what it did in a notice (`say`, `data-testid="idea-notice"`).
+- Local data: the default seed (`scripts/setup-local-relay.mjs`) has the three real files. For a big set run
+  `npx tsx scripts/seed-fake-ideas.ts --relay-url http://127.0.0.1:<relay port>` (150 made-up ideas in
+  `Context Accelerator LOs (fake 150)`; `--count 12 --cycle` makes a small set with a circle), then pick the folder in
+  the page's header or with `?folder=`. The script refuses any relay that is not on localhost, and the page reads
+  other folders than the real one only with `VITE_LOCAL_RELAY=true` (`useIdeaMap.ts`).

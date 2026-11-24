@@ -677,6 +677,77 @@ source.
 --content <checkout of lens-edu-relay>` reads the live site and reports what
 it would do; `--apply` changes the copy. It cannot write to a relay.
 
+## Atlas course sync
+
+The lens-editor server keeps a course in Lens Edu a read-only copy of the AI
+Safety Atlas's Google Docs, one module per chapter and one lens and article
+per section (`lens-editor/server/source-sync/atlas/`; how it works is in the
+headers of `types.ts` and `sync.ts`). The hand-curated Atlas course is a
+different course; the sync does not touch it.
+
+**Turn it on.** Put the course on one line in `/root/lens-relay/.env`, as
+`ATLAS_SYNC_COURSES='[ ... ]'`, a JSON list with one entry per course; the
+real course is `lens-editor/scripts/atlas-sync.config.example.json`. Each
+Doc must be shared "anyone with the link can view", or with the service
+account of `GOOGLE_SERVICE_ACCOUNT_JSON`. Recreate the container
+(`docker compose -f docker-compose.prod.yaml up -d lens-editor`). A
+configuration with a mistake logs `[atlas-sync] not started:` and every
+problem, and leaves only this sync off. A change to the configuration
+(credits, folder, prefixes) reaches the files at the next run.
+
+**Turn it off.** Empty `ATLAS_SYNC_COURSES` and recreate the container. The
+files stay as the last run left them.
+
+**Charts.** Each interactive figure of Our World in Data (an `iframe` table
+whose src is an OWID grapher page), and each `chart` table, that has a still
+image gets a chart file `Lens Edu/charts/<course folder>/<id>.md`, which
+lens-platform draws in place of that image. When the sync reads a chart's data, when it
+replaces a file, and when it trashes one: the header of
+`lens-editor/server/source-sync/charts/refresh.ts`. A chart with no file
+(OWID retired it, or does not let its data be downloaded) stays a still
+image.
+
+**The log.** `docker logs lens-editor 2>&1 | grep atlas-sync`. A run prints
+one line, `<course> at <revision>: ...`, then one line per warning. What may
+need a person:
+
+- *`N lens(es) are gone from the Docs for over an hour ... retired none`.*
+  The sync retires at most 3 lenses at once, and never a whole chapter, by
+  itself. If the Docs lost the text by mistake, put it back. If the loss is
+  right, set `ATLAS_SYNC_APPROVE_RETIREMENT=<the value in the message>` in
+  `.env`, recreate the container, and empty the variable again after the
+  run. The value names those lenses, so it stands while the Docs change
+  elsewhere, and approves no other lenses.
+- *`<Doc link> was left out of this run`.* The Doc could not be read (not
+  shared, deleted, network), its TITLE does not read `Chapter <N> -
+  <Title>`, or an image of it failed to download. Its files stay as they
+  are and nothing of it is retired. While the Docs stay as they were, the
+  next runs log `still blocked` and look again in full once an hour.
+- *`The chart "<id>" ... keeps its data of <date>: ...`, `... has no data,
+  so its figure stays a still image: ...` or `"<path>" is not a chart file
+  the sync can read`.* The chart's source answered with an error, or with
+  data that failed a check, or someone edited the chart file. Each is
+  logged once a day, when the chart is read; a source that answers 404 or
+  403 (OWID retired the chart, or does not let its data be downloaded) is
+  logged once, when it starts, and tried again weekly. Nothing to do unless
+  it lasts: then replace the figure in the Doc. A `highlight` row's names
+  that match nothing in the data are logged once.
+- *`N chart(s) were not read`.* The run's time for charts ran out (OWID
+  slow); the next run reads them first.
+- *`failed: ...`.* Nothing was changed; the message says what to do (a lens
+  that a module lists is missing, two lenses share an id, a course file the
+  sync did not write, or a course file that was moved: set
+  `ATLAS_SYNC_COURSES` to its new path). A file that changed during the run
+  needs nothing: the next run plans again.
+
+**Run it again without a change in the Docs** (after a fix to the converter
+is deployed): increase `ATLAS_SYNC_RULES` in `atlas/sync.ts`, or delete the
+`sync_rules:` line of the course file in the editor.
+
+**Try it on a copy.** `cd lens-editor && npx tsx scripts/atlas-sync.ts`
+prints its options. It reads a saved copy of the Docs and writes only to a
+directory on disk.
+
 ## Lens Editor Production Promotion
 
 The Lens Editor promotion feature compares the relay-owned staging repository
@@ -707,7 +778,7 @@ PROMOTION_BRANCH_PREFIX=promote/lens-editor
 PROMOTION_MERGE_METHOD=SQUASH
 PROMOTION_GITHUB_OWNER=Lens-Academy
 PROMOTION_GITHUB_REPO=lens-edu-production
-GITHUB_TOKEN=github_pat_with_pull_request_and_automerge_permissions
+GITHUB_TOKEN=github_pat_that_can_open_and_merge_pull_requests
 ```
 
 `PROMOTION_ENABLED=false` disables the routes. With
@@ -747,13 +818,21 @@ keys. The Lens Editor image includes `git` and `openssh-client`; compose sets
 `GIT_SSH_COMMAND=ssh -F /data/lens-editor-promotion-ssh/config` for promotion
 Git operations.
 
-The GitHub token is for GitHub API operations: creating pull requests and
-enabling auto-merge. It is not used by `git clone`/`git push` while the remote
-uses SSH. The promotion service never pushes to the staging repository; it only
-pushes short-lived branches to the production repository whose names begin with
-`PROMOTION_BRANCH_PREFIX`. Keep GitHub branch protection or rulesets enabled for
-production `main` and staging `staging`; a write-enabled deploy key cannot
-enforce branch-prefix restrictions by itself.
+The GitHub token is for GitHub API operations: it opens each promotion's pull
+request, then merges it at once. When the production branch still requires
+something (a required check, a review), it asks for auto-merge instead, which
+needs "Allow auto-merge" in the repository settings. A fine-grained token needs
+"Contents" and "Pull requests" set to read and write. If the merge fails, the
+pull request stays open and the editor says why. The token is not used by
+`git clone`/`git push` while the remote uses SSH.
+
+The promotion service never pushes to the staging repository; it only pushes
+short-lived branches to the production repository whose names begin with
+`PROMOTION_BRANCH_PREFIX`. A write-enabled deploy key cannot enforce
+branch-prefix restrictions by itself, so protect production's `production`
+branch and staging's `staging` branch with branch protection or rulesets. A
+rule that requires a pull request with no approvals still lets promotions merge
+at once; a required check or approval makes them wait for auto-merge instead.
 
 Let the promotion service create the scratch clone on first use. It marks that
 checkout with local git config and rejects existing checkouts without that

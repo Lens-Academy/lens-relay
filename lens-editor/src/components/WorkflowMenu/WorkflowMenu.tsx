@@ -9,7 +9,7 @@ interface WorkflowItem {
   label: string;
   description: string;
   path: string;
-  icon: 'review' | 'recent' | 'video' | 'article' | 'promote';
+  icon: 'review' | 'recent' | 'map' | 'video' | 'article' | 'promote';
   access: keyof WorkflowAccess;
 }
 
@@ -27,6 +27,13 @@ const WORKFLOWS: WorkflowItem[] = [
     path: '/recent',
     access: 'recent',
     icon: 'recent',
+  },
+  {
+    label: 'Concept Map',
+    description: 'Concepts of the Context Accelerator and what each requires',
+    path: '/concept-map',
+    access: 'conceptMap',
+    icon: 'map',
   },
   // One importer for everything: it detects YouTube URLs and imports the
   // video's transcript instead of an article, so the separate Add Video page
@@ -73,6 +80,18 @@ function WorkflowIcon({ icon }: { icon: WorkflowItem['icon'] }) {
       <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="9" />
         <path d="M12 7v5l3 2" />
+      </svg>
+    );
+  }
+
+  if (icon === 'map') {
+    return (
+      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="2" y="9" width="6" height="6" rx="1" />
+        <rect x="16" y="3" width="6" height="6" rx="1" />
+        <rect x="16" y="15" width="6" height="6" rx="1" />
+        <path d="M8 12h3a2 2 0 0 0 2-2V8a2 2 0 0 1 2-2h1" />
+        <path d="M11 12a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2h1" />
       </svg>
     );
   }

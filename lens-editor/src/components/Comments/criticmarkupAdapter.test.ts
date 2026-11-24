@@ -182,3 +182,22 @@ describe('a comment and the text it highlights go together', () => {
     expect(ytext.toString()).toBe('We ship it soon.');
   });
 });
+
+describe('exact copies of a comment (a pasted block repeats its metadata)', () => {
+  const same = '{>>{"author":"Mark","timestamp":1794321934844}@@NOT SMART<<}';
+
+  it('gives each copy its own id, so cards keyed by it never collide', () => {
+    const { ytext } = makeDoc(`${same}1. first\n\n${same}1. second\n`);
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'Mark'));
+    const ids = result.current.threads.map((t) => t.root.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('deleting the second copy removes the second one, not the first', () => {
+    const { ytext } = makeDoc(`${same}1. first\n\n${same}1. second\n`);
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'Mark'));
+    act(() => result.current.callbacks.onDelete(result.current.threads[1].root));
+    expect(ytext.toString()).toBe(`${same}1. first\n\n1. second\n`);
+  });
+});

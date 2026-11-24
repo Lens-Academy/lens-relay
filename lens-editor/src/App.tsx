@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type RefObject } from 'react';
+import { lazy, Suspense, useState, useCallback, useEffect, useRef, type RefObject } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useYDoc, useYjsProvider } from './lib/ydoc-provider';
 import { RelayProvider } from './providers/RelayProvider';
@@ -47,6 +47,7 @@ import { ImageDocumentView } from './components/ImageDocumentView';
 import { HtmlEditor } from './components/HtmlEditor';
 import { findPathByUuid } from './lib/uuid-to-path';
 import { QuickSwitcher } from './components/QuickSwitcher';
+import { isQuickSwitcherKey } from './lib/quick-switcher-key';
 import { useRecentFiles } from './hooks/useRecentFiles';
 import { RELAY_ID, FOLDERS, DEFAULT_DOC_UUID, EDU_FOLDER_ID } from './lib/constants';
 import { pickEditor } from './lib/editor-selector';
@@ -60,6 +61,9 @@ import { MobileDrawer } from './components/Mobile/MobileDrawer';
 import { WorkflowMenu } from './components/WorkflowMenu';
 import { isDocRoute } from './lib/app-routes';
 import { useEdgeSwipe } from './hooks/useEdgeSwipe';
+
+// Loaded when the page is opened: its layouts need dagre, which the editor itself does not
+const ConceptMapPage = lazy(() => import('./components/ConceptMapPage').then((page) => ({ default: page.ConceptMapPage })));
 
 // Panel configuration — single source of truth for all panel behavior
 // All panels use CSS flexbox with pixel widths.
@@ -495,7 +499,7 @@ function DefaultLanding() {
         ) : (
           <p className="text-gray-500">
             Choose a file from the sidebar, or press{' '}
-            <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">Ctrl+O</kbd>
+            <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">{/Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'}</kbd>
             {' '}to open the quick switcher.
           </p>
         )}
@@ -545,10 +549,10 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
     manager.autoResize(outerWidth);
   }, [outerWidth, manager.autoResize]);
 
-  // Ctrl+O keyboard shortcut to open quick switcher
+  // Ctrl/Cmd+K and Ctrl/Cmd+O open the quick switcher
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
+      if (isQuickSwitcherKey(e)) {
         e.preventDefault();
         setQuickSwitcherOpen(true);
       }
@@ -696,6 +700,11 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                     <Route path="/add-source" element={
                       canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                         ? <AddArticlePage shareToken={shareToken} />
+                        : <DefaultLanding />
+                    } />
+                    <Route path="/concept-map" element={
+                      isAllFolders || folderUuid === EDU_FOLDER_ID
+                        ? <Suspense fallback={<p className="px-6 py-6 text-sm text-gray-500">Loading…</p>}><ConceptMapPage /></Suspense>
                         : <DefaultLanding />
                     } />
                     {/* The page's old address, kept for links and bookmarks */}

@@ -1,0 +1,22 @@
+{
+ "slug": "share-companies-using-artificial-intelligence",
+ "title": "Share of companies using artificial intelligence technology",
+ "subtitle": "Share of companies using AI technology (e.g., machine learning, computer vision, or natural language processing) in at least one business function. “Use” covers a wide range, from a few employees experimenting with AI to it being fully scaled across the organization.",
+ "note": "Companies represent a range of industries, sizes, functional specialties, and tenures. To adjust for differences in response rates, the data are weighted by the contribution of each respondent's nation to global GDP.",
+ "chartTypes": [
+  "StackedBar"
+ ],
+ "selectedEntityNames": [
+  "All geographies",
+  "Europe",
+  "North America",
+  "Developing markets",
+  "Greater China",
+  "Asia-Pacific"
+ ],
+ "selectedFacetStrategy": "entity",
+ "yAxis": {
+  "max": 100,
+  "min": 0
+ }
+}
