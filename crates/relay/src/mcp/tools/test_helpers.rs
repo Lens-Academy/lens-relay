@@ -732,7 +732,32 @@ pub(crate) fn scoped_access(folder_uuid: &str, folder_name: Option<&str>) -> Mcp
 }
 
 pub(crate) async fn three_folder_fixture() -> ThreeFolders {
-    let server = Server::new_for_test();
+    seed_three_folders(Server::new_for_test()).await
+}
+
+/// [`three_folder_fixture`] on a server with a ready, in-memory search
+/// index holding every content doc, indexed by the production indexer
+/// (`search_handle_content_update`), so each doc carries its folder's name.
+pub(crate) async fn three_folder_fixture_with_search() -> ThreeFolders {
+    let index = Arc::new(
+        y_sweet_core::search_index::SearchIndex::new_in_memory().expect("in-memory index"),
+    );
+    let fx = seed_three_folders(Server::new_for_test_with_search(index.clone())).await;
+    for (_, _, entries) in three_folder_layout() {
+        for (_, uuid, _) in entries {
+            crate::server::search_handle_content_update(
+                &format!("{}-{}", RELAY_ID, uuid),
+                fx.server.docs(),
+                &index,
+                &y_sweet_core::suggestions_index::SuggestionsIndex::new(),
+                &y_sweet_core::recent_changes_index::RecentChangesIndex::new(),
+            );
+        }
+    }
+    fx
+}
+
+async fn seed_three_folders(server: Arc<Server>) -> ThreeFolders {
     let layout = three_folder_layout();
 
     for (folder, folder_uuid, entries) in &layout {
