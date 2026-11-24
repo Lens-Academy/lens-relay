@@ -9,6 +9,8 @@ pub mod critic_markup;
 pub mod delete_doc;
 pub mod edit;
 pub mod edit_policy;
+#[cfg(test)]
+mod folder_scope_tests;
 pub mod get_links;
 pub mod get_url;
 pub mod glob;
@@ -585,6 +587,15 @@ pub async fn dispatch_tool(
     arguments: &Value,
     access: &McpAccess,
 ) -> Value {
+    // Fail closed: a key limited to one folder whose folder name could not be
+    // resolved (folder doc missing or unnamed) would otherwise skip every
+    // folder check below and act as an all-folders key.
+    if access.folder_uuid.is_some() && access.folder_name.is_none() {
+        return tool_error(
+            "Access denied: this key's folder could not be found on the server, so no tool can run with it. Ask for a new key.",
+        );
+    }
+
     // create_session allocates a fresh app session and returns its id.
     //
     // The LLM is responsible for passing this id back as the `session_id`
