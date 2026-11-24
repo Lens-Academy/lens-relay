@@ -375,6 +375,10 @@ struct SearchQuery {
     q: String,
     #[serde(default = "default_search_limit")]
     limit: usize,
+    /// Limit results to this folder (a folder uuid). The editor proxy sets it
+    /// from a folder-scoped share token; absent = every folder.
+    #[serde(default)]
+    folder_uuid: Option<String>,
 }
 
 fn default_search_limit() -> usize {
@@ -5633,6 +5637,18 @@ async fn handle_search(
         })));
     }
 
+    // A folder that does not resolve to a name returns nothing rather than
+    // falling back to every folder.
+    let folder = match &params.folder_uuid {
+        None => None,
+        Some(uuid) => Some(server_state.folder_name_for_uuid(uuid).ok_or_else(|| {
+            AppError::new(
+                StatusCode::NOT_FOUND,
+                anyhow!("Folder '{}' not found", uuid),
+            )
+        })?),
+    };
+
     let search_index = server_state.search_index.clone().ok_or_else(|| {
         AppError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -5641,10 +5657,12 @@ async fn handle_search(
     })?;
 
     // Run search in blocking context (tantivy is sync)
-    let results = tokio::task::spawn_blocking(move || search_index.search(&q, limit))
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let results = tokio::task::spawn_blocking(move || {
+        search_index.search_in_folder(&q, limit, folder.as_deref())
+    })
+    .await
+    .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?
+    .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let total_hits = results.len();
     Ok(Json(json!({

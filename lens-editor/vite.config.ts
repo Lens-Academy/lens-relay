@@ -75,7 +75,7 @@ export default defineConfig(() => {
       configureServer(server) {
         // Validate share token on /api/relay/ proxy requests
         server.middlewares.use('/api/relay', async (req, res, next) => {
-          const { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest } = await import('./server/relay-proxy-auth.ts');
+          const { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest, scopeRelayPath } = await import('./server/relay-proxy-auth.ts');
 
           const shareToken = req.headers['x-share-token'] as string | undefined;
           const auth = validateProxyToken(shareToken);
@@ -114,6 +114,7 @@ export default defineConfig(() => {
             return;
           }
 
+          req.url = scopeRelayPath(req.method || 'GET', fullUrl, auth);
           delete req.headers['x-share-token'];
           next();
         });
