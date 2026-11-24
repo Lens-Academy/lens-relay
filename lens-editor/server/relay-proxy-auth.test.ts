@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateProxyToken, checkProxyAccess, checkProxyAccessWithBody, isBodyCheckedRequest, type ProxyAuthResult } from './relay-proxy-auth.ts';
+import { validateProxyToken, checkProxyAccess, checkProxyAccessWithBody, isBodyCheckedRequest, relayBodyFor, type ProxyAuthResult } from './relay-proxy-auth.ts';
 import { signShareToken } from './share-token.ts';
 
 const FOLDER_A = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
@@ -214,5 +214,30 @@ describe('checkProxyAccess', () => {
   it('checkProxyAccessWithBody delegates POST /suggestions/apply to the query check', () => {
     expect(checkProxyAccessWithBody('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_A}`, scopedAuth).allowed).toBe(true);
     expect(checkProxyAccessWithBody('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_B}`, scopedAuth).allowed).toBe(false);
+  });
+});
+
+// Prevents: a folder-scoped token's delete refusal naming documents in other
+// folders because the relay was never told the token's folder, or a client
+// widening its own scope by sending scope_folder itself.
+describe('relayBodyFor', () => {
+  const raw = (o: unknown) => Buffer.from(JSON.stringify(o), 'utf8');
+
+  it('sets scope_folder on POST /doc/trash for a folder-scoped token, overwriting the client value', () => {
+    const body = { path: 'Lens Edu/学习笔记.md', force: false, scope_folder: 'Lens' };
+    const out = relayBodyFor('POST', '/doc/trash', makeAuth(FOLDER_A), body, raw(body), 'Lens Edu');
+    expect(JSON.parse(out.toString('utf8'))).toEqual({ path: 'Lens Edu/学习笔记.md', force: false, scope_folder: 'Lens Edu' });
+  });
+
+  it('removes scope_folder for an all-folders token', () => {
+    const body = { path: "Lens/O'Brien-Núñez notes.md", scope_folder: 'Lens Edu' };
+    const out = relayBodyFor('POST', '/doc/trash', makeAuth(ALL_FOLDERS), body, raw(body));
+    expect(JSON.parse(out.toString('utf8'))).toEqual({ path: "Lens/O'Brien-Núñez notes.md" });
+  });
+
+  it('forwards other body-checked requests byte for byte', () => {
+    const rawMove = Buffer.from('{"path":"Lens Edu/a.md",  "new_path":"/b.md"}', 'utf8');
+    const out = relayBodyFor('POST', '/move', makeAuth(FOLDER_A), JSON.parse(rawMove.toString()), rawMove, 'Lens Edu');
+    expect(out.equals(rawMove)).toBe(true);
   });
 });

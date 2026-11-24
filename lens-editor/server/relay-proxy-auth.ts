@@ -184,3 +184,31 @@ export function checkProxyAccessWithBody(
 
   return checkProxyAccess(method, path, query, auth);
 }
+
+/**
+ * The body to forward to the relay for a body-checked request that passed
+ * the access check. For POST /doc/trash it sets `scope_folder` to a
+ * folder-scoped token's folder name (overwriting anything the client sent;
+ * removed for all-folders tokens), so the relay's inbound-links refusal names
+ * only documents in that folder and counts the rest. Every other body is
+ * forwarded unchanged.
+ */
+export function relayBodyFor(
+  method: string,
+  path: string,
+  auth: ProxyAuthResult,
+  parsedBody: unknown,
+  rawBody: Buffer,
+  allowedFolderName?: string,
+): Buffer {
+  if (method !== 'POST' || path !== '/doc/trash') return rawBody;
+  if (typeof parsedBody !== 'object' || parsedBody === null || Array.isArray(parsedBody)) {
+    return rawBody;
+  }
+  const body: Record<string, unknown> = { ...(parsedBody as Record<string, unknown>) };
+  delete body.scope_folder;
+  if (!auth.isAllFolders && allowedFolderName) {
+    body.scope_folder = allowedFolderName;
+  }
+  return Buffer.from(JSON.stringify(body), 'utf8');
+}
