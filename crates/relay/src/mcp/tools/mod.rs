@@ -10,9 +10,9 @@ pub mod delete_doc;
 pub mod edit;
 pub mod edit_policy;
 #[cfg(test)]
-mod folder_scope_tests;
-#[cfg(test)]
 mod folder_scope_audit_tests;
+#[cfg(test)]
+mod folder_scope_tests;
 pub mod get_links;
 pub mod get_url;
 pub mod glob;

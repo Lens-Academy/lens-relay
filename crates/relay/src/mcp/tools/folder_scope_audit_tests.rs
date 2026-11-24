@@ -62,7 +62,10 @@ async fn delete_unscoped_key_refusal_names_every_folder() {
         "Lens Edu Private/Secret.md",
         "Lens Edu/学习笔记.md",
     ] {
-        assert!(text.contains(p), "unscoped refusal should name {p}:\n{text}");
+        assert!(
+            text.contains(p),
+            "unscoped refusal should name {p}:\n{text}"
+        );
     }
     assert!(!text.contains("other folders"), "{text}");
 }
@@ -122,10 +125,7 @@ async fn add_docs(server: &Arc<Server>, docs: &[(&str, &str, &str, String)]) {
             continue;
         };
         let content = content_awareness.read().unwrap();
-        let guards: Vec<_> = folder_awareness
-            .iter()
-            .map(|a| a.read().unwrap())
-            .collect();
+        let guards: Vec<_> = folder_awareness.iter().map(|a| a.read().unwrap()).collect();
         let folder_docs: Vec<&Doc> = guards.iter().map(|g| &g.doc).collect();
         y_sweet_core::link_indexer::index_content_into_folders(&uuid, &content.doc, &folder_docs)
             .expect("indexing should succeed");
@@ -185,7 +185,10 @@ async fn read_concept_blocks_scoped_key_stay_inside_its_folder() {
         let text = result_text(&res);
         assert_no_other_folder(&text, path);
         assert!(!text.contains("Lens/Concepts/Gamma"), "{path}:\n{text}");
-        assert!(!text.contains("Lens Edu Private/Concepts/Delta"), "{path}:\n{text}");
+        assert!(
+            !text.contains("Lens Edu Private/Concepts/Delta"),
+            "{path}:\n{text}"
+        );
     }
     // The blocks are really built: the article's read carries Alpha's row,
     // and the concept file's read carries its graph block.
@@ -234,6 +237,14 @@ async fn move_scoped_key_cannot_land_outside_its_folder() {
             "{args}: {text}"
         );
     }
-    assert!(fx.server.doc_resolver().resolve_path("Lens Edu/Moved.md").is_none());
-    assert!(fx.server.doc_resolver().resolve_path("Lens/Outside.md").is_some());
+    assert!(fx
+        .server
+        .doc_resolver()
+        .resolve_path("Lens Edu/Moved.md")
+        .is_none());
+    assert!(fx
+        .server
+        .doc_resolver()
+        .resolve_path("Lens/Outside.md")
+        .is_some());
 }

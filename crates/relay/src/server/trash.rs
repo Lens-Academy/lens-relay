@@ -1654,16 +1654,23 @@ mod tests {
     async fn trash_refusal_for_folder_counts_other_folders() {
         let msg = mixed_folder_refusal().message_for_folder(Some("Lens Edu"));
         assert!(
-            msg.contains("Cannot delete Lens Edu/Target.md: 2 documents outside it still link to it:"),
+            msg.contains(
+                "Cannot delete Lens Edu/Target.md: 2 documents outside it still link to it:"
+            ),
             "{msg}"
         );
-        assert!(msg.contains("  - Lens Edu/O'Brien-Núñez notes.md (1 link)"), "{msg}");
+        assert!(
+            msg.contains("  - Lens Edu/O'Brien-Núñez notes.md (1 link)"),
+            "{msg}"
+        );
         assert!(msg.contains("  - and 1 document in other folders"), "{msg}");
         assert!(!msg.contains("Заметки"), "{msg}");
 
         let resp = mixed_folder_refusal().into_response_for_folder(Some("Lens Edu"));
         assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(!body.to_string().contains("Заметки"), "{body}");
         assert_eq!(body["referencing"].as_array().unwrap().len(), 1);
@@ -1672,9 +1679,14 @@ mod tests {
 
         // No scope: everything named, as before.
         let resp = mixed_folder_refusal().into_response_for_folder(None);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(body.to_string().contains("Lens Edu Private/Заметки.md"), "{body}");
+        assert!(
+            body.to_string().contains("Lens Edu Private/Заметки.md"),
+            "{body}"
+        );
         assert_eq!(body["referencing"].as_array().unwrap().len(), 2);
         assert!(body.get("referencing_other_folders").is_none());
     }
