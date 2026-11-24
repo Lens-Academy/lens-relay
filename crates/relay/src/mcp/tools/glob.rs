@@ -3,8 +3,20 @@ use glob_match::glob_match;
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Execute the `glob` tool: pattern-match against document paths.
+/// [`execute_scoped`] for an all-folders key (tests only).
+#[cfg(test)]
 pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+    execute_scoped(server, arguments, None)
+}
+
+/// Execute the `glob` tool: pattern-match against document paths.
+///
+/// `folder` is the folder the key is limited to (`None` = all folders).
+pub fn execute_scoped(
+    server: &Arc<Server>,
+    arguments: &Value,
+    folder: Option<&str>,
+) -> Result<String, String> {
     let pattern = arguments
         .get("pattern")
         .and_then(|v| v.as_str())
@@ -25,6 +37,8 @@ pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String
 
     let mut matched: Vec<String> = all_paths
         .into_iter()
+        // A folder-scoped key only ever sees its own folder, path or no path.
+        .filter(|p| super::in_folder(p, folder))
         .filter(|p| {
             if let Some(ref pfx) = prefix {
                 // Only include paths under the scope folder

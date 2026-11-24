@@ -9,6 +9,8 @@ pub mod critic_markup;
 pub mod delete_doc;
 pub mod edit;
 pub mod edit_policy;
+#[cfg(test)]
+mod folder_scope_tests;
 pub mod get_links;
 pub mod get_url;
 pub mod glob;
@@ -565,6 +567,19 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
     tools
 }
 
+/// Whether `path` (e.g. "Lens Edu/Notes/A.md") lies inside `folder`, the
+/// folder a key is limited to. `None` is an all-folders key: every path is
+/// inside. The match is on the exact folder name plus "/", so "Lens Edu"
+/// does not cover "Lens Edu Private/...".
+pub(crate) fn in_folder(path: &str, folder: Option<&str>) -> bool {
+    match folder {
+        None => true,
+        Some(folder) => path
+            .strip_prefix(folder)
+            .is_some_and(|rest| rest.starts_with('/')),
+    }
+}
+
 /// Dispatch a tool call to the correct handler and wrap result in MCP CallToolResult format.
 pub async fn dispatch_tool(
     server: &Arc<Server>,
@@ -572,6 +587,15 @@ pub async fn dispatch_tool(
     arguments: &Value,
     access: &McpAccess,
 ) -> Value {
+    // Fail closed: a key limited to one folder whose folder name could not be
+    // resolved (folder doc missing or unnamed) would otherwise skip every
+    // folder check below and act as an all-folders key.
+    if access.folder_uuid.is_some() && access.folder_name.is_none() {
+        return tool_error(
+            "Access denied: this key's folder could not be found on the server, so no tool can run with it. Ask for a new key.",
+        );
+    }
+
     // create_session allocates a fresh app session and returns its id.
     //
     // The LLM is responsible for passing this id back as the `session_id`
@@ -623,6 +647,24 @@ pub async fn dispatch_tool(
 
     // Folder scope check: restrict tools to the allowed folder
     if let Some(ref allowed_folder) = access.folder_name {
+        // A ".." segment would let a path that starts with the folder name
+        // point outside it ("Lens Edu/../Lens/x.md"): refuse it outright.
+        for key in [
+            "file_path",
+            "path",
+            "link_from",
+            "new_path",
+            "target_folder",
+        ] {
+            if let Some(value) = arguments.get(key).and_then(|v| v.as_str()) {
+                if value.split(['/', '\\']).any(|segment| segment == "..") {
+                    return tool_error(&format!(
+                        "Access denied: this key only has access to '{}'. '..' is not allowed in {}: '{}'",
+                        allowed_folder, key, value
+                    ));
+                }
+            }
+        }
         // Check file_path argument
         if let Some(file_path) = arguments.get("file_path").and_then(|v| v.as_str()) {
             if !file_path.starts_with(&format!("{}/", allowed_folder))
@@ -671,16 +713,20 @@ pub async fn dispatch_tool(
         server.doc_resolver().rebuild(server.docs());
     }
 
+    // The folder this key is limited to (`None` = all folders), for tools
+    // that gather paths or content from every folder.
+    let folder = access.folder_name.as_deref();
+
     match name {
         "read" => match read::execute_blocks(server, session_id, arguments).await {
             Ok(blocks) => tool_success_blocks(blocks),
             Err(msg) => tool_error(&msg),
         },
-        "glob" => match glob::execute(server, arguments) {
+        "glob" => match glob::execute_scoped(server, arguments, folder) {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
-        "get_links" => match get_links::execute(server, arguments).await {
+        "get_links" => match get_links::execute_scoped(server, arguments, folder).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
@@ -688,7 +734,7 @@ pub async fn dispatch_tool(
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
-        "grep" => match grep::execute(server, arguments).await {
+        "grep" => match grep::execute_scoped(server, arguments, folder).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
@@ -716,7 +762,7 @@ pub async fn dispatch_tool(
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
-        "search" => match search::execute(server, arguments).await {
+        "search" => match search::execute_scoped(server, arguments, folder).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },

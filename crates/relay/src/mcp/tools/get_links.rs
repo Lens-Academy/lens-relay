@@ -5,8 +5,20 @@ use y_sweet_core::link_indexer;
 use y_sweet_core::link_parser;
 use yrs::{GetString, ReadTxn, Transact};
 
-/// Execute the `get_links` tool: return backlinks and forward links for a document.
+/// [`execute_scoped`] for an all-folders key (tests only).
+#[cfg(test)]
 pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+    execute_scoped(server, arguments, None).await
+}
+
+/// Execute the `get_links` tool: return backlinks and forward links for a document.
+///
+/// `folder` is the folder the key is limited to (`None` = all folders).
+pub async fn execute_scoped(
+    server: &Arc<Server>,
+    arguments: &Value,
+    folder: Option<&str>,
+) -> Result<String, String> {
     let file_path = arguments
         .get("file_path")
         .and_then(|v| v.as_str())
@@ -18,10 +30,15 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
         .ok_or_else(|| format!("Error: Document not found: {}", file_path))?;
 
     // --- Backlinks ---
-    let backlink_paths = read_backlinks(server, &doc_info.folder_doc_id, &doc_info.uuid).await;
+    let mut backlink_paths = read_backlinks(server, &doc_info.folder_doc_id, &doc_info.uuid).await;
 
     // --- Forward links ---
-    let forward_link_paths = read_forward_links(server, &doc_info.doc_id).await;
+    let mut forward_link_paths = read_forward_links(server, &doc_info.doc_id).await;
+
+    // A folder-scoped key sees only the links inside its folder (checked on
+    // the resolved paths); the others are left out without an error.
+    backlink_paths.retain(|p| super::in_folder(p, folder));
+    forward_link_paths.retain(|p| super::in_folder(p, folder));
 
     // Format output
     let mut output = String::new();
