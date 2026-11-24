@@ -73,6 +73,9 @@ pub async fn execute_scoped(
         all_paths.retain(|p| p.starts_with(&prefix) || p == scope);
     }
 
+    // A folder-scoped key only ever sees its own folder, path or no path.
+    all_paths.retain(|p| super::in_folder(p, folder));
+
     // Uploaded images never match: their bytes live in the store (the doc has
     // a file hash), not in Y.Text, so read_doc_content loads each one as an
     // empty Y.Doc. On Lens Edu's ~800 attachments that took ~60s per grep and
