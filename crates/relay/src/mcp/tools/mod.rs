@@ -10,6 +10,8 @@ pub mod delete_doc;
 pub mod edit;
 pub mod edit_policy;
 #[cfg(test)]
+mod folder_scope_audit_tests;
+#[cfg(test)]
 mod folder_scope_tests;
 pub mod get_links;
 pub mod get_url;
@@ -762,7 +764,7 @@ pub async fn dispatch_tool(
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
-        "delete" => match delete_doc::execute(server, arguments).await {
+        "delete" => match delete_doc::execute_scoped(server, arguments, folder).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },

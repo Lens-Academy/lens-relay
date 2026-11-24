@@ -8,9 +8,22 @@ use crate::server::{trash_restore_hint, Server};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+/// Execute the `delete` tool for an all-folders key.
+#[cfg(test)]
+pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+    execute_scoped(server, arguments, None).await
+}
+
 /// Execute the `delete` tool. Returns pretty JSON:
 /// `{ trashed: [<new paths>], trashed_at, restore_hint }`.
-pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+/// `folder` is the folder a scoped key is limited to: an inbound-links
+/// refusal then names only referencing documents inside it and counts the
+/// rest (`None` = all folders, every path named).
+pub async fn execute_scoped(
+    server: &Arc<Server>,
+    arguments: &Value,
+    folder: Option<&str>,
+) -> Result<String, String> {
     let path = arguments
         .get("path")
         .or_else(|| arguments.get("file_path"))
@@ -32,7 +45,7 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
     let result = server
         .trash_path(path, force)
         .await
-        .map_err(|e| e.message())?;
+        .map_err(|e| e.message_for_folder(folder))?;
 
     let body = json!({
         "trashed": result.trashed_paths(),

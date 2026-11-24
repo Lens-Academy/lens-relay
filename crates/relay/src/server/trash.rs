@@ -149,30 +149,69 @@ impl TrashError {
             | TrashError::Forbidden(m)
             | TrashError::Internal(m) => m.clone(),
             TrashError::InboundLinks { path, referencing } => {
-                let mut lines = vec![format!(
-                    "Cannot delete {}: {} document{} outside it still link{} to it:",
-                    path,
-                    referencing.len(),
-                    if referencing.len() == 1 { "" } else { "s" },
-                    if referencing.len() == 1 { "s" } else { "" },
-                )];
-                for r in referencing {
-                    lines.push(format!(
-                        "  - {} ({} link{})",
-                        r.path,
-                        r.count,
-                        if r.count == 1 { "" } else { "s" }
-                    ));
-                }
-                lines.push(
-                    "Fix or remove those references first, then delete again. \
-                     To move it to the trash anyway and leave the links as they are \
-                     (validate_content will keep reporting them), pass force: true."
-                        .to_string(),
-                );
-                lines.join("\n")
+                inbound_links_message(path, referencing, 0)
             }
         }
+    }
+
+    /// For a key limited to `folder` (`None` = all folders, same as
+    /// [`TrashError::message`]): referencing documents outside that folder
+    /// are not named, only counted ("and N documents in other folders").
+    /// `trash_path` itself keeps returning the full list.
+    pub fn for_folder(self, folder: Option<&str>) -> (TrashError, usize) {
+        match (self, folder) {
+            (TrashError::InboundLinks { path, referencing }, Some(folder)) => {
+                let total = referencing.len();
+                let visible: Vec<InboundRef> = referencing
+                    .into_iter()
+                    .filter(|r| crate::mcp::tools::in_folder(&r.path, Some(folder)))
+                    .collect();
+                let hidden = total - visible.len();
+                (
+                    TrashError::InboundLinks {
+                        path,
+                        referencing: visible,
+                    },
+                    hidden,
+                )
+            }
+            (other, _) => (other, 0),
+        }
+    }
+
+    /// [`TrashError::message`] for a key limited to `folder`; see
+    /// [`TrashError::for_folder`].
+    pub fn message_for_folder(self, folder: Option<&str>) -> String {
+        match self.for_folder(folder) {
+            (TrashError::InboundLinks { path, referencing }, hidden) => {
+                inbound_links_message(&path, &referencing, hidden)
+            }
+            (other, _) => other.message(),
+        }
+    }
+
+    /// [`TrashError::into_response`] for a key limited to `folder`: the
+    /// `referencing` array holds only in-folder documents and
+    /// `referencing_other_folders` counts the rest.
+    pub fn into_response_for_folder(self, folder: Option<&str>) -> Response {
+        let (err, hidden) = self.for_folder(folder);
+        if folder.is_none() {
+            return err.into_response();
+        }
+        let mut body = json!({
+            "error": match &err {
+                TrashError::InboundLinks { path, referencing } => {
+                    inbound_links_message(path, referencing, hidden)
+                }
+                other => other.message(),
+            },
+            "code": err.code(),
+        });
+        if let TrashError::InboundLinks { referencing, .. } = &err {
+            body["referencing"] = json!(referencing);
+            body["referencing_other_folders"] = json!(hidden);
+        }
+        (err.status(), Json(body)).into_response()
     }
 
     /// JSON error body for the HTTP endpoint (kept by `redact_error_middleware`
@@ -187,6 +226,42 @@ impl TrashError {
         }
         (self.status(), Json(body)).into_response()
     }
+}
+
+/// The inbound-links refusal: `referencing` named one per line, plus
+/// `hidden` more counted only (documents in folders the caller's key cannot
+/// see, see [`TrashError::for_folder`]).
+fn inbound_links_message(path: &str, referencing: &[InboundRef], hidden: usize) -> String {
+    let total = referencing.len() + hidden;
+    let mut lines = vec![format!(
+        "Cannot delete {}: {} document{} outside it still link{} to it:",
+        path,
+        total,
+        if total == 1 { "" } else { "s" },
+        if total == 1 { "s" } else { "" },
+    )];
+    for r in referencing {
+        lines.push(format!(
+            "  - {} ({} link{})",
+            r.path,
+            r.count,
+            if r.count == 1 { "" } else { "s" }
+        ));
+    }
+    if hidden > 0 {
+        lines.push(format!(
+            "  - and {} document{} in other folders",
+            hidden,
+            if hidden == 1 { "" } else { "s" }
+        ));
+    }
+    lines.push(
+        "Fix or remove those references first, then delete again. \
+         To move it to the trash anyway and leave the links as they are \
+         (validate_content will keep reporting them), pass force: true."
+            .to_string(),
+    );
+    lines.join("\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -1308,6 +1383,11 @@ pub(crate) struct TrashRequest {
     pub path: String,
     #[serde(default)]
     pub force: bool,
+    /// Set by the editor proxy to a folder-scoped share token's folder name
+    /// (it overwrites any value the client sent). Referencing documents
+    /// outside it are then only counted in the inbound-links error.
+    #[serde(default)]
+    pub scope_folder: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1347,7 +1427,7 @@ pub(crate) async fn handle_trash_path(
         .into_response()),
         Err(e) => {
             tracing::warn!(path = %body.path, force = body.force, error = %e.message(), "trash request refused");
-            Ok(e.into_response())
+            Ok(e.into_response_for_folder(body.scope_folder.as_deref()))
         }
     }
 }
@@ -1549,6 +1629,66 @@ mod tests {
         assert!(!msg.contains("reword"));
         assert_eq!(err.status(), StatusCode::CONFLICT);
         assert_eq!(err.code(), "inbound_links");
+    }
+
+    fn mixed_folder_refusal() -> TrashError {
+        TrashError::InboundLinks {
+            path: "Lens Edu/Target.md".to_string(),
+            referencing: vec![
+                InboundRef {
+                    path: "Lens Edu/O'Brien-Núñez notes.md".to_string(),
+                    count: 1,
+                },
+                InboundRef {
+                    path: "Lens Edu Private/Заметки.md".to_string(),
+                    count: 3,
+                },
+            ],
+        }
+    }
+
+    // Prevents: the HTTP /doc/trash refusal for a folder-scoped share token
+    // (the proxy sets scope_folder) naming documents in other folders, in
+    // the message or in the `referencing` array.
+    #[tokio::test]
+    async fn trash_refusal_for_folder_counts_other_folders() {
+        let msg = mixed_folder_refusal().message_for_folder(Some("Lens Edu"));
+        assert!(
+            msg.contains(
+                "Cannot delete Lens Edu/Target.md: 2 documents outside it still link to it:"
+            ),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("  - Lens Edu/O'Brien-Núñez notes.md (1 link)"),
+            "{msg}"
+        );
+        assert!(msg.contains("  - and 1 document in other folders"), "{msg}");
+        assert!(!msg.contains("Заметки"), "{msg}");
+
+        let resp = mixed_folder_refusal().into_response_for_folder(Some("Lens Edu"));
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(!body.to_string().contains("Заметки"), "{body}");
+        assert_eq!(body["referencing"].as_array().unwrap().len(), 1);
+        assert_eq!(body["referencing_other_folders"], 1);
+        assert_eq!(body["code"], "inbound_links");
+
+        // No scope: everything named, as before.
+        let resp = mixed_folder_refusal().into_response_for_folder(None);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            body.to_string().contains("Lens Edu Private/Заметки.md"),
+            "{body}"
+        );
+        assert_eq!(body["referencing"].as_array().unwrap().len(), 2);
+        assert!(body.get("referencing_other_folders").is_none());
     }
 
     // ------------------------------------------------------------------
