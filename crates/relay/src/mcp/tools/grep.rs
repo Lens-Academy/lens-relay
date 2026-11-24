@@ -4,8 +4,20 @@ use serde_json::Value;
 use std::sync::Arc;
 use yrs::{GetString, ReadTxn, Transact};
 
-/// Execute the `grep` tool: regex content search across Y.Docs.
+/// [`execute_scoped`] for an all-folders key (tests only).
+#[cfg(test)]
 pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+    execute_scoped(server, arguments, None).await
+}
+
+/// Execute the `grep` tool: regex content search across Y.Docs.
+///
+/// `folder` is the folder the key is limited to (`None` = all folders).
+pub async fn execute_scoped(
+    server: &Arc<Server>,
+    arguments: &Value,
+    folder: Option<&str>,
+) -> Result<String, String> {
     let pattern = arguments
         .get("pattern")
         .and_then(|v| v.as_str())

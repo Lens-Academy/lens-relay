@@ -2,8 +2,20 @@ use crate::server::Server;
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Execute the `search` tool: full-text ranked search via Tantivy index.
+/// [`execute_scoped`] for an all-folders key (tests only).
+#[cfg(test)]
 pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+    execute_scoped(server, arguments, None).await
+}
+
+/// Execute the `search` tool: full-text ranked search via Tantivy index.
+///
+/// `_folder` is the folder the key is limited to (`None` = all folders).
+pub async fn execute_scoped(
+    server: &Arc<Server>,
+    arguments: &Value,
+    _folder: Option<&str>,
+) -> Result<String, String> {
     let query = arguments
         .get("query")
         .and_then(|v| v.as_str())
