@@ -55,7 +55,7 @@ export function checkProxyAccess(
     return { allowed: true };
   }
 
-  // GET /search — allowed (results may include cross-folder docs but content is still gated)
+  // GET /search — allowed; scopeRelayPath limits the results to the token's folder
   if (method === 'GET' && path === '/search') {
     return { allowed: true };
   }
@@ -183,4 +183,21 @@ export function checkProxyAccessWithBody(
   }
 
   return checkProxyAccess(method, path, query, auth);
+}
+
+/**
+ * The relay path to forward for an allowed request. For a folder-scoped
+ * token, GET /search gets `folder_uuid` set to the token's folder (replacing
+ * any the client sent), so the relay returns only that folder's results.
+ * Every other request is forwarded unchanged.
+ */
+export function scopeRelayPath(method: string, relayPath: string, auth: ProxyAuthResult): string {
+  if (auth.isAllFolders || method !== 'GET') return relayPath;
+  const queryIdx = relayPath.indexOf('?');
+  const pathOnly = queryIdx >= 0 ? relayPath.slice(0, queryIdx) : relayPath;
+  if (pathOnly !== '/search') return relayPath;
+  const params = new URLSearchParams(queryIdx >= 0 ? relayPath.slice(queryIdx + 1) : '');
+  params.delete('folder_uuid');
+  params.set('folder_uuid', auth.payload.folder);
+  return `${pathOnly}?${params.toString()}`;
 }

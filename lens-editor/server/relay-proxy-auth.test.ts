@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateProxyToken, checkProxyAccess, checkProxyAccessWithBody, isBodyCheckedRequest, type ProxyAuthResult } from './relay-proxy-auth.ts';
+import { validateProxyToken, checkProxyAccess, checkProxyAccessWithBody, isBodyCheckedRequest, scopeRelayPath, type ProxyAuthResult } from './relay-proxy-auth.ts';
 import { signShareToken } from './share-token.ts';
 
 const FOLDER_A = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
@@ -214,5 +214,50 @@ describe('checkProxyAccess', () => {
   it('checkProxyAccessWithBody delegates POST /suggestions/apply to the query check', () => {
     expect(checkProxyAccessWithBody('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_A}`, scopedAuth).allowed).toBe(true);
     expect(checkProxyAccessWithBody('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_B}`, scopedAuth).allowed).toBe(false);
+  });
+});
+
+describe('scopeRelayPath', () => {
+  // Prevents: a folder-scoped share token getting other folders' titles and
+  // snippets from GET /search (the relay filters on folder_uuid).
+  it('forces the token folder onto a scoped GET /search', () => {
+    expect(scopeRelayPath('GET', '/search?q=needle&limit=5', makeAuth(FOLDER_A)))
+      .toBe('/search?q=needle&limit=5&folder_uuid=fbd5eb54-73cc-41b0-ac28-2b93d3b4244e');
+    expect(scopeRelayPath('GET', '/search', makeAuth(FOLDER_A, 'view')))
+      .toBe('/search?folder_uuid=fbd5eb54-73cc-41b0-ac28-2b93d3b4244e');
+  });
+
+  it('replaces any folder_uuid the client sent, however spelled', () => {
+    const out = scopeRelayPath(
+      'GET',
+      '/search?folder_uuid=ea4015da-24af-4d9d-ac49-8c902cb17121&q=%D1%82%D0%BE%D0%BA%D0%B5%D0%BD&folder%5Fuuid=00000000-0000-0000-0000-000000000000',
+      makeAuth(FOLDER_A),
+    );
+    const params = new URLSearchParams(out.slice(out.indexOf('?') + 1));
+    expect(params.getAll('folder_uuid')).toEqual(['fbd5eb54-73cc-41b0-ac28-2b93d3b4244e']);
+    expect(params.get('q')).toBe('токен');
+    expect(out).not.toContain('ea4015da');
+    expect(out).not.toContain('00000000-0000');
+  });
+
+  it('keeps non-Latin and accented queries intact', () => {
+    const out = scopeRelayPath('GET', '/search?q=%E5%AD%A6%E4%B9%A0+O%27Brien-N%C3%BA%C3%B1ez', makeAuth(FOLDER_B));
+    const params = new URLSearchParams(out.slice(out.indexOf('?') + 1));
+    expect(params.get('q')).toBe("学习 O'Brien-Núñez");
+    expect(params.get('folder_uuid')).toBe('ea4015da-24af-4d9d-ac49-8c902cb17121');
+  });
+
+  it('leaves an all-folders token unchanged (sees every folder)', () => {
+    expect(scopeRelayPath('GET', '/search?q=needle', makeAuth(ALL_FOLDERS))).toBe('/search?q=needle');
+    expect(scopeRelayPath('GET', '/search?q=needle&folder_uuid=ea4015da-24af-4d9d-ac49-8c902cb17121', makeAuth(ALL_FOLDERS)))
+      .toBe('/search?q=needle&folder_uuid=ea4015da-24af-4d9d-ac49-8c902cb17121');
+  });
+
+  it('leaves other requests unchanged', () => {
+    const auth = makeAuth(FOLDER_A);
+    expect(scopeRelayPath('GET', `/suggestions?folder_id=${RELAY_ID}-${FOLDER_A}`, auth))
+      .toBe(`/suggestions?folder_id=${RELAY_ID}-${FOLDER_A}`);
+    expect(scopeRelayPath('POST', '/doc/new', auth)).toBe('/doc/new');
+    expect(scopeRelayPath('GET', '/searchx?q=a', auth)).toBe('/searchx?q=a');
   });
 });

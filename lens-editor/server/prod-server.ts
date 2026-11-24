@@ -2,7 +2,7 @@ import http from 'node:http';
 import { Readable } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { getRequestListener } from '@hono/node-server';
-import { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest } from './relay-proxy-auth.ts';
+import { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest, scopeRelayPath } from './relay-proxy-auth.ts';
 import { initDiscordGateway } from './discord/routes.ts';
 import { createApp } from './app.ts';
 import { startAtlasSyncFromEnv, startIliadSyncFromEnv, startSourceSyncFromEnv } from './source-sync/index.ts';
@@ -84,7 +84,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    req.url = relayPath;
+    req.url = scopeRelayPath(req.method || 'GET', relayPath, auth);
     if (relayServerToken) {
       req.headers['authorization'] = `Bearer ${relayServerToken}`;
     }
