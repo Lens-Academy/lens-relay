@@ -10,6 +10,7 @@ import {
 import { installPageServices } from './page-services';
 import { installCommentLayer } from './comment-layer';
 import { installTtsLayer } from './tts-layer';
+import { isQuickSwitcherKey } from '../../../lib/quick-switcher-key';
 import { readAnchor } from '../anchoring/types';
 
 // Bumped whenever comment placements are re-measured; scroll-state messages
@@ -107,15 +108,14 @@ export function installBridge(win: Window & typeof globalThis): () => void {
 
   postToParent({ type: 'ready', payload: {} });
 
-  // Ctrl/Cmd+O opens the editor's quick switcher, as it does outside the
-  // page. Prevent it at once, or the browser offers to open a file; that must
+  // Ctrl/Cmd+K and Ctrl/Cmd+O open the editor's quick switcher, as they do
+  // outside the page. Prevent them at once, or the browser offers to open a
+  // file or focuses its own search bar; that must
   // be synchronous, so a page sees it first only from element or document
   // handlers (its window listeners run after ours). The parent honours it only
   // with user activation.
   const onQuickSwitchKey = (event: KeyboardEvent): void => {
-    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
-    if (event.key !== 'o' && event.key !== 'O') return;
-    if (event.defaultPrevented) return;
+    if (!isQuickSwitcherKey(event)) return;
     event.preventDefault();
     if (nonce !== null) postToParent({ type: 'shortcut', payload: { key: 'o' } });
   };

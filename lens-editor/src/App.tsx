@@ -47,6 +47,7 @@ import { ImageDocumentView } from './components/ImageDocumentView';
 import { HtmlEditor } from './components/HtmlEditor';
 import { findPathByUuid } from './lib/uuid-to-path';
 import { QuickSwitcher } from './components/QuickSwitcher';
+import { isQuickSwitcherKey } from './lib/quick-switcher-key';
 import { useRecentFiles } from './hooks/useRecentFiles';
 import { RELAY_ID, FOLDERS, DEFAULT_DOC_UUID, EDU_FOLDER_ID } from './lib/constants';
 import { pickEditor } from './lib/editor-selector';
@@ -498,7 +499,7 @@ function DefaultLanding() {
         ) : (
           <p className="text-gray-500">
             Choose a file from the sidebar, or press{' '}
-            <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">Ctrl+O</kbd>
+            <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">{/Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'}</kbd>
             {' '}to open the quick switcher.
           </p>
         )}
@@ -548,10 +549,10 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
     manager.autoResize(outerWidth);
   }, [outerWidth, manager.autoResize]);
 
-  // Ctrl+O keyboard shortcut to open quick switcher
+  // Ctrl/Cmd+K and Ctrl/Cmd+O open the quick switcher
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
+      if (isQuickSwitcherKey(e)) {
         e.preventDefault();
         setQuickSwitcherOpen(true);
       }

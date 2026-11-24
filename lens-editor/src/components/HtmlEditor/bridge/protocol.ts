@@ -133,7 +133,7 @@ export type BridgeToParent =
   | { type: 'thread-clicked'; payload: { id: string } }
   | { type: 'anchor-captured'; payload: AnchorCapture }
   | { type: 'comment-mode-exit'; payload: Record<string, never> }
-  /** An editor shortcut pressed in the page: C (Comment mode) or Ctrl/Cmd+O (quick switcher). */
+  /** An editor shortcut pressed in the page: C (Comment mode) or Ctrl/Cmd+K or +O (quick switcher; sent as 'o'). */
   | { type: 'shortcut'; payload: { key: 'c' | 'o' } }
   | { type: 'selection-changed'; payload: { rect: Rect | null } }
   | { type: 'legacy-described'; payload: { anchors: Record<string, HtmlAnchor | null> } }

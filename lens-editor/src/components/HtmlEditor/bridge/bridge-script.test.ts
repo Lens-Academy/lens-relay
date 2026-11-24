@@ -254,7 +254,7 @@ describe('installBridge comment layer', () => {
     expect(sent.some(e => e.message.type === 'shortcut')).toBe(false);
   });
 
-  it('forwards Ctrl/Cmd+O for the quick switcher, unless the page took it', () => {
+  it('forwards Ctrl/Cmd+O and +K for the quick switcher, unless the page took it', () => {
     setupBody('<p id="p">text</p><input id="i">');
     cleanup = installBridge(window);
     send({ type: 'init', payload: {} });
@@ -268,11 +268,13 @@ describe('installBridge comment layer', () => {
     // Prevented at once, so the browser does not offer to open a file; also from a field.
     expect(press(document.getElementById('p')!, { key: 'o', ctrlKey: true }).defaultPrevented).toBe(true);
     expect(press(document.getElementById('i')!, { key: 'o', metaKey: true }).defaultPrevented).toBe(true);
-    expect(quickSwitch()).toHaveLength(2);
+    expect(press(document.getElementById('p')!, { key: 'k', ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(quickSwitch()).toHaveLength(3);
 
     sent = [];
     press(document.getElementById('p')!, { key: 'o' });
     press(document.getElementById('p')!, { key: 'O', ctrlKey: true, shiftKey: true });
+    press(document.getElementById('p')!, { key: 'k', metaKey: true, shiftKey: true });
     document.getElementById('p')!.addEventListener('keydown', e => e.preventDefault(), { once: true });
     press(document.getElementById('p')!, { key: 'o', ctrlKey: true });
     expect(quickSwitch()).toHaveLength(0);
