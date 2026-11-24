@@ -255,6 +255,46 @@ mod tests {
         // After applying: "See [[Relay Folder 2/Qux]] for details"
     }
 
+    // === `\|` in a table cell ===
+
+    // Prevents: a wikilink alias in a table cell indexing as a page called "a\"
+    #[test]
+    fn escaped_separator_is_not_part_of_the_name() {
+        assert_eq!(extract_wikilinks(r"| [[a\|b]] |"), vec!["a"]);
+        assert_eq!(extract_wikilinks(r"[[Foo#Sec\|b]]"), vec!["Foo"]);
+        // Only the separator's backslash goes.
+        assert_eq!(extract_wikilinks(r"[[a\b]]"), vec![r"a\b"]);
+    }
+
+    #[test]
+    fn escaped_separator_positions_stop_before_the_backslash() {
+        let result = extract_wikilink_occurrences(r"| [[Foo\|Display]] |");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "Foo");
+        assert_eq!(result[0].name_start, 4);
+        assert_eq!(result[0].name_len, 3);
+    }
+
+    // Prevents: a rename or a move dropping the `\`, which turns the alias
+    // separator into a table column break
+    #[test]
+    fn rewrites_keep_the_escaped_separator() {
+        let markdown = r"| [[Foo\|Display]] |";
+        let mut renamed = markdown.to_string();
+        apply_edits(
+            &mut renamed,
+            &compute_wikilink_rename_edits(markdown, "Foo", "Bar"),
+        );
+        assert_eq!(renamed, r"| [[Bar\|Display]] |");
+
+        let mut moved = markdown.to_string();
+        apply_edits(
+            &mut moved,
+            &compute_wikilink_move_edits(markdown, |_| true, |_| "../Sub/Bar".to_string()),
+        );
+        assert_eq!(moved, r"| [[../Sub/Bar\|Display]] |");
+    }
+
     /// Helper to apply edits to a string (edits must be in reverse offset order)
     fn apply_edits(text: &mut String, edits: &[TextEdit]) {
         for edit in edits {
@@ -295,9 +335,11 @@ pub fn extract_wikilinks(markdown: &str) -> Vec<String> {
             continue;
         }
 
-        // Strip alias (|) - take only the part before |
+        // Strip alias (|) - take only the part before |, and the backslash of
+        // the `\|` a table cell needs
         if let Some(pipe_idx) = content.find('|') {
-            content = content[..pipe_idx].to_string();
+            let name = &content[..pipe_idx];
+            content = name.strip_suffix('\\').unwrap_or(name).to_string();
         }
 
         // Strip anchor (#) - take only the part before #
@@ -369,11 +411,17 @@ pub fn extract_wikilink_occurrences(markdown: &str) -> Vec<WikilinkOccurrence> {
             continue;
         }
 
-        // The page name is the part before any '#' or '|'
-        let name_end_in_content = content
+        // The page name is the part before any '#' or '|'. A table cell writes
+        // the separator `\|`, and that backslash is not part of the name: a
+        // rewrite of the name has to leave it in place.
+        let pipe = content.find('|');
+        let mut name_end_in_content = content
             .find('#')
             .unwrap_or(content.len())
-            .min(content.find('|').unwrap_or(content.len()));
+            .min(pipe.unwrap_or(content.len()));
+        if Some(name_end_in_content) == pipe && content[..name_end_in_content].ends_with('\\') {
+            name_end_in_content -= 1;
+        }
 
         let name = content[..name_end_in_content].trim();
         if name.is_empty() {

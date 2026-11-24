@@ -1,14 +1,16 @@
 use crate::server::Server;
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use yrs::{GetString, ReadTxn, Text, Transact};
 
 use super::blob;
 use super::course_checks;
 use super::critic_markup;
 use super::edit_policy::{self, SuggestReason};
+use super::source_link_note;
 use super::validate_content;
 use y_sweet_core::activity::{self, ActivityEvent};
+use y_sweet_core::sync::awareness::Awareness;
 
 /// Requested edit mode. `Auto` lets the server decide (direct when safe,
 /// suggestion otherwise); `Suggest` always produces a pending suggestion.
@@ -229,7 +231,7 @@ pub(crate) async fn execute_checked(
     }
 
     // 3. Check read-before-edit: session must have read this document first
-    let (author, ai_client_id, ai_actor) = {
+    let (author, ai_client_id, ai_actor, can_import) = {
         let session = server
             .mcp_sessions
             .get_session(session_id)
@@ -244,6 +246,7 @@ pub(crate) async fn execute_checked(
             session.author_name.clone(),
             session.ai_client_id,
             session.ai_actor.clone(),
+            source_link_note::session_can_import(&session.access),
         )
         // Drop session guard before accessing Y.Doc
     };
@@ -496,24 +499,8 @@ pub(crate) async fn execute_checked(
         outcome
     };
 
-    // Excerpts for the recent-changes page, from the post-edit state. Built
-    // under a *read* guard so WebSocket traffic for the doc isn't blocked by
-    // the (O(doc)) provenance walk; the index write happens while the guard
-    // is still held, the same rule the search worker follows, so two
-    // back-to-back edits can't land their excerpts out of order.
     if let (EditOutcome::Direct { .. }, Some(uuid)) = (&outcome, &doc_uuid) {
-        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-        let excerpts = {
-            let txn = guard.doc.transact();
-            let raw = txn
-                .get_text("contents")
-                .map(|t| t.get_string(&txn))
-                .unwrap_or_default();
-            let events = activity::read_events(&txn);
-            let runs = crate::mcp::provenance::visible_runs_copy(&txn);
-            crate::recent_excerpts::build_excerpts(&txn, &raw, runs.as_deref(), &events)
-        };
-        server.recent_changes_index().set_excerpts(uuid, excerpts);
+        refresh_recent_excerpts(server, &awareness, uuid);
     }
 
     // 9. Explicit persist for immediate durability
@@ -533,9 +520,11 @@ pub(crate) async fn execute_checked(
     // suggestion. The course checks read the accepted text the agent matched
     // against, before and after its replacement: one snapshot, so a
     // collaborator typing elsewhere in the file is never checked.
-    let view = match outcome {
-        EditOutcome::Direct { .. } => validate_content::View::Approved,
-        EditOutcome::Suggested(_) => validate_content::View::Drafts,
+    let direct = matches!(outcome, EditOutcome::Direct { .. });
+    let view = if direct {
+        validate_content::View::Approved
+    } else {
+        validate_content::View::Drafts
     };
     let canonical_path = server
         .doc_resolver()
@@ -582,12 +571,45 @@ pub(crate) async fn execute_checked(
             effective_old.chars().count()
         ),
     };
-    Ok(format!("{}{}", reply, checks))
+    // A link in a pending change is no link yet: the swap leaves pending text
+    // alone, so a note would promise something it can't do. Once accepted, the
+    // link is the editor's to offer.
+    let note = (can_import && direct)
+        .then(|| source_link_note::edit_note(&canonical_path, &accepted, &after))
+        .flatten()
+        .unwrap_or_default();
+    Ok(format!("{}{}{}", reply, checks, note))
+}
+
+/// Excerpts for the recent-changes page, from the post-edit state. Built
+/// under a *read* guard so WebSocket traffic for the doc isn't blocked by
+/// the (O(doc)) provenance walk; the index write happens while the guard
+/// is still held, the same rule the search worker follows, so two
+/// back-to-back edits can't land their excerpts out of order.
+pub(crate) fn refresh_recent_excerpts(
+    server: &Arc<Server>,
+    awareness: &Arc<RwLock<Awareness>>,
+    doc_uuid: &str,
+) {
+    let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+    let excerpts = {
+        let txn = guard.doc.transact();
+        let raw = txn
+            .get_text("contents")
+            .map(|t| t.get_string(&txn))
+            .unwrap_or_default();
+        let events = activity::read_events(&txn);
+        let runs = crate::mcp::provenance::visible_runs_copy(&txn);
+        crate::recent_excerpts::build_excerpts(&txn, &raw, runs.as_deref(), &events)
+    };
+    server
+        .recent_changes_index()
+        .set_excerpts(doc_uuid, excerpts);
 }
 
 /// Up to `CONTEXT_CHARS` chars of accepted-view text on either side of
 /// `[from, to)`.
-fn event_context(accepted: &str, from: usize, to: usize) -> (String, String) {
+pub(crate) fn event_context(accepted: &str, from: usize, to: usize) -> (String, String) {
     const CONTEXT_CHARS: usize = 40;
     let before: String = accepted[..from]
         .chars()
@@ -1291,6 +1313,92 @@ mod tests {
             _ => entry.insert(&mut txn, "ids", ArrayPrelim::default()),
         };
         ids.push_back(&mut txn, Any::Number(client as f64));
+    }
+
+    fn importing_session(server: &Arc<Server>, doc_id: &str) -> String {
+        let mut access = default_access();
+        access.raw_token = Some("tok".to_string());
+        let sid = server.mcp_sessions.create_session(access, None, None);
+        server
+            .mcp_sessions
+            .get_session_mut(&sid)
+            .unwrap()
+            .read_docs
+            .insert(doc_id.to_string());
+        sid
+    }
+
+    // Prevents: the note listing the whole page after every edit, or sitting
+    // ahead of the result lines agents read first
+    #[tokio::test]
+    async fn edit_ends_with_a_note_about_the_sources_it_added() {
+        let uuid = "0d1a0000-0000-4000-8000-000000000010";
+        let server =
+            build_test_server(&[("/Doc.md", uuid, "[old](https://example.com/old)\n\nEnd.")]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, uuid);
+        let sid = importing_session(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "End.", "new_string": "End.\n\n[new](https://example.com/new)"}),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            result.starts_with("Made the changes to Lens/Doc.md (inserted "),
+            "{result}"
+        );
+        assert!(
+            result.contains(".\n\nExternal links: this edit adds 1 source"),
+            "{result}"
+        );
+        assert!(
+            result.contains("- https://example.com/new (line 5)"),
+            "{result}"
+        );
+        assert!(!result.contains("/old"), "{result}");
+    }
+
+    // Prevents: promising a swap that can't happen: the swap skips pending
+    // text, so the import would end with the link "not found"
+    #[tokio::test]
+    async fn edit_says_nothing_about_a_link_in_a_pending_change() {
+        let uuid = "0d1a0000-0000-4000-8000-000000000011";
+        let server = build_test_server(&[("/Doc.md", uuid, "Human words.")]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, uuid);
+        let sid = importing_session(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "words", "new_string": "https://example.com/new"}),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.starts_with("Made pending changes"), "{result}");
+        assert!(!result.contains("External links"), "{result}");
+    }
+
+    // Prevents: a note about a tool the session can't use
+    #[tokio::test]
+    async fn edit_says_nothing_to_a_session_that_cannot_import() {
+        let uuid = "0d1a0000-0000-4000-8000-000000000012";
+        let server = build_test_server(&[("/Doc.md", uuid, "End.")]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, uuid);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "End.", "new_string": "End. https://example.com/new"}),
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.contains("External links"), "{result}");
     }
 
     #[tokio::test]
