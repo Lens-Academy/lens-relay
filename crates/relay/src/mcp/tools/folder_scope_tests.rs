@@ -167,3 +167,97 @@ async fn get_links_unscoped_key_sees_links_across_folders() {
          - Lens Edu/学习笔记.md\n- Lens/Outside.md\n"
     );
 }
+
+// === AC11: an explicit path outside the key's folder stays refused ===
+
+// Prevents: near-miss spellings of the folder (a prefix, a sibling, case,
+// "..") reaching another folder through the `path` or `file_path` argument.
+#[tokio::test]
+async fn scoped_key_out_of_folder_paths_are_refused() {
+    let fx = three_folder_fixture().await;
+    let paths = [
+        "Lens",
+        "Lens/",
+        "Lens Edu Private",
+        "Lens Edu Private/",
+        "Lens Edu/../Lens",
+        "Lens Edu/../Lens Edu Private",
+        "lens edu",
+        "LENS EDU/",
+    ];
+    for path in paths {
+        for (name, args) in [
+            (
+                "grep",
+                json!({"pattern": "needle|TOKEN|ТОКЕН", "path": path, "output_mode": "content"}),
+            ),
+            ("glob", json!({"pattern": "**/*", "path": path})),
+            ("search", json!({"query": "needle", "path": path})),
+        ] {
+            let res = call_as(&fx.server, &fx.scoped, name, args).await;
+            let text = result_text(&res);
+            assert!(is_tool_error(&res), "{name} path={path:?}: {text}");
+            assert!(
+                text.starts_with("Access denied"),
+                "{name} path={path:?}: {text}"
+            );
+            assert_no_other_folder(&text, name);
+        }
+    }
+
+    let file_paths = [
+        "Lens Edu/../Lens/Outside.md",
+        "Lens Edu/../Lens Edu Private/Secret.md",
+        "Lens Edu/../Lens/x.md",
+        "Lens Edu/sub/../../Lens/Заметки.md",
+        "Lens Edu\\..\\Lens\\Outside.md",
+    ];
+    for file_path in file_paths {
+        for (name, args) in [
+            ("read", json!({ "file_path": file_path })),
+            ("get_url", json!({ "file_path": file_path })),
+            ("get_links", json!({ "file_path": file_path })),
+            (
+                "create",
+                json!({ "file_path": file_path, "content": "new page" }),
+            ),
+        ] {
+            let res = call_as(&fx.server, &fx.scoped, name, args).await;
+            let text = result_text(&res);
+            assert!(is_tool_error(&res), "{name} {file_path:?}: {text}");
+            assert!(
+                text.starts_with("Access denied"),
+                "{name} {file_path:?}: {text}"
+            );
+            // The refusal echoes the caller's own path; no other-folder text.
+            for token in OTHER_FOLDER_TOKENS {
+                assert!(!text.contains(token), "{name} {file_path:?}: {text}");
+            }
+        }
+    }
+    // Nothing was created anywhere.
+    let res = call_as(
+        &fx.server,
+        &fx.unscoped,
+        "glob",
+        json!({"pattern": "**/x.md"}),
+    )
+    .await;
+    assert_eq!(result_text(&res), "No matches found.");
+
+    // The key's own folder, spelled exactly, still works.
+    for path in ["Lens Edu", "Lens Edu/"] {
+        let res = call_as(
+            &fx.server,
+            &fx.scoped,
+            "glob",
+            json!({"pattern": "**/*", "path": path}),
+        )
+        .await;
+        assert_eq!(
+            result_text(&res),
+            "Lens Edu/Inside.md\nLens Edu/学习笔记.md",
+            "{path}"
+        );
+    }
+}

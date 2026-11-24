@@ -647,6 +647,24 @@ pub async fn dispatch_tool(
 
     // Folder scope check: restrict tools to the allowed folder
     if let Some(ref allowed_folder) = access.folder_name {
+        // A ".." segment would let a path that starts with the folder name
+        // point outside it ("Lens Edu/../Lens/x.md"): refuse it outright.
+        for key in [
+            "file_path",
+            "path",
+            "link_from",
+            "new_path",
+            "target_folder",
+        ] {
+            if let Some(value) = arguments.get(key).and_then(|v| v.as_str()) {
+                if value.split(['/', '\\']).any(|segment| segment == "..") {
+                    return tool_error(&format!(
+                        "Access denied: this key only has access to '{}'. '..' is not allowed in {}: '{}'",
+                        allowed_folder, key, value
+                    ));
+                }
+            }
+        }
         // Check file_path argument
         if let Some(file_path) = arguments.get("file_path").and_then(|v| v.as_str()) {
             if !file_path.starts_with(&format!("{}/", allowed_folder))
