@@ -261,3 +261,49 @@ async fn scoped_key_out_of_folder_paths_are_refused() {
         );
     }
 }
+
+/// Plain (no `..`) out-of-folder `file_path` values are refused by the
+/// `file_path` prefix check itself, not by the earlier `..` check.
+#[tokio::test]
+async fn scoped_key_plain_out_of_folder_file_paths_are_refused() {
+    let fx = three_folder_fixture().await;
+    let file_paths = [
+        "Lens/Outside.md",
+        "Lens Edu Private/x.md",
+        "Lens Edu Private/Secret.md",
+        "lens edu/x.md",
+        "LENS EDU/x.md",
+        "Outside.md",
+    ];
+    for file_path in file_paths {
+        for (name, args) in [
+            ("read", json!({ "file_path": file_path })),
+            ("get_url", json!({ "file_path": file_path })),
+            (
+                "create",
+                json!({ "file_path": file_path, "content": "new page" }),
+            ),
+        ] {
+            let res = call_as(&fx.server, &fx.scoped, name, args).await;
+            let text = result_text(&res);
+            assert!(is_tool_error(&res), "{name} {file_path:?}: {text}");
+            assert!(
+                text.starts_with("Access denied"),
+                "{name} {file_path:?}: {text}"
+            );
+            // The refusal echoes the caller's own path; no other-folder text.
+            for token in OTHER_FOLDER_TOKENS {
+                assert!(!text.contains(token), "{name} {file_path:?}: {text}");
+            }
+        }
+    }
+    // Nothing was created anywhere.
+    let res = call_as(
+        &fx.server,
+        &fx.unscoped,
+        "glob",
+        json!({"pattern": "**/x.md"}),
+    )
+    .await;
+    assert_eq!(result_text(&res), "No matches found.");
+}
