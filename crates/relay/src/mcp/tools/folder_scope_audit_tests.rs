@@ -210,3 +210,30 @@ async fn read_concept_blocks_scoped_key_stay_inside_its_folder() {
     );
     assert!(alpha.contains("Parent concepts"), "{alpha}");
 }
+
+// === AC6: move cannot land a file outside the key's folder ===
+
+// Prevents: a Lens-scoped key moving its own file into `Lens Edu/` by naming
+// the other folder in new_path or target_folder (move_doc.rs builds a
+// "Lens Edu/..." destination for its article check only).
+#[tokio::test]
+async fn move_scoped_key_cannot_land_outside_its_folder() {
+    let fx = three_folder_fixture().await;
+    let lens_key = scoped_access(LENS_FOLDER_UUID, Some("Lens"));
+    let attempts = [
+        json!({"path": "Lens/Outside.md", "new_path": "Lens Edu/Moved.md"}),
+        json!({"path": "Lens/Outside.md", "new_path": "Lens Edu\\Moved.md"}),
+        json!({"path": "Lens/Outside.md", "new_path": "/Moved.md", "target_folder": "Lens Edu"}),
+    ];
+    for args in attempts {
+        let res = call_as(&fx.server, &lens_key, "move", args.clone()).await;
+        assert!(is_tool_error(&res), "{args}: {res}");
+        let text = result_text(&res);
+        assert!(
+            text.contains("new_path must start with '/'") || text.contains("Access denied"),
+            "{args}: {text}"
+        );
+    }
+    assert!(fx.server.doc_resolver().resolve_path("Lens Edu/Moved.md").is_none());
+    assert!(fx.server.doc_resolver().resolve_path("Lens/Outside.md").is_some());
+}
