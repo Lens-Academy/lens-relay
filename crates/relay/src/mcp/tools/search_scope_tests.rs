@@ -22,7 +22,7 @@ pub(super) fn seed_outranking_docs(fx: &ThreeFolders) {
             "Lens Edu Private"
         };
         index
-            .add_document(
+            .add_document_buffered(
                 &format!("e2000000-0000-4000-8000-{i:012}"),
                 &format!("Zebra crowd {i}"),
                 &format!("zebrafish zebrafish zebrafish {OUTRANK_TOKEN}"),
@@ -33,7 +33,7 @@ pub(super) fn seed_outranking_docs(fx: &ThreeFolders) {
     let filler = "plain words about ponds and rivers and lakes ".repeat(40);
     for (i, title) in ["Edu zebra note", "Edu zebra appendix"].iter().enumerate() {
         index
-            .add_document(
+            .add_document_buffered(
                 &format!("f2000000-0000-4000-8000-{i:012}"),
                 title,
                 &format!("{filler} zebrafish {filler}"),
@@ -41,6 +41,7 @@ pub(super) fn seed_outranking_docs(fx: &ThreeFolders) {
             )
             .unwrap();
     }
+    index.flush().unwrap();
 }
 
 async fn search_as(fx: &ThreeFolders, scoped: bool, args: Value) -> String {
@@ -57,7 +58,12 @@ async fn search_as(fx: &ThreeFolders, scoped: bool, args: Value) -> String {
 #[tokio::test]
 async fn search_scoped_key_sees_only_its_folder() {
     let fx = three_folder_fixture_with_search().await;
-    for query in ["needle", "TOKEN_LENS_7f3a", "TOKEN_PRIVATE_9c1e", "ТОКЕН_ЛЕНС_ru"] {
+    for query in [
+        "needle",
+        "TOKEN_LENS_7f3a",
+        "TOKEN_PRIVATE_9c1e",
+        "ТОКЕН_ЛЕНС_ru",
+    ] {
         let text = search_as(&fx, true, json!({"query": query})).await;
         assert_no_other_folder(&text, query);
         for other in [

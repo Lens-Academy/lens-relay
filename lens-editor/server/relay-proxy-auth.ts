@@ -197,7 +197,6 @@ export function scopeRelayPath(method: string, relayPath: string, auth: ProxyAut
   const pathOnly = queryIdx >= 0 ? relayPath.slice(0, queryIdx) : relayPath;
   if (pathOnly !== '/search') return relayPath;
   const params = new URLSearchParams(queryIdx >= 0 ? relayPath.slice(queryIdx + 1) : '');
-  params.delete('folder_uuid');
-  params.set('folder_uuid', auth.payload.folder);
+  params.set('folder_uuid', auth.payload.folder); // drops every client value
   return `${pathOnly}?${params.toString()}`;
 }

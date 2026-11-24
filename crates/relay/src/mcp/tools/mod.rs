@@ -11,10 +11,6 @@ pub mod edit;
 pub mod edit_policy;
 #[cfg(test)]
 mod folder_scope_tests;
-#[cfg(test)]
-mod search_http_scope_tests;
-#[cfg(test)]
-mod search_scope_tests;
 pub mod get_links;
 pub mod get_url;
 pub mod glob;
@@ -26,6 +22,10 @@ pub mod import_source;
 pub mod move_doc;
 pub mod read;
 pub mod search;
+#[cfg(test)]
+mod search_http_scope_tests;
+#[cfg(test)]
+mod search_scope_tests;
 pub mod session_intro;
 pub mod source_link_note;
 #[cfg(test)]

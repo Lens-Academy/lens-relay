@@ -49,9 +49,9 @@ pub async fn execute_scoped(
     let results = tokio::task::spawn_blocking(move || {
         search_index.search_in_folder(&query, limit, folder.as_deref())
     })
-        .await
-        .map_err(|e| format!("Search task failed: {}", e))?
-        .map_err(|e| format!("Search error: {}", e))?;
+    .await
+    .map_err(|e| format!("Search task failed: {}", e))?
+    .map_err(|e| format!("Search error: {}", e))?;
 
     if results.is_empty() {
         return Ok("No results found.".to_string());

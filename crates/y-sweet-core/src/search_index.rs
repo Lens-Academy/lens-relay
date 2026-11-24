@@ -210,10 +210,8 @@ impl SearchIndex {
                 let mut kept = Vec::with_capacity(limit);
                 let mut offset = 0;
                 loop {
-                    let hits = searcher.search(
-                        &parsed_query,
-                        &TopDocs::with_limit(page).and_offset(offset),
-                    )?;
+                    let hits = searcher
+                        .search(&parsed_query, &TopDocs::with_limit(page).and_offset(offset))?;
                     let exhausted = hits.len() < page;
                     for (score, addr) in hits {
                         let retrieved: TantivyDocument = searcher.doc(addr)?;
@@ -251,7 +249,6 @@ impl SearchIndex {
 
         let mut results = Vec::with_capacity(top_docs.len());
         for (score, retrieved) in top_docs {
-
             let doc_id = retrieved
                 .get_first(self.doc_id_field)
                 .and_then(|v| v.as_str())

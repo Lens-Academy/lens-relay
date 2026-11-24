@@ -5642,7 +5642,10 @@ async fn handle_search(
     let folder = match &params.folder_uuid {
         None => None,
         Some(uuid) => Some(server_state.folder_name_for_uuid(uuid).ok_or_else(|| {
-            AppError::new(StatusCode::NOT_FOUND, anyhow!("Folder '{}' not found", uuid))
+            AppError::new(
+                StatusCode::NOT_FOUND,
+                anyhow!("Folder '{}' not found", uuid),
+            )
         })?),
     };
 
@@ -5657,9 +5660,9 @@ async fn handle_search(
     let results = tokio::task::spawn_blocking(move || {
         search_index.search_in_folder(&q, limit, folder.as_deref())
     })
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    .await
+    .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?
+    .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let total_hits = results.len();
     Ok(Json(json!({
