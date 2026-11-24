@@ -8,13 +8,20 @@ the page depends on.
 
 ## Decisions
 
-- **The offer is about content, not creation.** There is no "doc created" event, and a sidebar-created page starts
-  empty. The editor scans the open page's text instead, so a page written by an agent, pasted in, or synced from
-  Obsidian gets the same offer the first time someone who can import opens it.
-- **Ask once, and never block.** Dismissing a link records it in the page's `link_offers_v0` Y.Map, so nobody is asked
-  about that link on that page again. Hide (×) is for this person only. A link someone ignored, hid, left unticked or
-  stopped is remembered per browser: after 5 seconds on screen it isn't offered to that person again. Right-clicking a
-  link can still import it.
+- **The offer goes to whoever adds the link, as they add it.** Nothing is imported or linked unless someone accepts.
+  Links already on a page when it opens are never offered, nor are links someone else, an agent or Obsidian adds while
+  it is open: the editor offers a link only if this visit's own edits wrote its URL (Yjs keeps the writer's clientID on
+  every character, and moved or copied text keeps its writer, so moving an old link doesn't make it new). A URL also on
+  the page in text this person didn't write is not new either. Existing pages get no offers at all; an agent's `create`
+  and `edit` carry the offer for the links they write. Right-clicking any link can still import it.
+- **Ask once, and never block.** Every link is offered once. Dismissing records it in the page's `link_offers_v0` Y.Map,
+  so nobody is asked about it on that page again. Hide (×) is this person's answer. A link someone ignored, hid, left
+  unticked or stopped is remembered per browser after 5 seconds on screen, so writing it again isn't asked about
+  either; nor is one that was linked, or whose swap an undo took back. Hide also hides Working, and the bar comes back
+  only for a link added after it or a new failure.
+- **Progress and failures are for whoever asked.** An import accepted here is remembered in this browser until its end
+  has been shown, so if the page is closed first, its progress or failure is shown on the next visit, once. Nobody else
+  sees a bar for it; the link just changes when it is done.
 - **The server finishes the job.** Accepting records a `link_back` on the import job, and the server swaps the link
   when the job ends. The person can keep working or close the tab, and an agent need not wait or poll. A browser that
   swapped links itself would strand them when the tab closed.

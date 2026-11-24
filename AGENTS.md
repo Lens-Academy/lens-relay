@@ -281,14 +281,16 @@ the production server writes, and `npx tsx scripts/iliad-sync.ts` runs it agains
 
 **Import and link sources** (`docs/plans/2026-11-02-import-and-link-sources.md`,
 `lens-editor/src/components/SourceLinksBar/`, `lens-editor/server/add-article/source-links.ts`,
-`crates/relay/src/server/link_source.rs`, `crates/relay/src/mcp/tools/source_link_note.rs`): a Markdown page linking to
-external articles or videos gets a one-line offer in the editor, and `create`/`edit` end with the same offer for agents.
+`crates/relay/src/server/link_source.rs`, `crates/relay/src/mcp/tools/source_link_note.rs`): whoever adds a link to an
+external article or video on a Markdown page gets a one-line offer in the editor, once per link, and `create`/`edit` end
+with the same offer for agents. Nothing is imported unless someone accepts, and links already on a page, or added by
+someone else, are never offered (the editor goes by who wrote the URL's characters).
 Accepting imports each source and replaces its link with a wikilink, directly for a person and through the edit policy
 for an agent. `POST /api/add-article` with `linkBack` (MCP `import_source` with `link_from`) links what is already in the
 library at once and records a link-back on the job for the rest, so the server finishes the swap (`POST /doc/link-source`)
 after the tab is closed. A failed import leaves the link as it was. Pages under `Lens Edu/` are refused, because the
 platform leaves a wikilink to an article as literal text. A dismissal is for everyone, through the page's `link_offers_v0` map; an ignored
-offer is remembered per browser. The library lookup is an in-memory index on the editor server, refreshed from
+offer, and an accepted import's end, are remembered per browser. The library lookup is an in-memory index on the editor server, refreshed from
 `POST /doc/frontmatters` at most every 15 minutes (`server/add-article/library-index.ts`), and matches more strictly
 than the importer's dedup (`sameSource`), because a wrong match rewrites a page. The scanner exists twice,
 `shared/external-links.ts` and `crates/y-sweet-core/src/external_links.rs`, and both run

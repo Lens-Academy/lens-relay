@@ -813,11 +813,11 @@ describe('floating over the page', () => {
 });
 
 describe('Hide', () => {
-  it('hides the bar for now, for this person, and Dismiss stays the answer for everyone', async () => {
+  it('hides the bar for this person, and Dismiss stays the answer for everyone', async () => {
     const doc = docWith(`${A} and ${B}`);
     await mount(doc);
     const hide = bar().getByRole('button', { name: 'Hide' });
-    expect(hide).toHaveAttribute('title', 'Hide for now');
+    expect(hide).toHaveAttribute('title', 'Hide');
     fireEvent.click(hide);
     expect(queryRegion()).not.toBeInTheDocument();
     expect(readLinkOffers(doc).size).toBe(0);

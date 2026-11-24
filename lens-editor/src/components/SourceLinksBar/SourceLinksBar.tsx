@@ -304,13 +304,14 @@ function Bar({ model, session, isMobile, editorView, metadata, returnFocus, plac
     </button>
   );
 
-  // For this person, this visit; Dismiss is the answer for everyone. On a phone
-  // it sits on the sentence's line, so the buttons below keep the full width.
+  // This person's answer; Dismiss is the answer for everyone. Either way these
+  // links aren't offered again, and a link added later brings the bar back. On a
+  // phone it sits on the sentence's line, so the buttons below keep the full width.
   const hide = (
     <button
       type="button"
       aria-label="Hide"
-      title="Hide for now"
+      title="Hide"
       className={`${HIDE} ${isMobile ? 'order-2 -mr-1 min-h-10 min-w-10 self-start' : ''}`}
       onClick={act(session.hide)}
     >

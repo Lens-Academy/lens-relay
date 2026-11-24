@@ -1,20 +1,25 @@
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
-import { pageOffersSourceLinks, scanExternalLinks } from '../../../shared/external-links';
+import { pageOffersSourceLinks, scanExternalLinks, type ExternalLink } from '../../../shared/external-links';
 import type {
   ImportResultRow,
   LinkBackRequest,
   SourceLinkStatus,
   SourceLinksCheckResponse,
 } from '../../../shared/source-links-contract';
+import { getAuthorshipRuns, type AuthorshipRun } from '../../lib/authorship-runs';
 import {
   dismissLinkOffers,
+  forgetAcceptedLinkOffers,
   markLinkOffersSeen,
   observeLinkOffers,
+  readAcceptedLinkOffers,
   readLinkOffers,
   readSeenLinkOffers,
+  rememberAcceptedLinkOffers,
   undoLinkOfferDismissal,
 } from '../../lib/link-offers';
+import { isOwnClient } from '../../lib/provenance';
 import { relayHeaders } from '../../lib/relay-api';
 import {
   HIDDEN_BAR,
@@ -39,7 +44,7 @@ export const OFFER_HOLD_MS = 3000;
 /** How long a finished job may wait for its link to leave the text before the
  *  bar stops expecting it to (an unswappable link, or a job with no link-back). */
 export const SETTLE_MS = 12_000;
-/** How long an offer is on screen before this browser counts it as seen. */
+/** How long an offer or a failure is on screen before this browser counts it as seen. */
 export const OFFER_SEEN_MS = 5000;
 
 const IMPORT_CHUNK = 20; // the server's limit per request
@@ -99,6 +104,28 @@ interface HeldLink {
   end: number;
 }
 
+/** Where a link's URL is in the text: the part that says which source it is. */
+function urlRange(text: string, link: ExternalLink): [number, number] {
+  const at = text.indexOf(link.url, link.start);
+  return at >= 0 && at + link.url.length <= link.end ? [at, at + link.url.length] : [link.start, link.end];
+}
+
+/** Whether any of `[from, to)` was written under one of `mine`'s clientIDs. */
+function writtenBy(runs: AuthorshipRun[], from: number, to: number, mine: (client: number) => boolean): boolean {
+  // The first run that ends after `from`
+  let low = 0;
+  let high = runs.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (runs[mid].to <= from) low = mid + 1;
+    else high = mid;
+  }
+  for (let i = low; i < runs.length && runs[i].from < to; i += 1) {
+    if (mine(runs[i].client)) return true;
+  }
+  return false;
+}
+
 /** A caret at the start of a link isn't writing it; one inside or at its end may be. */
 const writing = (link: { start: number; end: number }, carets: number[]) =>
   carets.some((caret) => link.start < caret && caret <= link.end);
@@ -128,6 +155,11 @@ function stepOf(tracked: Tracked, status: SourceLinkStatus | undefined): RowStep
  * one document, so opening another starts a new session and nothing carries
  * over. It runs while something is subscribed, and only calls its listeners when
  * the bar would change, so typing costs a timer reset and no renders.
+ *
+ * Only links this person adds while the page is open are offered, each once: a
+ * link already on the page, or added by someone else, an agent or Obsidian, is
+ * never offered here. Whose a link is comes from who wrote its URL's characters
+ * (Yjs keeps a clientID on every one).
  */
 export class SourceLinksSession {
   private readonly doc: Y.Doc;
@@ -154,12 +186,22 @@ export class SourceLinksSession {
   /** Everyone else on the page, whose carets hold links too. */
   private awareness: Awareness | null = null;
   private held: HeldLink[] = [];
-  /** Hidden for this visit: only a new failure brings the bar back. */
+  /** Hidden: only a link added since, or a new failure, brings the bar back. */
   private hidden = false;
+  /** Failures hidden on this visit, by row key: not shown again on it. */
   private readonly hiddenFailures = new Set<string>();
   /** What this browser had been offered when the page opened. Fixed for the visit
-   *  (bar what is set aside here), so an offer doesn't vanish while it is up. */
+   *  (bar what is answered here), so an offer doesn't vanish while it is up. */
   private seen: Set<string> | null = null;
+  /** What this browser accepted on an earlier visit and hasn't seen the end of,
+   *  so its progress or failure is shown to the one who asked. Fixed for the visit. */
+  private accepted: Set<string> | null = null;
+  /** URLs this person added on this visit, the only ones that can be offered. */
+  private readonly added = new Set<string>();
+  /** URLs that were on the page before, or that someone else added. */
+  private readonly known = new Set<string>();
+  /** The clientIDs this visit's own edits were written under. */
+  private readonly ownClients = new Set<number>();
   /** url → when its offer came on screen. */
   private readonly offeredAt = new Map<string, number>();
 
@@ -210,6 +252,8 @@ export class SourceLinksSession {
   private start() {
     this.running = true;
     this.seen ??= readSeenLinkOffers(this.docId);
+    this.accepted ??= readAcceptedLinkOffers(this.docId);
+    this.ownClients.add(this.doc.clientID);
     this.text.observe(this.onTextChange);
     this.stopObservingOffers = observeLinkOffers(this.doc, this.publish);
     this.awareness?.on('change', this.onAwarenessChange);
@@ -233,7 +277,9 @@ export class SourceLinksSession {
 
   // ── Following the text ───────────────────────────────────────────────
 
-  private onTextChange = () => {
+  private onTextChange = (_event: Y.YTextEvent, transaction: Y.Transaction) => {
+    // The clientID turns over on a new day or name, and a local edit writes under the new one
+    if (transaction.local) this.ownClients.add(this.doc.clientID);
     if (this.scanTimer !== null) clearTimeout(this.scanTimer);
     this.scanTimer = setTimeout(this.scan, SCAN_DEBOUNCE_MS);
   };
@@ -242,7 +288,9 @@ export class SourceLinksSession {
   private readPage(): { urls: string[]; held: HeldLink[] } {
     const text = this.text.toString();
     if (!pageOffersSourceLinks(this.context.path, text)) return { urls: [], held: [] };
-    const links = scanExternalLinks(text).filter((link) => link.swappable);
+    const all = scanExternalLinks(text);
+    this.sortNewLinks(text, all);
+    const links = all.filter((link) => link.swappable);
     const carets = this.carets();
     const written = links.filter((link) => writing(link, carets));
     // A link and its copy elsewhere on the page: the copy is finished
@@ -251,6 +299,29 @@ export class SourceLinksSession {
       urls: [...new Set(links.map((link) => link.url))],
       held: held.map(({ url, start, end }) => ({ url, start, end })),
     };
+  }
+
+  /**
+   * Files each URL not seen before as this person's, if they wrote it on this
+   * visit everywhere it is on the page, or as known. Moved or copied text keeps
+   * who wrote it (keepAuthorship), so moving an old link doesn't make it new.
+   */
+  private sortNewLinks(text: string, links: ExternalLink[]) {
+    const unsorted = links.filter((link) => !this.known.has(link.url) && !this.added.has(link.url));
+    if (unsorted.length === 0) return;
+    const runs = getAuthorshipRuns(this.text);
+    const mine = (client: number) => this.ownClients.has(client) || isOwnClient(this.doc, client);
+    const own = new Map<string, boolean>();
+    for (const link of unsorted) {
+      const [from, to] = urlRange(text, link);
+      own.set(link.url, (own.get(link.url) ?? true) && writtenBy(runs, from, to, mine));
+    }
+    for (const [url, isOwn] of own) (isOwn ? this.added : this.known).add(url);
+  }
+
+  /** This person's link: added on this visit, or accepted on an earlier one. */
+  private isMine(url: string): boolean {
+    return this.added.has(url) || !!this.accepted?.has(url);
   }
 
   /** Every caret on the page: this person's and everyone else's. */
@@ -343,7 +414,7 @@ export class SourceLinksSession {
     let askWhy = false;
     for (const [url, tracked] of this.tracked) {
       if (onPage.has(url)) {
-        // An undo brought it back: it is on offer again
+        // An undo brought it back: it was answered, so it is left as it is
         if (tracked.local) this.tracked.delete(url);
         continue;
       }
@@ -411,8 +482,8 @@ export class SourceLinksSession {
     const tracked = this.tracked.get(url);
     if (tracked?.phase === 'sent') return;
     if (link?.state === 'queued' || link?.state === 'importing') {
-      // Someone else's import of a link that was turned down here isn't news
-      if (!tracked && readLinkOffers(this.doc).has(url)) return;
+      // Someone else's import, or one of a link that was turned down here, isn't news
+      if (!tracked && (!this.isMine(url) || readLinkOffers(this.doc).has(url))) return;
       this.tracked.set(url, { imported: true, gone: tracked?.gone, phase: 'active', id: link.job_id });
       return;
     }
@@ -505,9 +576,10 @@ export class SourceLinksSession {
 
   private offerState(url: string, status: SourceLinkStatus | undefined, dismissed: boolean): RowState | null {
     if (!status || dismissed) return null;
-    if (status.state === 'failed') return 'failed';
+    // A failure is news to whoever asked for the import, once
+    if (status.state === 'failed') return this.isMine(url) ? 'failed' : null;
     // While the index loads, `new` is unconfirmed: wait rather than offer
-    if (!this.ready || this.isHeld(url) || this.seen?.has(url)) return null;
+    if (!this.ready || this.isHeld(url) || !this.added.has(url) || this.seen?.has(url)) return null;
     if (status.state === 'library') return 'library';
     return status.state === 'new' || status.state === 'stub' ? 'new' : null;
   }
@@ -549,7 +621,7 @@ export class SourceLinksSession {
   }
 
   private publish = () => {
-    const next = this.unlessHidden(barModel(this.rowsFor(this.page), this.queue));
+    const next = this.visibleModel();
     const json = JSON.stringify(next);
     if (json !== this.modelJson) {
       this.model = next;
@@ -565,28 +637,33 @@ export class SourceLinksSession {
     this.watchOffers();
   };
 
-  /** After Hide, the bar comes back for a failure it hasn't shown. */
-  private unlessHidden(model: BarModel): BarModel {
+  /** The bar, less what Hide put away. */
+  private visibleModel(): BarModel {
+    const rows = this.rowsFor(this.page).filter((row) => !(row.state === 'failed' && this.hiddenFailures.has(row.key)));
+    const model = barModel(rows, this.queue);
     if (!this.hidden) return model;
-    const news = model.kind === 'failed' && model.rows.some((row) => row.state === 'failed' && !this.hiddenFailures.has(row.key));
-    return news ? model : HIDDEN_BAR;
+    // What was on offer at Hide is answered, so an offer now is of a link added since
+    if (model.kind !== 'offer' && model.kind !== 'failed') return HIDDEN_BAR;
+    this.hidden = false;
+    return model;
   }
 
-  /** Hides the bar for this visit. Only this person: what was on offer is seen. */
+  /** Hides the bar until a link is added or something fails. Only this person:
+   *  what was on offer is answered. */
   hide = () => {
     const rows = this.rowsFor(this.page);
-    const offered = rows.filter((row) => row.state === 'new' || row.state === 'library').flatMap((row) => row.urls);
-    if (offered.length > 0) markLinkOffersSeen(this.docId, offered);
-    for (const row of rows) {
-      if (row.state === 'failed') this.hiddenFailures.add(row.key);
-    }
+    this.answer(rows.filter((row) => row.state === 'new' || row.state === 'library').flatMap((row) => row.urls));
+    const failed = rows.filter((row) => row.state === 'failed');
+    for (const row of failed) this.hiddenFailures.add(row.key);
+    forgetAcceptedLinkOffers(this.docId, failed.flatMap((row) => row.urls));
     this.hidden = true;
     this.publish();
   };
 
-  /** Keeps time on the offers on screen. */
+  /** Keeps time on the offers and failures on screen. */
   private watchOffers() {
-    const onOffer = new Set(this.model.kind === 'offer' ? this.model.dismissUrls : []);
+    const shown = this.model.kind === 'offer' || this.model.kind === 'failed';
+    const onOffer = new Set(shown ? this.model.dismissUrls : []);
     for (const url of this.offeredAt.keys()) {
       if (!onOffer.has(url)) this.offeredAt.delete(url);
     }
@@ -608,7 +685,10 @@ export class SourceLinksSession {
     this.seenTimer = null;
     const now = Date.now();
     const due = [...this.offeredAt].filter(([, at]) => now - at >= OFFER_SEEN_MS).map(([url]) => url);
-    if (due.length > 0) markLinkOffersSeen(this.docId, due);
+    if (due.length > 0) {
+      markLinkOffersSeen(this.docId, due);
+      forgetAcceptedLinkOffers(this.docId, due);
+    }
     // Still on offer, but counted: this timer has no more to do for them
     for (const url of due) this.offeredAt.set(url, Number.POSITIVE_INFINITY);
     const waiting = [...this.offeredAt.values()].filter(Number.isFinite);
@@ -624,9 +704,14 @@ export class SourceLinksSession {
   };
 
   private forgetFinished() {
+    const done: string[] = [];
     for (const [url, { phase }] of this.tracked) {
+      if (phase === 'done') done.push(url);
       if (phase === 'done' || phase === 'failed') this.tracked.delete(url);
     }
+    // Linked: the same link written again on this visit isn't offered
+    for (const url of done) this.seen?.add(url);
+    forgetAcceptedLinkOffers(this.docId, done);
   }
 
   // ── What the person does ─────────────────────────────────────────────
@@ -642,11 +727,17 @@ export class SourceLinksSession {
 
   /** Leaves these out for this person, for good, and for nobody else. */
   setAside = (urls: string[]) => {
+    this.answer(urls);
+    this.publish();
+  };
+
+  /** Not offered to this person again, on this visit or the next. */
+  private answer(urls: string[]) {
+    if (urls.length === 0) return;
     markLinkOffersSeen(this.docId, urls);
     this.seen ??= new Set();
     for (const url of urls) this.seen.add(url);
-    this.publish();
-  };
+  }
 
   /** The right-click: whatever was decided about this link before, even Hide. */
   importSource = (url: string) => {
@@ -663,6 +754,7 @@ export class SourceLinksSession {
 
   dismiss = (urls: string[]) => {
     this.forgetFinished();
+    forgetAcceptedLinkOffers(this.docId, urls);
     dismissLinkOffers(this.doc, urls, this.author());
     this.publish();
   };
@@ -677,6 +769,7 @@ export class SourceLinksSession {
         continue;
       }
       for (const url of row.urls) this.tracked.set(url, { phase: 'sent', imported: true });
+      rememberAcceptedLinkOffers(this.docId, row.urls);
       void this.retryJob(id, row.urls);
     }
     this.submit(withoutJob);
@@ -717,12 +810,9 @@ export class SourceLinksSession {
       this.changed.set(url, ++this.clock);
       stoppedUrls.push(url);
     }
-    // Stopped is an answer: not offered again straight away, to this person
-    if (stoppedUrls.length > 0) {
-      markLinkOffersSeen(this.docId, stoppedUrls);
-      this.seen ??= new Set();
-      for (const url of stoppedUrls) this.seen.add(url);
-    }
+    // Stopped is an answer: not offered again, to this person
+    forgetAcceptedLinkOffers(this.docId, stoppedUrls);
+    this.answer(stoppedUrls);
     // What a stopped source is now is the server's to say
     await this.refresh();
   };
@@ -737,13 +827,19 @@ export class SourceLinksSession {
       return phase === undefined || phase === 'done' || phase === 'failed';
     });
     if (fresh.length === 0) return;
+    // Asked for again: its next failure is news
+    for (const url of fresh) this.hiddenFailures.delete(this.statuses.get(url)?.key ?? url);
     const swapped = this.swapInPage(fresh);
     for (const url of swapped) {
+      // Linked: an undo that brings it back doesn't ask again
+      this.seen?.add(url);
       this.changed.set(url, ++this.clock);
       this.tracked.set(url, { phase: 'done', imported: false, local: true });
     }
     if (swapped.size > 0) this.readLatest();
     const rest = fresh.filter((url) => !swapped.has(url));
+    // Its progress and its failure are this person's news on their next visit too
+    rememberAcceptedLinkOffers(this.docId, rest);
     for (const url of rest) {
       this.tracked.set(url, { phase: 'sent', imported: this.statuses.get(url)?.state !== 'library' });
     }

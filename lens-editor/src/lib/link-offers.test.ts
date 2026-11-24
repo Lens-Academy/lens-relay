@@ -3,10 +3,13 @@ import * as Y from 'yjs';
 import {
   LINK_OFFERS_MAP,
   dismissLinkOffers,
+  forgetAcceptedLinkOffers,
   markLinkOffersSeen,
   observeLinkOffers,
+  readAcceptedLinkOffers,
   readLinkOffers,
   readSeenLinkOffers,
+  rememberAcceptedLinkOffers,
   undoLinkOfferDismissal,
 } from './link-offers';
 
@@ -142,6 +145,62 @@ describe('what this browser has been offered', () => {
     });
     expect(readSeenLinkOffers('doc-a').size).toBe(0);
     expect(() => markLinkOffersSeen('doc-a', ['https://a.example/1'])).not.toThrow();
+    getItem.mockRestore();
+    setItem.mockRestore();
+  });
+});
+
+describe('what this browser accepted', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const A = 'https://a.example/1';
+  const B = 'https://a.example/2';
+
+  beforeEach(() => localStorage.clear());
+
+  it('keeps what was accepted per page until it is forgotten', () => {
+    rememberAcceptedLinkOffers('doc-a', [A, B]);
+    expect([...readAcceptedLinkOffers('doc-a')]).toEqual([A, B]);
+    expect(readAcceptedLinkOffers('doc-b').size).toBe(0);
+    forgetAcceptedLinkOffers('doc-a', [A]);
+    expect([...readAcceptedLinkOffers('doc-a')]).toEqual([B]);
+    forgetAcceptedLinkOffers('doc-a', [B]);
+    expect(localStorage.getItem('lens-editor:accepted-link-offers:doc-a')).toBeNull();
+  });
+
+  // Prevents: a page holding an entry forever for an import whose end was never shown here
+  it('lets an entry go after two weeks, counted from the last accept', () => {
+    rememberAcceptedLinkOffers('doc-a', [A], 0);
+    rememberAcceptedLinkOffers('doc-a', [B], 10 * DAY);
+    expect([...readAcceptedLinkOffers('doc-a', 14 * DAY)]).toEqual([B]);
+    rememberAcceptedLinkOffers('doc-a', [A], 14 * DAY);
+    expect([...readAcceptedLinkOffers('doc-a', 27 * DAY)]).toEqual([A]);
+  });
+
+  it('writes nothing for nothing', () => {
+    forgetAcceptedLinkOffers('doc-a', [A]);
+    rememberAcceptedLinkOffers('doc-a', []);
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('survives something unreadable in storage', () => {
+    localStorage.setItem('lens-editor:accepted-link-offers:doc-a', 'not json');
+    expect(readAcceptedLinkOffers('doc-a').size).toBe(0);
+    localStorage.setItem('lens-editor:accepted-link-offers:doc-a', '["x"]');
+    expect(readAcceptedLinkOffers('doc-a').size).toBe(0);
+    localStorage.setItem('lens-editor:accepted-link-offers:doc-a', `{"${A}":"soon","${B}":${Date.now()}}`);
+    expect([...readAcceptedLinkOffers('doc-a')]).toEqual([B]);
+  });
+
+  it('survives storage that refuses', () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    expect(readAcceptedLinkOffers('doc-a').size).toBe(0);
+    expect(() => rememberAcceptedLinkOffers('doc-a', [A])).not.toThrow();
+    expect(() => forgetAcceptedLinkOffers('doc-a', [A])).not.toThrow();
     getItem.mockRestore();
     setItem.mockRestore();
   });

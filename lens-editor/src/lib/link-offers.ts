@@ -6,6 +6,10 @@ import type * as Y from 'yjs';
  * again on this page, to anyone. Right-clicking the link can still import it,
  * which takes it back out. Only a dismissal is recorded here: what became of a
  * source is the server's job list.
+ *
+ * The offer itself only ever goes to whoever adds a link, as they add it
+ * (source-links-session.ts), so the two per-browser records below are about
+ * that person: what they have been asked, and what they accepted.
  */
 export const LINK_OFFERS_MAP = 'link_offers_v0';
 
@@ -54,8 +58,8 @@ const SEEN_MAX = 500;
 
 /**
  * The URLs of a page this browser has been offered, oldest first. Unlike a
- * dismissal, this is one person's: an offer they let pass is not asked again on
- * their next visit, and everyone else still gets it.
+ * dismissal, this is one person's: an offer they let pass, accepted or answered
+ * is not made again if they write the same link on the page later.
  */
 export function readSeenLinkOffers(docId: string): Set<string> {
   try {
@@ -73,4 +77,66 @@ export function markLinkOffersSeen(docId: string, urls: string[]): void {
   } catch {
     // Storage may be unavailable: the offer then simply comes back next visit
   }
+}
+
+// ── What this browser accepted and hasn't seen the end of ────────────────
+
+const ACCEPTED_KEY = 'lens-editor:accepted-link-offers:';
+/** Longer than any import with its retries takes. */
+const ACCEPTED_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+function readAccepted(docId: string, now: number): Record<string, number> {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(ACCEPTED_KEY + docId) ?? '{}');
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
+    const kept: Record<string, number> = {};
+    for (const [url, at] of Object.entries(stored)) {
+      if (typeof at === 'number' && now - at < ACCEPTED_TTL_MS) kept[url] = at;
+    }
+    return kept;
+  } catch {
+    return {};
+  }
+}
+
+function writeAccepted(docId: string, accepted: Record<string, number>): void {
+  try {
+    const urls = Object.keys(accepted).slice(-SEEN_MAX);
+    if (urls.length === 0) {
+      localStorage.removeItem(ACCEPTED_KEY + docId);
+      return;
+    }
+    const kept = Object.fromEntries(urls.map((url) => [url, accepted[url]]));
+    localStorage.setItem(ACCEPTED_KEY + docId, JSON.stringify(kept));
+  } catch {
+    // Storage may be unavailable: a failure after the page is closed then goes unsaid
+  }
+}
+
+/**
+ * The URLs of a page this browser sent to be imported and whose end it hasn't
+ * shown: an import still running, or one that failed after the page was closed,
+ * is shown on the next visit, to this person only.
+ */
+export function readAcceptedLinkOffers(docId: string, now: number = Date.now()): Set<string> {
+  return new Set(Object.keys(readAccepted(docId, now)));
+}
+
+export function rememberAcceptedLinkOffers(docId: string, urls: string[], now: number = Date.now()): void {
+  if (urls.length === 0) return;
+  const accepted = readAccepted(docId, now);
+  for (const url of urls) {
+    delete accepted[url];
+    accepted[url] = now;
+  }
+  writeAccepted(docId, accepted);
+}
+
+/** Its end has been shown, or it was answered another way. */
+export function forgetAcceptedLinkOffers(docId: string, urls: string[], now: number = Date.now()): void {
+  if (urls.length === 0) return;
+  const accepted = readAccepted(docId, now);
+  if (!urls.some((url) => url in accepted)) return;
+  for (const url of urls) delete accepted[url];
+  writeAccepted(docId, accepted);
 }

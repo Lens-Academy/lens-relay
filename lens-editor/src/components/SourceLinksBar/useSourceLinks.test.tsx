@@ -25,10 +25,31 @@ const PATH = '/Lens/Notes/page.md';
 
 let server: FakeSourceServer;
 
+/** A page whose text this person writes on this visit: theirs, so it is offered. */
 function docWith(text = ''): Y.Doc {
   const doc = new Y.Doc();
   doc.getText('contents').insert(0, text);
   return doc;
+}
+
+/** The same page opened again: a new Y.Doc, loaded from the server. */
+function reloaded(from: Y.Doc): Y.Doc {
+  const doc = new Y.Doc();
+  Y.applyUpdate(doc, Y.encodeStateAsUpdate(from), 'server');
+  return doc;
+}
+
+/** A page as it opens, written before this visit or by someone else. */
+function pageWith(text: string): Y.Doc {
+  return reloaded(docWith(text));
+}
+
+/** Someone else's edit arriving over the connection. */
+function editElsewhere(doc: Y.Doc, edit: (text: Y.Text) => void) {
+  const other = reloaded(doc);
+  const before = Y.encodeStateVector(doc);
+  edit(other.getText('contents'));
+  Y.applyUpdate(doc, Y.encodeStateAsUpdate(other, before), 'server');
 }
 
 function options(doc: Y.Doc, extra: Partial<UseSourceLinksOptions> = {}): UseSourceLinksOptions {
@@ -1040,7 +1061,7 @@ describe('the bar stays put while the text moves', () => {
     expect(server.checks).toEqual([[A, B]]);
   });
 
-  it('offers again when an undo brings back a link already handled', async () => {
+  it('does not offer a link again once it was linked, when it is written again', async () => {
     server.importRows.set(A, { status: 'linked', path: 'Lens/articles/a.md' });
     const doc = docWith(`See ${A}`);
     const { result } = await open(doc);
@@ -1052,7 +1073,8 @@ describe('the bar stays put while the text moves', () => {
 
     act(() => replaceText(doc, `See ${A}`));
     await pass(SCAN_DEBOUNCE_MS);
-    expect(result.current.model.text).toBe('example.com/a is already in the library.');
+    expect(result.current.model.kind).toBe('hidden');
+    expect(result.current.session?.canImport(A)).toBe(true);
   });
 });
 
@@ -1277,6 +1299,98 @@ describe('a bare URL the caret is on', () => {
   });
 });
 
+describe('only links this person adds', () => {
+  it('offers nothing for links already on the page when it opens', async () => {
+    const { result } = await open(pageWith(`See ${A} and ${B}`));
+    await pass(SCAN_DEBOUNCE_MS + OFFER_SEEN_MS);
+    expect(result.current.model.kind).toBe('hidden');
+  });
+
+  it('offers a link the person adds, and not the ones already there', async () => {
+    const doc = pageWith(`See ${A}`);
+    const { result } = await open(doc);
+    act(() => doc.getText('contents').insert(0, `${B} `));
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.rows.map((row) => row.url)).toEqual([B]);
+  });
+
+  it('offers nothing for a link someone else adds while the page is open', async () => {
+    const doc = pageWith('See');
+    const { result } = await open(doc);
+    act(() => editElsewhere(doc, (text) => text.insert(3, ` ${A}`)));
+    await pass(SCAN_DEBOUNCE_MS + OFFER_SEEN_MS);
+    expect(result.current.model.kind).toBe('hidden');
+  });
+
+  it("keeps the person's link theirs when someone else types nearby before the scan", async () => {
+    const doc = pageWith('See');
+    const { result } = await open(doc);
+    act(() => doc.getText('contents').insert(3, ` ${A}`));
+    act(() => editElsewhere(doc, (text) => text.insert(0, 'Also: ')));
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.rows.map((row) => row.url)).toEqual([A]);
+  });
+
+  it('offers nothing for a link that arrives with the page after it opened', async () => {
+    const source = docWith(`See ${A}`);
+    const doc = new Y.Doc();
+    const { result } = await open(doc);
+    act(() => Y.applyUpdate(doc, Y.encodeStateAsUpdate(source), 'server'));
+    await pass(SCAN_DEBOUNCE_MS + OFFER_SEEN_MS);
+    expect(result.current.model.kind).toBe('hidden');
+  });
+
+  it('does not offer a link already on the page that the person moves or writes again', async () => {
+    const doc = pageWith(`See ${A}\n\nMore.`);
+    const { result } = await open(doc);
+    act(() => replaceText(doc, `More.\n\nSee ${A}`));
+    await pass(SCAN_DEBOUNCE_MS);
+    act(() => doc.getText('contents').insert(0, `${A} `));
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.kind).toBe('hidden');
+  });
+
+  it("does not offer a link the person writes again that someone else's text has too", async () => {
+    const doc = pageWith(`See ${A}`);
+    const { result } = await open(doc);
+    act(() => doc.getText('contents').insert(0, `[again](${A}) `));
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.kind).toBe('hidden');
+  });
+
+  it('does not count editing the label of an old link as adding it', async () => {
+    const doc = pageWith(`See [Old](${A})`);
+    const { result } = await open(doc);
+    act(() => {
+      const text = doc.getText('contents');
+      text.delete(5, 3);
+      text.insert(5, 'New title');
+    });
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.kind).toBe('hidden');
+  });
+
+  it("keeps the person's links theirs when their clientID turns over", async () => {
+    const doc = pageWith('See');
+    const { result } = await open(doc);
+    act(() => doc.getText('contents').insert(3, ` ${A}`));
+    act(() => {
+      doc.clientID = 123_456_789; // a new day or a new name
+      doc.getText('contents').insert(0, `${B} `);
+    });
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.rows.map((row) => row.url)).toEqual([B, A]);
+  });
+
+  it('still lets the right-click import a link that was already there', async () => {
+    const { result } = await open(pageWith(`See ${A}`));
+    expect(result.current.session?.canImport(A)).toBe(true);
+    act(() => result.current.session?.importSource(A));
+    await pass(0);
+    expect(result.current.model.kind).toBe('working');
+  });
+});
+
 describe('once per person', () => {
   const DOC_ID = 'relay-doc-1';
 
@@ -1300,18 +1414,31 @@ describe('once per person', () => {
     await pass(OFFER_SEEN_MS);
     first.unmount();
 
-    const { result } = await open(doc);
+    const { result } = await open(reloaded(doc));
     expect(result.current.model.kind).toBe('hidden');
   });
 
-  it('offers it again if it was on screen for less', async () => {
+  it('does not offer it on the next visit however briefly it was up', async () => {
     const doc = docWith(`See ${A}`);
     const first = await open(doc);
-    await pass(OFFER_SEEN_MS - 1000);
+    await pass(1000);
     first.unmount();
 
-    const { result } = await open(doc);
-    expect(result.current.model.kind).toBe('offer');
+    const { result } = await open(reloaded(doc));
+    expect(result.current.model.kind).toBe('hidden');
+  });
+
+  it('does not offer it when the person writes it again on a later visit', async () => {
+    const doc = docWith(`See ${A}`);
+    const first = await open(doc);
+    await pass(OFFER_SEEN_MS);
+    first.unmount();
+
+    const again = pageWith('See');
+    const { result } = await open(again);
+    act(() => again.getText('contents').insert(3, ` ${A}`));
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.kind).toBe('hidden');
   });
 
   it('times a new link from when it was offered', async () => {
@@ -1332,8 +1459,9 @@ describe('once per person', () => {
     await pass(OFFER_SEEN_MS);
     first.unmount();
 
-    const { result } = await open(doc);
-    act(() => doc.getText('contents').insert(0, `${B} `));
+    const again = reloaded(doc);
+    const { result } = await open(again);
+    act(() => again.getText('contents').insert(0, `${B} `));
     await pass(SCAN_DEBOUNCE_MS);
     expect(result.current.model.rows.map((row) => row.url)).toEqual([B]);
   });
@@ -1364,20 +1492,65 @@ describe('once per person', () => {
     expect(readSeenLinkOffers(DOC_ID).size).toBe(1);
   });
 
-  it('still shows failures and running imports', async () => {
+  it('shows the next visit an import accepted on this one that is still running', async () => {
     const doc = docWith(`See ${A}`);
     const first = await open(doc);
-    await pass(OFFER_SEEN_MS);
+    act(() => first.result.current.session?.accept([A]));
+    await pass(0);
     first.unmount();
 
-    server.set(A, { state: 'failed', job_id: 'j1' });
-    const failed = await open(doc);
-    expect(failed.result.current.model.kind).toBe('failed');
-    failed.unmount();
+    server.set(A, { state: 'importing', job_id: `job:${A}` });
+    const { result } = await open(reloaded(doc));
+    expect(result.current.model.kind).toBe('working');
+  });
 
-    server.set(A, { state: 'importing', job_id: 'j1' });
-    const running = await open(doc);
-    expect(running.result.current.model.kind).toBe('working');
+  it('shows the next visit the failure of an import accepted on this one, once', async () => {
+    const doc = docWith(`See ${A}`);
+    const first = await open(doc);
+    act(() => first.result.current.session?.accept([A]));
+    await pass(0);
+    first.unmount();
+
+    server.set(A, { state: 'failed', job_id: `job:${A}`, error: 'Timed out' });
+    const second = await open(reloaded(doc));
+    expect(second.result.current.model.kind).toBe('failed');
+    await pass(OFFER_SEEN_MS * 2);
+    expect(second.result.current.model.kind).toBe('failed');
+    second.unmount();
+
+    const { result } = await open(reloaded(doc));
+    expect(result.current.model.kind).toBe('hidden');
+  });
+
+  it('forgets an accepted import once it is linked', async () => {
+    const doc = docWith(`See ${A}`);
+    const first = await open(doc);
+    act(() => first.result.current.session?.accept([A]));
+    await pass(0);
+    server.set(A, { state: 'library', path: 'Lens/articles/a.md', link_state: 'linked' });
+    act(() => replaceText(doc, 'See [[a]]'));
+    await pass(POLL_MS + SCAN_DEBOUNCE_MS);
+    expect(first.result.current.model.kind).toBe('done');
+    await pass(DONE_CLEARS_MS);
+    first.unmount();
+    expect(localStorage.getItem('lens-editor:accepted-link-offers:relay-doc-1')).toBeNull();
+  });
+
+  it("shows nobody else someone's running import or failure", async () => {
+    const doc = docWith(`See ${A}`);
+    const first = await open(doc);
+    act(() => first.result.current.session?.accept([A]));
+    await pass(0);
+    first.unmount();
+    localStorage.clear(); // someone else's browser
+
+    server.set(A, { state: 'importing', job_id: `job:${A}` });
+    const running = await open(reloaded(doc));
+    expect(running.result.current.model.kind).toBe('hidden');
+    running.unmount();
+    server.set(A, { state: 'failed', job_id: `job:${A}` });
+    const { result } = await open(reloaded(doc));
+    expect(result.current.model.kind).toBe('hidden');
   });
 
   it('still lets the right-click import it', async () => {
@@ -1386,23 +1559,26 @@ describe('once per person', () => {
     await pass(OFFER_SEEN_MS);
     first.unmount();
 
-    const { result } = await open(doc);
+    const { result } = await open(reloaded(doc));
     expect(result.current.session?.canImport(A)).toBe(true);
     act(() => result.current.session?.importSource(A));
     await pass(0);
     expect(result.current.model.kind).toBe('working');
   });
 
-  it('sets rows aside for this person alone, now and next visit', async () => {
+  it('sets rows aside for this person alone, even when they write it again', async () => {
     const doc = docWith(`See ${A} and ${B}`);
-    const first = await open(doc);
-    act(() => first.result.current.session?.setAside([B]));
-    expect(first.result.current.model.rows.map((row) => row.url)).toEqual([A]);
-    expect(readLinkOffers(doc).size).toBe(0);
-    first.unmount();
-
     const { result } = await open(doc);
+    act(() => result.current.session?.setAside([B]));
     expect(result.current.model.rows.map((row) => row.url)).toEqual([A]);
+    expect(readLinkOffers(doc).size).toBe(0);
+
+    act(() => replaceText(doc, `See ${A}`));
+    await pass(SCAN_DEBOUNCE_MS);
+    act(() => replaceText(doc, `See ${A} and ${B}`));
+    await pass(SCAN_DEBOUNCE_MS + OFFER_HOLD_MS);
+    expect(result.current.model.rows.map((row) => row.url)).toEqual([A]);
+    expect([...readSeenLinkOffers(DOC_ID)]).toContain(B);
   });
 
   it('copes with storage that is full or refused', async () => {
@@ -1513,18 +1689,21 @@ describe('swapping in the open editor', () => {
     expect(server.imports[0].linkBack.protectHuman).toBe(true);
   });
 
-  it('offers it again the moment an undo brings the link back', async () => {
+  it('does not offer it again when an undo brings the link back', async () => {
     server.set(A, LIBRARY);
     const doc = docWith(`See ${A}`);
-    const { result } = await open(doc, { swapInPage: editor(doc) });
+    const swapInPage = editor(doc);
+    const { result } = await open(doc, { swapInPage });
     act(() => result.current.session?.accept([A]));
     await pass(SCAN_DEBOUNCE_MS);
 
     act(() => replaceText(doc, `See ${A}`));
     await pass(SCAN_DEBOUNCE_MS);
-    expect(result.current.model.kind).toBe('offer');
-    expect(result.current.model.primary?.label).toBe('Use library copy');
+    expect(result.current.model.kind).toBe('hidden');
     expect(server.checks).toEqual([[A]]);
+    // The right-click still can
+    act(() => result.current.session?.importSource(A));
+    expect(swapInPage).toHaveBeenCalledTimes(2);
   });
 
   it('stays Done through the debounce that follows its own swap', async () => {
@@ -1665,16 +1844,31 @@ describe('Hide', () => {
     expect(again.result.current.model.kind).toBe('hidden');
   });
 
-  it('keeps a link added later this visit quiet, and offers it next visit', async () => {
+  it('comes back for a link added after it, and only that one', async () => {
     const doc = docWith(`See ${A}`);
-    const { result, unmount } = await open(doc);
+    const { result } = await open(doc);
+    act(() => result.current.session?.hide());
+    act(() => doc.getText('contents').insert(0, 'More words. '));
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.kind).toBe('hidden');
+    act(() => doc.getText('contents').insert(0, `${B} `));
+    await pass(SCAN_DEBOUNCE_MS);
+    expect(result.current.model.rows.map((row) => row.url)).toEqual([B]);
+  });
+
+  it('keeps a hidden failure hidden when a link added later comes up', async () => {
+    const doc = docWith(`See ${A}`);
+    const { result } = await open(doc);
+    act(() => result.current.session?.accept([A]));
+    await pass(0);
+    server.set(A, { state: 'failed', job_id: `job:${A}`, error: 'No' });
+    await pass(POLL_MS);
+    expect(result.current.model.kind).toBe('failed');
     act(() => result.current.session?.hide());
     act(() => doc.getText('contents').insert(0, `${B} `));
     await pass(SCAN_DEBOUNCE_MS);
-    expect(result.current.model.kind).toBe('hidden');
-    unmount();
-    const again = await open(doc);
-    expect(again.result.current.model.rows.map((row) => row.url)).toEqual([B]);
+    expect(result.current.model.kind).toBe('offer');
+    expect(result.current.model.rows.map((row) => row.url)).toEqual([B]);
   });
 
   it('hides Working too, and comes back to report a failure', async () => {
