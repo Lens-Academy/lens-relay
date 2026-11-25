@@ -63,7 +63,6 @@ function OptionSwitch({ label, description, checked, onClick }: {
 export function AuthorshipModeToggle({ settings, disabled = false }: { settings: AuthorshipSettings; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const current = MODES.find((m) => m.value === settings.mode) ?? MODES[1];
-  const value = current.label;
 
   return (
     <div>
@@ -77,7 +76,7 @@ export function AuthorshipModeToggle({ settings, disabled = false }: { settings:
       >
         <span className="lens-menu-item-icon"><AuthorshipIcon /></span>
         <span className="lens-menu-item-label min-w-0 flex-1 text-sm leading-5">Authorship</span>
-        <span className="lens-menu-item-value">{value}</span>
+        <span className="lens-menu-item-value">{current.label}</span>
         <svg className={`lens-menu-chevron${open ? ' is-open' : ''}`} viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="m4.5 2.75 3.25 3.25-3.25 3.25" />
         </svg>

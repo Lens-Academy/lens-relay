@@ -133,7 +133,8 @@ export function listCourses(metadata: FolderMetadata): CourseTreeNode[] {
  * The courses as the file tree shows them: each subfolder of `courses/`
  * (user-facing, in-development, archived, ...) is a folder group holding its
  * courses, folders first, then the courses that sit in `courses/` itself,
- * each sorted by name as the file tree sorts.
+ * each sorted by name as the file tree sorts. Deeper folders are not nested:
+ * `courses/a/b/` is one group labelled "a/b".
  */
 export function groupCoursesByFolder(courses: CourseTreeNode[]): CourseTreeNode[] {
   const byName = (a: CourseTreeNode, b: CourseTreeNode) => a.label.toLowerCase().localeCompare(b.label.toLowerCase());

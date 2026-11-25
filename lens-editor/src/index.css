@@ -2688,8 +2688,6 @@ html, body {
   background: var(--lens-page-bg);
   box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.57), 0 0 0 2px rgba(35, 131, 226, 0.2);
 }
-/* Files and Course: small tabs under the search, the chosen one darker on a
-   grey pill */
 /* A segmented control (SegmentedToggle.tsx): two options in a grey track,
    the active one a raised white segment */
 .lens-segmented {

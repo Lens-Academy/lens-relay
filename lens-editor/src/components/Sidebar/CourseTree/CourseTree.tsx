@@ -107,6 +107,12 @@ export function CourseTree({ activeUuid }: CourseTreeProps) {
     return children;
   }, [metadata, childrenCache]);
 
+  // A row on the way to the open document: one of its courses, modules or
+  // lenses, or a folder holding its course (a folder row has no uuid)
+  const holdsActive = useCallback((node: CourseTreeNode): boolean => (node.uuid
+    ? ancestorSet.has(node.uuid)
+    : !!node.folder && node.children.some((c) => !!c.uuid && ancestorSet.has(c.uuid))), [ancestorSet]);
+
   // Manual expand/collapse overrides, by row id. When the open document
   // changes, whatever was open stays open (frozen into overrides) and the
   // path to the new document reopens (its overrides cleared), like a file
@@ -128,8 +134,8 @@ export function CourseTree({ activeUuid }: CourseTreeProps) {
       const expandable = !cycle && (pending || children.length > 0);
       // A folder of courses starts open (archived ones closed) and always when it holds the open document's course
       const openByDefault = node.folder
-        ? !/^archived$/i.test(node.label) || node.children.some((c) => !!c.uuid && ancestorSet.has(c.uuid))
-        : !!node.uuid && ancestorSet.has(node.uuid);
+        ? !/^archived$/i.test(node.label) || holdsActive(node)
+        : holdsActive(node);
       const expanded = expandable && (overrides[id] ?? openByDefault);
       rows.push({
         node,
@@ -151,7 +157,7 @@ export function CourseTree({ activeUuid }: CourseTreeProps) {
     };
     for (const root of roots) visit(root, '', 0);
     return { rows, needed };
-  }, [roots, docs, overrides, ancestorSet, childrenOf]);
+  }, [roots, docs, overrides, holdsActive, childrenOf]);
 
   const neededKey = needed.join('|');
   useEffect(() => {
@@ -170,7 +176,7 @@ export function CourseTree({ activeUuid }: CourseTreeProps) {
         let changed = false;
         const next = { ...prev };
         for (const row of before) {
-          if (row.node.uuid && ancestorSet.has(row.node.uuid)) {
+          if (holdsActive(row.node)) {
             if (row.id in next) {
               delete next[row.id];
               changed = true;
@@ -184,7 +190,7 @@ export function CourseTree({ activeUuid }: CourseTreeProps) {
       });
     }
     rowsRef.current = rows;
-  }, [rows, ancestorsKey, ancestorSet]);
+  }, [rows, ancestorsKey, holdsActive]);
 
   const toggle = useCallback((row: Row) => {
     setOverrides(prev => ({ ...prev, [row.id]: !row.expanded }));

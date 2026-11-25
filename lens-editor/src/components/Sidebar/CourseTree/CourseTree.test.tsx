@@ -201,6 +201,19 @@ describe('CourseTree', () => {
     expect(rows()[0]).toHaveAttribute('aria-expanded', 'true');
   });
 
+  it('reopens a folder closed by hand when a page inside it is opened', async () => {
+    const meta = { ...metadata, '/Lens Edu/courses/user-facing/Live Course.md': md('c4') };
+    const { setActive } = renderTree(null, vi.fn(), meta);
+    const user = userEvent.setup();
+    await user.click(within(rows()[0]).getByRole('button', { name: 'Collapse' }));
+    expect(labels()).toEqual(['user-facing', 'CourseDemo Course']);
+
+    setActive('c4');
+
+    await waitFor(() => expect(labels()).toContain('CourseLive Course'));
+    expect(rows()[0]).toHaveAttribute('aria-expanded', 'true');
+  });
+
   it('says so when the open document belongs to no course', () => {
     renderTree('zzz');
     expect(screen.getByText('The open document is not part of a course.')).toBeInTheDocument();
