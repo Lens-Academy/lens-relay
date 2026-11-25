@@ -1525,13 +1525,41 @@
   font-size: 14px;
   color: var(--lens-text-tertiary);
 }
-/* The page area (EditorArea) is a container: the dashes stay out of the way
-   of the 580px text column, and leave where there is no room beside it */
 .lens-page-area {
   container: lens-page / inline-size;
 }
+/* The page area (EditorArea) is a container. Where it is too narrow for the
+   dashes beside the 580px text column (comments and the right panel open on
+   a laptop), the outline is one icon at its top right, above the page's
+   title, and the headings open under it */
+.lens-outline-icon {
+  display: none;
+}
 @container lens-page (max-width: 700px) {
-  .lens-outline { display: none; }
+  .lens-outline {
+    top: 8px;
+    right: 8px;
+    transform: none;
+  }
+  .lens-outline-dashes {
+    gap: 0 !important;
+    padding: 6px;
+    color: var(--lens-icon-secondary);
+  }
+  .lens-outline-dashes:hover {
+    color: var(--lens-icon);
+    background-color: var(--lens-hover-bg);
+  }
+  .lens-outline-dash { display: none; }
+  .lens-outline-icon { display: block; }
+  .lens-outline-panel {
+    top: 0;
+    transform-origin: right top;
+    transform: translate(10px, 0) scale(0.96);
+  }
+  .lens-outline-panel.is-open {
+    transform: translate(0, 0);
+  }
 }
 
 /* CriticMarkup styles */

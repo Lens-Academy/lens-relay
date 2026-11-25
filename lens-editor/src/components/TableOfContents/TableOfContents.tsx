@@ -154,6 +154,11 @@ export function PageOutline({ view, stateVersion, docId = '' }: TableOfContentsP
         onClick={() => setOpen((o) => !o)}
         style={{ gap: snap(9) }}
       >
+        {/* Where the page is too narrow for the dashes beside the text: one
+            outline icon at its top right instead (index.css) */}
+        <svg className="lens-outline-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true">
+          <path d="M2.5 4h11M5 8h8.5M7.5 12h6" />
+        </svg>
         {headings.map((heading, index) => {
           const level = Math.min(heading.displayLevel, DASH_WIDTHS.length);
           return (
