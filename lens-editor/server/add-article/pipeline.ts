@@ -152,9 +152,11 @@ async function processFormEmbed(
   const meta = formEmbedMeta(form, title, createdDate);
   job.title = meta.title;
 
-  await setStage("writing");
   const markdown = generateArticleMarkdown(meta, "", createdDate);
   const filenameBase = generateArticleFilenameBase(meta.author, meta.title);
+  await setStage("validating");
+  assertArticleValid(await validateArticleDraft(`articles/${filenameBase}.md`, markdown, { signal }));
+  await setStage("writing");
   const docPath = await withArticleWriteLock(async () => {
     signal?.throwIfAborted();
     const candidates = articleFilenameCandidates(filenameBase, form.embedUrl).map(

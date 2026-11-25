@@ -14,6 +14,9 @@ const relayMocks = vi.hoisted(() => ({
   relayTranscriptFolder: () => "Lens Edu/video_transcripts",
   editorOpenUrl: (p: string) => `https://editor.lensacademy.org/open/${encodeURI(p)}`,
 }));
+const validationMocks = vi.hoisted(() => ({
+  validateArticleDraft: vi.fn(),
+}));
 const evidenceMocks = vi.hoisted(() => ({
   buildSourceEvidence: vi.fn(),
   writeSourceEvidence: vi.fn(),
@@ -25,6 +28,12 @@ vi.mock("./fetch", async (importOriginal) => ({
 }));
 vi.mock("../add-video/relay-docs", () => relayMocks);
 vi.mock("./source-evidence", () => evidenceMocks);
+vi.mock("./platform-validation", () => ({
+  validateArticleDraft: validationMocks.validateArticleDraft,
+  assertArticleValid: (result: { valid: boolean }) => {
+    if (!result.valid) throw new Error("Article failed structural validation");
+  },
+}));
 
 import { formEmbedFromUrl, formTitleFromHtml } from "./form-embeds";
 import { processArticle } from "./pipeline";
@@ -71,6 +80,11 @@ describe("formTitleFromHtml", () => {
     expect(formTitleFromHtml(html, "Airtable")).toBe("Alex's form");
   });
 
+  it("turns underscores into spaces, which content titles may not hold", () => {
+    expect(formTitleFromHtml("<title>Onboarding Form_Self-Directed - Airtable</title>", "Airtable"))
+      .toBe("Onboarding Form Self-Directed");
+  });
+
   it("gives nothing when the page names only the provider", () => {
     expect(formTitleFromHtml("<title>Airtable</title>", "Airtable")).toBe("");
   });
@@ -89,6 +103,7 @@ describe("importing a form URL", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    validationMocks.validateArticleDraft.mockResolvedValue({ valid: true, issues: [] });
   });
 
   it("writes an embed record without extracting or reviewing the page", async () => {
@@ -104,6 +119,15 @@ describe("importing a form URL", () => {
     expect(markdown).toContain('source_url: "https://airtable.com/embed/appwUI4Pc2NJPOfmZ/pagHeZnPA3oHwu5Zc/form"');
     expect(markdown).not.toContain("article-stub");
     expect(markdown).not.toContain("validator-ignore");
+  });
+
+  it("writes nothing when the platform refuses the record", async () => {
+    const files = installFakeRelay(relayMocks);
+    fetchMocks.fetchRawHtml.mockResolvedValue("<title>Offboarding - Airtable</title>");
+    validationMocks.validateArticleDraft.mockResolvedValue({ valid: false, issues: [] });
+
+    await expect(processArticle(job("https://airtable.com/appX/pagY/form"))).rejects.toThrow("validation");
+    expect(files.size).toBe(0);
   });
 
   it("names the record after the provider when the page gives no title", async () => {
