@@ -2479,7 +2479,11 @@ html, body {
    light grey background eases in on hover, the name and icon darkening; the
    open page has a darker grey and its name is darker and medium. A folder's
    flap opens a little on hover; the shared folders are section labels. */
+/* A row fills its 31px slot (treeLayout.ts): a 30px item, then 1px, so the
+   name sits in the middle of it as in the sticky folder headers
+   (StickyScrollOverlay.tsx), which do not move when a row becomes one */
 .lens-tree-row {
+  height: 100%;
   padding-bottom: 1px;
 }
 .lens-tree-row {
@@ -2552,10 +2556,12 @@ html, body {
   background-color: var(--lens-bg-blue);
   box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.57);
 }
+/* A shared folder's name (Lens, Lens Edu) as a section label: small, in
+   the sidebar's secondary grey, dark enough to read at a glance */
 .lens-tree-item.is-section {
   font-size: 12px;
   font-weight: 500;
-  color: var(--lens-text-tertiary);
+  color: var(--lens-text-secondary);
 }
 .lens-tree-icon {
   position: relative;
