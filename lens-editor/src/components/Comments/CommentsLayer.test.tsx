@@ -260,3 +260,31 @@ describe('onOpenThreadChange', () => {
     expect(onOpenThreadChange).toHaveBeenLastCalledWith(null);
   });
 });
+
+describe('a new comment written in front of another', () => {
+  it('opens the new thread, not the one whose place it took', () => {
+    const p = {
+      resolveAnchorY: () => 100,
+      getViewportRect: () => ({ top: 0, height: 800 }),
+      scrollSource: fakeScrollSource(),
+      onReply: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(),
+      getInsertKey: () => '5',
+      onAddComment: vi.fn(() => '5'),
+    };
+    const old = thread({ key: '5', root: msg({ id: 'old|1', body: 'old one' }) });
+    const ref = createRef<CommentsLayerHandle>();
+    const { rerender } = render(<CommentsLayer ref={ref} threads={[old]} {...p} />);
+    act(() => ref.current!.openAddForm());
+    const box = screen.getByPlaceholderText(/add a comment…/i);
+    fireEvent.change(box, { target: { value: 'new one' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+
+    // The text arrives: the new thread at 5, the old one moved on
+    const created = thread({ key: '5', root: msg({ id: 'me|2', body: 'new one' }) });
+    rerender(<CommentsLayer ref={ref} threads={[created, { ...old, key: '30' }]} {...p} />);
+    // Someone types above both
+    rerender(<CommentsLayer ref={ref} threads={[{ ...created, key: '9' }, { ...old, key: '34' }]} {...p} />);
+
+    expect(document.querySelector('.lens-comment-card.is-open')?.textContent).toContain('new one');
+  });
+});

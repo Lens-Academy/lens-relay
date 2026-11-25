@@ -141,10 +141,21 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
   // then kept without its root, and the first edit above it by anyone closed it.
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
-  const applyFocus = (key: ThreadKey | null) => {
-    setFocus(key == null ? null : { key, rootId: threadsRef.current.find((t) => t.key === key)?.root.id });
+  // `created`: a thread just written, not in `threads` yet, whose key may
+  // still be another thread's (the one it was written in front of): its root
+  // is looked up once the threads have changed (below)
+  const threadsBeforeCreate = useRef<ThreadView[] | null>(null);
+  const applyFocus = (key: ThreadKey | null, created = false) => {
+    threadsBeforeCreate.current = created ? threadsRef.current : null;
+    setFocus(key == null ? null : { key, rootId: created ? undefined : threadsRef.current.find((t) => t.key === key)?.root.id });
     onFocusChange?.(key);
   };
+  useEffect(() => {
+    if (focus == null || focus.rootId != null || threads === threadsBeforeCreate.current) return;
+    threadsBeforeCreate.current = null;
+    const root = threads.find((t) => t.key === focus.key)?.root.id;
+    if (root != null) setFocus({ key: focus.key, rootId: root });
+  }, [focus, threads]);
 
   // The handle closes over the current render's focusedThreadKey so toggle
   // logic uses fresh state.
@@ -232,7 +243,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     const created = onAddComment(key, content);
     setShowAddForm(false);
     setPendingInsertKey(null);
-    applyFocus(typeof created === 'string' ? created : key);
+    applyFocus(typeof created === 'string' ? created : key, true);
   };
 
   const cardHeightsRef = useRef(new Map<ThreadKey, number>());
