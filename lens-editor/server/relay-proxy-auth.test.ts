@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateProxyToken, checkProxyAccess, checkProxyAccessWithBody, isBodyCheckedRequest, type ProxyAuthResult } from './relay-proxy-auth.ts';
+import { validateProxyToken, checkProxyAccess, checkProxyAccessWithBody, isBodyCheckedRequest, scopeRelayPath, relayBodyFor, type ProxyAuthResult } from './relay-proxy-auth.ts';
 import { signShareToken } from './share-token.ts';
 
 const FOLDER_A = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
@@ -214,5 +214,75 @@ describe('checkProxyAccess', () => {
   it('checkProxyAccessWithBody delegates POST /suggestions/apply to the query check', () => {
     expect(checkProxyAccessWithBody('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_A}`, scopedAuth).allowed).toBe(true);
     expect(checkProxyAccessWithBody('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_B}`, scopedAuth).allowed).toBe(false);
+  });
+});
+
+describe('scopeRelayPath', () => {
+  // Prevents: a folder-scoped share token getting other folders' titles and
+  // snippets from GET /search (the relay filters on folder_uuid).
+  it('forces the token folder onto a scoped GET /search', () => {
+    expect(scopeRelayPath('GET', '/search?q=needle&limit=5', makeAuth(FOLDER_A)))
+      .toBe('/search?q=needle&limit=5&folder_uuid=fbd5eb54-73cc-41b0-ac28-2b93d3b4244e');
+    expect(scopeRelayPath('GET', '/search', makeAuth(FOLDER_A, 'view')))
+      .toBe('/search?folder_uuid=fbd5eb54-73cc-41b0-ac28-2b93d3b4244e');
+  });
+
+  it('replaces any folder_uuid the client sent, however spelled', () => {
+    const out = scopeRelayPath(
+      'GET',
+      '/search?folder_uuid=ea4015da-24af-4d9d-ac49-8c902cb17121&q=%D1%82%D0%BE%D0%BA%D0%B5%D0%BD&folder%5Fuuid=00000000-0000-0000-0000-000000000000',
+      makeAuth(FOLDER_A),
+    );
+    const params = new URLSearchParams(out.slice(out.indexOf('?') + 1));
+    expect(params.getAll('folder_uuid')).toEqual(['fbd5eb54-73cc-41b0-ac28-2b93d3b4244e']);
+    expect(params.get('q')).toBe('токен');
+    expect(out).not.toContain('ea4015da');
+    expect(out).not.toContain('00000000-0000');
+  });
+
+  it('keeps non-Latin and accented queries intact', () => {
+    const out = scopeRelayPath('GET', '/search?q=%E5%AD%A6%E4%B9%A0+O%27Brien-N%C3%BA%C3%B1ez', makeAuth(FOLDER_B));
+    const params = new URLSearchParams(out.slice(out.indexOf('?') + 1));
+    expect(params.get('q')).toBe("学习 O'Brien-Núñez");
+    expect(params.get('folder_uuid')).toBe('ea4015da-24af-4d9d-ac49-8c902cb17121');
+  });
+
+  it('leaves an all-folders token unchanged (sees every folder)', () => {
+    expect(scopeRelayPath('GET', '/search?q=needle', makeAuth(ALL_FOLDERS))).toBe('/search?q=needle');
+    expect(scopeRelayPath('GET', '/search?q=needle&folder_uuid=ea4015da-24af-4d9d-ac49-8c902cb17121', makeAuth(ALL_FOLDERS)))
+      .toBe('/search?q=needle&folder_uuid=ea4015da-24af-4d9d-ac49-8c902cb17121');
+  });
+
+  it('leaves other requests unchanged', () => {
+    const auth = makeAuth(FOLDER_A);
+    expect(scopeRelayPath('GET', `/suggestions?folder_id=${RELAY_ID}-${FOLDER_A}`, auth))
+      .toBe(`/suggestions?folder_id=${RELAY_ID}-${FOLDER_A}`);
+    expect(scopeRelayPath('POST', '/doc/new', auth)).toBe('/doc/new');
+    expect(scopeRelayPath('GET', '/searchx?q=a', auth)).toBe('/searchx?q=a');
+  });
+});
+
+// Prevents: a folder-scoped token's delete refusal naming documents in other
+// folders because the relay was never told the token's folder, or a client
+// widening its own scope by sending scope_folder itself.
+describe('relayBodyFor', () => {
+  const raw = (o: unknown) => Buffer.from(JSON.stringify(o), 'utf8');
+
+  it('sets scope_folder on POST /doc/trash for a folder-scoped token, overwriting the client value', () => {
+    const body = { path: 'Lens Edu/学习笔记.md', force: false, scope_folder: 'Lens' };
+    const out = relayBodyFor('POST', '/doc/trash', makeAuth(FOLDER_A), body, raw(body), 'Lens Edu');
+    expect(JSON.parse(out.toString('utf8'))).toEqual({ path: 'Lens Edu/学习笔记.md', force: false, scope_folder: 'Lens Edu' });
+  });
+
+  it('removes scope_folder for an all-folders token', () => {
+    const body = { path: "Lens/O'Brien-Núñez notes.md", scope_folder: 'Lens Edu' };
+    const out = relayBodyFor('POST', '/doc/trash', makeAuth(ALL_FOLDERS), body, raw(body));
+    expect(JSON.parse(out.toString('utf8'))).toEqual({ path: "Lens/O'Brien-Núñez notes.md" });
+  });
+
+  it('forwards other body-checked requests byte for byte', () => {
+    const rawMove = Buffer.from('{"path":"Lens Edu/a.md",  "new_path":"/b.md"}', 'utf8');
+    const out = relayBodyFor('POST', '/move', makeAuth(FOLDER_A), JSON.parse(rawMove.toString()), rawMove, 'Lens Edu');
+    expect(out.equals(rawMove)).toBe(true);
   });
 });

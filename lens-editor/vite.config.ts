@@ -75,7 +75,7 @@ export default defineConfig(() => {
       configureServer(server) {
         // Validate share token on /api/relay/ proxy requests
         server.middlewares.use('/api/relay', async (req, res, next) => {
-          const { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest } = await import('./server/relay-proxy-auth.ts');
+          const { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest, scopeRelayPath, relayBodyFor } = await import('./server/relay-proxy-auth.ts');
 
           const shareToken = req.headers['x-share-token'] as string | undefined;
           const auth = validateProxyToken(shareToken);
@@ -112,6 +112,13 @@ export default defineConfig(() => {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: access.reason || 'Access denied' }));
             return;
+          }
+
+          req.url = scopeRelayPath(req.method || 'GET', fullUrl, auth);
+
+          const forwardBody = (req as any).relayProxyBody as Buffer | undefined;
+          if (forwardBody) {
+            (req as any).relayProxyBody = relayBodyFor(req.method || 'GET', pathOnly, auth, parsedBody, forwardBody, allowedFolderName);
           }
 
           delete req.headers['x-share-token'];

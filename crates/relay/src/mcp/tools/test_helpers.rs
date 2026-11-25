@@ -606,3 +606,281 @@ pub(crate) fn read_doc_content(server: &Arc<Server>, doc_id: &str) -> String {
         .map(|text| text.get_string(&txn))
         .unwrap_or_default()
 }
+
+// === Three sibling shared folders, for folder-scoped key tests ===
+//
+// `Lens`, `Lens Edu` and `Lens Edu Private` are sibling shared folders in
+// production. A key scoped to `Lens Edu` must never see paths or text from
+// the other two. Every document outside `Lens Edu` carries a unique token in
+// its text, so a test can assert the token is absent from the WHOLE tool
+// output (snippets and context lines included).
+
+pub(crate) const LENS_FOLDER_UUID: &str = "aaaa0000-0000-0000-0000-000000000000";
+pub(crate) const EDU_FOLDER_UUID: &str = "bbbb0000-0000-0000-0000-000000000000";
+pub(crate) const EDU_PRIVATE_FOLDER_UUID: &str = "cccc0000-0000-0000-0000-000000000000";
+
+/// Text that appears only in `Lens/Outside.md`.
+pub(crate) const LENS_TOKEN: &str = "TOKEN_LENS_7f3a";
+/// Text that appears only in `Lens/Заметки.md` (non-Latin path and text).
+pub(crate) const LENS_CYRILLIC_TOKEN: &str = "ТОКЕН_ЛЕНС_ru";
+/// Text that appears only in `Lens Edu Private/Secret.md`.
+pub(crate) const PRIVATE_TOKEN: &str = "TOKEN_PRIVATE_9c1e";
+/// Text that appears only in `Lens Edu Private/O'Brien-Núñez notes.md`.
+pub(crate) const PRIVATE_ACCENT_TOKEN: &str = "TOKEN_PRIVATE_nunez";
+
+/// Every token from a folder other than `Lens Edu`.
+pub(crate) const OTHER_FOLDER_TOKENS: [&str; 4] = [
+    LENS_TOKEN,
+    LENS_CYRILLIC_TOKEN,
+    PRIVATE_TOKEN,
+    PRIVATE_ACCENT_TOKEN,
+];
+
+/// Every document path outside `Lens Edu`.
+pub(crate) const OTHER_FOLDER_PATHS: [&str; 4] = [
+    "Lens/Outside.md",
+    "Lens/Заметки.md",
+    "Lens Edu Private/Secret.md",
+    "Lens Edu Private/O'Brien-Núñez notes.md",
+];
+
+/// The documents inside `Lens Edu`.
+pub(crate) const EDU_PATHS: [&str; 2] = ["Lens Edu/Inside.md", "Lens Edu/学习笔记.md"];
+
+/// (folder name, folder uuid, [(path in folder, doc uuid, content)]).
+/// Every document contains "needle". `Lens Edu/Inside.md` links out to both
+/// other folders; `Lens/Outside.md` and `Lens Edu Private/Secret.md` link in
+/// to it, so it has backlinks from both other folders.
+#[allow(clippy::type_complexity)]
+fn three_folder_layout() -> Vec<(
+    &'static str,
+    &'static str,
+    Vec<(&'static str, &'static str, String)>,
+)> {
+    vec![
+        (
+            "Lens",
+            LENS_FOLDER_UUID,
+            vec![
+                (
+                    "/Outside.md",
+                    "a1000000-0000-4000-8000-000000000001",
+                    format!("needle {LENS_TOKEN}\nsee [[Lens Edu/Inside]]\n"),
+                ),
+                (
+                    "/Заметки.md",
+                    "a1000000-0000-4000-8000-000000000002",
+                    format!("needle {LENS_CYRILLIC_TOKEN}\n"),
+                ),
+            ],
+        ),
+        (
+            "Lens Edu",
+            EDU_FOLDER_UUID,
+            vec![
+                (
+                    "/Inside.md",
+                    "b1000000-0000-4000-8000-000000000001",
+                    "intro line\nneedle inside edu\nlinks [[Lens/Outside]] [[Lens Edu Private/Secret]] [[学习笔记]]\n"
+                        .to_string(),
+                ),
+                (
+                    "/学习笔记.md",
+                    "b1000000-0000-4000-8000-000000000002",
+                    "needle 学习\nback to [[Inside]]\n".to_string(),
+                ),
+            ],
+        ),
+        (
+            "Lens Edu Private",
+            EDU_PRIVATE_FOLDER_UUID,
+            vec![
+                (
+                    "/Secret.md",
+                    "c1000000-0000-4000-8000-000000000001",
+                    format!("needle {PRIVATE_TOKEN}\nsee [[Lens Edu/Inside]]\n"),
+                ),
+                (
+                    "/O'Brien-Núñez notes.md",
+                    "c1000000-0000-4000-8000-000000000002",
+                    format!("needle {PRIVATE_ACCENT_TOKEN}\n"),
+                ),
+            ],
+        ),
+    ]
+}
+
+/// A server holding the three sibling folders, with folder docs loaded in
+/// `server.docs()` and `backlinks_v0` built by the link indexer as in
+/// production, plus a key scoped to `Lens Edu` and an all-folders key.
+pub(crate) struct ThreeFolders {
+    pub server: Arc<Server>,
+    /// Scoped to `Lens Edu` (folder uuid and resolved name both set).
+    pub scoped: McpAccess,
+    /// All folders (`folder_uuid: None`, the admin sentinel).
+    pub unscoped: McpAccess,
+}
+
+pub(crate) fn scoped_access(folder_uuid: &str, folder_name: Option<&str>) -> McpAccess {
+    McpAccess {
+        writable: true,
+        folder_uuid: Some(folder_uuid.to_string()),
+        folder_name: folder_name.map(str::to_string),
+        raw_token: None,
+        role: y_sweet_core::share_token::ShareRole::Edit,
+    }
+}
+
+pub(crate) async fn three_folder_fixture() -> ThreeFolders {
+    seed_three_folders(Server::new_for_test()).await
+}
+
+/// [`three_folder_fixture`] on a server with a ready, in-memory search
+/// index holding every content doc, indexed by the production indexer
+/// (`search_handle_content_update`), so each doc carries its folder's name.
+pub(crate) async fn three_folder_fixture_with_search() -> ThreeFolders {
+    let index = Arc::new(
+        y_sweet_core::search_index::SearchIndex::new_in_memory().expect("in-memory index"),
+    );
+    let fx = seed_three_folders(Server::new_for_test_with_search(index.clone())).await;
+    for (_, _, entries) in three_folder_layout() {
+        for (_, uuid, _) in entries {
+            crate::server::search_handle_content_update(
+                &format!("{}-{}", RELAY_ID, uuid),
+                fx.server.docs(),
+                &index,
+                &y_sweet_core::suggestions_index::SuggestionsIndex::new(),
+                &y_sweet_core::recent_changes_index::RecentChangesIndex::new(),
+            );
+        }
+    }
+    fx
+}
+
+async fn seed_three_folders(server: Arc<Server>) -> ThreeFolders {
+    let layout = three_folder_layout();
+
+    for (folder, folder_uuid, entries) in &layout {
+        let folder_doc_id = format!("{}-{}", RELAY_ID, folder_uuid);
+        let dwskv = DocWithSyncKv::new(&folder_doc_id, None, || (), None)
+            .await
+            .expect("folder DocWithSyncKv");
+        {
+            let awareness = dwskv.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            for (path, uuid, _) in entries {
+                let mut map = HashMap::new();
+                map.insert("id".to_string(), Any::String((*uuid).into()));
+                map.insert("type".to_string(), Any::String("markdown".into()));
+                map.insert("version".to_string(), Any::Number(0.0));
+                filemeta.insert(&mut txn, *path, Any::Map(map.into()));
+            }
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String((*folder).into()));
+        }
+        server.docs().insert(folder_doc_id.clone(), dwskv);
+        server
+            .doc_resolver()
+            .update_folder(&folder_doc_id, server.docs());
+
+        for (_, uuid, content) in entries {
+            let doc_id = format!("{}-{}", RELAY_ID, uuid);
+            let dwskv = DocWithSyncKv::new(&doc_id, None, || (), None)
+                .await
+                .expect("content DocWithSyncKv");
+            {
+                let awareness = dwskv.awareness();
+                let guard = awareness.write().unwrap();
+                let mut txn = guard.doc.transact_mut();
+                let text = txn.get_or_insert_text("contents");
+                text.insert(&mut txn, 0, content);
+            }
+            server.docs().insert(doc_id, dwskv);
+        }
+    }
+
+    // Backlinks across all three folders, as the link indexer builds them.
+    let folder_awarenesses: Vec<_> = layout
+        .iter()
+        .map(|(_, folder_uuid, _)| {
+            let id = format!("{}-{}", RELAY_ID, folder_uuid);
+            server.docs().get(&id).unwrap().awareness()
+        })
+        .collect();
+    for (_, _, entries) in &layout {
+        for (_, uuid, _) in entries {
+            let doc_id = format!("{}-{}", RELAY_ID, uuid);
+            let content_awareness = server.docs().get(&doc_id).unwrap().awareness();
+            let content = content_awareness.read().unwrap();
+            let guards: Vec<_> = folder_awarenesses
+                .iter()
+                .map(|a| a.read().unwrap())
+                .collect();
+            let folder_docs: Vec<&Doc> = guards.iter().map(|g| &g.doc).collect();
+            y_sweet_core::link_indexer::index_content_into_folders(
+                uuid,
+                &content.doc,
+                &folder_docs,
+            )
+            .expect("indexing should succeed");
+        }
+    }
+
+    ThreeFolders {
+        server,
+        scoped: scoped_access(EDU_FOLDER_UUID, Some("Lens Edu")),
+        unscoped: default_access(),
+    }
+}
+
+/// Call `name` through `dispatch_tool` as `access`, with a fresh session
+/// for that access; `args` gets the `session_id` added.
+pub(crate) async fn call_as(
+    server: &Arc<Server>,
+    access: &McpAccess,
+    name: &str,
+    mut args: serde_json::Value,
+) -> serde_json::Value {
+    let sid = server
+        .mcp_sessions
+        .create_session(access.clone(), None, None);
+    args["session_id"] = serde_json::Value::String(sid);
+    super::dispatch_tool(server, name, &args, access).await
+}
+
+/// Every text block of a dispatch result, joined (the whole tool output).
+pub(crate) fn result_text(result: &serde_json::Value) -> String {
+    result["content"]
+        .as_array()
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(|b| b["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a dispatch result is an MCP tool error.
+pub(crate) fn is_tool_error(result: &serde_json::Value) -> bool {
+    result["isError"] == serde_json::json!(true)
+}
+
+/// Panics if any token or path from outside `Lens Edu` appears in `output`.
+pub(crate) fn assert_no_other_folder(output: &str, context: &str) {
+    for token in OTHER_FOLDER_TOKENS {
+        assert!(
+            !output.contains(token),
+            "{context}: output carries other-folder text {token:?}:\n{output}"
+        );
+    }
+    for path in OTHER_FOLDER_PATHS {
+        assert!(
+            !output.contains(path),
+            "{context}: output carries other-folder path {path:?}:\n{output}"
+        );
+    }
+}
