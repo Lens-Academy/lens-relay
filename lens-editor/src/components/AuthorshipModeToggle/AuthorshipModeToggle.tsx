@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { RECENT_WINDOW_PRESETS, type AuthorshipMode } from '../Editor/extensions/authorship';
-import { MenuCheck, Switch } from '../Menu/MenuSwitchRow';
+import { MenuCheck, MenuSwitchRow, Switch } from '../Menu/MenuSwitchRow';
 import type { AuthorshipSettings } from './useAuthorshipSettings';
 
 const MODES: Array<{ value: AuthorshipMode; label: string; description: string }> = [
@@ -32,44 +32,38 @@ function AuthorshipIcon() {
   );
 }
 
-/** One on/off row of the authorship options, with an optional block shown while on */
-function OptionSwitch({ label, description, checked, onClick, children }: {
+/** One on/off row of the authorship options */
+function OptionSwitch({ label, description, checked, onClick }: {
   label: string;
   description: string;
   checked: boolean;
   onClick: () => void;
-  children?: ReactNode;
 }) {
   return (
-    <>
-      <button
-        type="button"
-        role="menuitemcheckbox"
-        aria-checked={checked}
-        onClick={onClick}
-        className="lens-menu-item lens-menu-item-compact lens-menu-subitem"
-      >
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm leading-5">{label}</span>
-          <span className="lens-menu-item-description">{description}</span>
-        </span>
-        <Switch on={checked} />
-      </button>
-      {children}
-    </>
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={checked}
+      onClick={onClick}
+      className="lens-menu-item lens-menu-item-compact lens-menu-subitem"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm leading-5">{label}</span>
+        <span className="lens-menu-item-description">{description}</span>
+      </span>
+      <Switch on={checked} />
+    </button>
   );
 }
 
 /**
  * Authorship in the page menu: a row with the current display, which opens
- * the options under it (the modes, the author on hover, recent changes).
+ * the options under it (the modes, the author on hover).
  */
 export function AuthorshipModeToggle({ settings, disabled = false }: { settings: AuthorshipSettings; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const current = MODES.find((m) => m.value === settings.mode) ?? MODES[1];
-  const windowLabel = RECENT_WINDOW_PRESETS.find((p) => p.ms === settings.windowMs)?.label
-    ?? `${Math.round(settings.windowMs / 60_000)}m`;
-  const value = settings.recentEnabled ? `${current.label} · Recent ${windowLabel}` : current.label;
+  const value = current.label;
 
   return (
     <div>
@@ -112,33 +106,55 @@ export function AuthorshipModeToggle({ settings, disabled = false }: { settings:
             checked={settings.hoverEnabled}
             onClick={settings.toggleHover}
           />
-          <OptionSwitch
-            label="Highlight recent changes"
-            description="Direct AI edits within a time window"
-            checked={settings.recentEnabled}
-            onClick={settings.toggleRecent}
-          >
-            {settings.recentEnabled && (
-              <div className="flex gap-1 px-2 pb-1.5 pt-0.5 lens-menu-subitem" role="group" aria-label="Recent changes window">
-                {RECENT_WINDOW_PRESETS.map((p) => (
-                  <button
-                    key={p.label}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={p.ms === settings.windowMs}
-                    onClick={() => settings.selectWindow(p.ms)}
-                    className={`px-2 py-0.5 rounded-full text-xs transition-colors ${
-                      p.ms === settings.windowMs
-                        ? 'bg-purple-100 text-purple-700'
-                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                    }`}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </OptionSwitch>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A clock: changes within a time window.
+function RecentIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4" aria-hidden="true">
+      <circle cx="10" cy="10" r="7" />
+      <path d="M10 6v4l2.5 1.5" />
+    </svg>
+  );
+}
+
+/**
+ * "Highlight recent changes", a switch of its own in the page menu (beside
+ * Authorship, not inside it); while on, the time window's choices under it.
+ */
+export function RecentChangesToggle({ settings, disabled = false }: { settings: AuthorshipSettings; disabled?: boolean }) {
+  return (
+    <div>
+      <MenuSwitchRow
+        icon={<RecentIcon />}
+        label="Highlight recent changes"
+        description="Direct AI edits within a time window"
+        checked={settings.recentEnabled}
+        onToggle={settings.toggleRecent}
+        disabled={disabled}
+      />
+      {settings.recentEnabled && (
+        <div className="flex gap-1 px-2 pb-1.5 pt-0.5 lens-menu-subitem" role="group" aria-label="Recent changes window">
+          {RECENT_WINDOW_PRESETS.map((p) => (
+            <button
+              key={p.label}
+              type="button"
+              role="menuitemradio"
+              aria-checked={p.ms === settings.windowMs}
+              onClick={() => settings.selectWindow(p.ms)}
+              className={`px-2 py-0.5 rounded-full text-xs transition-colors ${
+                p.ms === settings.windowMs
+                  ? 'bg-purple-100 text-purple-700'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
         </div>
       )}
     </div>

@@ -17,7 +17,7 @@ import { SyncStatus } from '../SyncStatus/SyncStatus';
 import { Editor } from '../Editor/Editor';
 import { DocumentTitle } from '../DocumentTitle';
 import { SourceModeChip, SourceModeToggle } from '../SourceModeToggle/SourceModeToggle';
-import { AuthorshipModeToggle } from '../AuthorshipModeToggle/AuthorshipModeToggle';
+import { AuthorshipModeToggle, RecentChangesToggle } from '../AuthorshipModeToggle/AuthorshipModeToggle';
 import { useAuthorshipSettings } from '../AuthorshipModeToggle/useAuthorshipSettings';
 import { SpellcheckToggle } from '../SpellcheckToggle/SpellcheckToggle';
 import { useSpellcheckSetting } from '../SpellcheckToggle/useSpellcheckSetting';
@@ -617,6 +617,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
           <SpellcheckToggle setting={spellcheck} disabled={!editorView} />
           <AuthorshipModeToggle settings={authorship} disabled={!editorView} />
+          <RecentChangesToggle settings={authorship} disabled={!editorView} />
           {filePathForHistory && <HistoryMenuItem onOpen={() => setHistoryOpen(true)} />}
         </WorkflowMenu>,
         menuTarget
