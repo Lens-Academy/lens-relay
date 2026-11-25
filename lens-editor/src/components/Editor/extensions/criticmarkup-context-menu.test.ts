@@ -159,7 +159,7 @@ describe('CriticMarkup Context Menu', () => {
       }
     });
 
-    it('nothing on a badge right after a suggestion, though the click lands in the suggestion', () => {
+    it('only Resolve Comment on a badge right after a suggestion, though the click lands in the suggestion', () => {
       const doc = 'a {++x++}{>>a note<<} b';
       const { view, cleanup: c } = createCriticMarkupEditor(doc, 0);
       cleanup = c;
@@ -167,18 +167,22 @@ describe('CriticMarkup Context Menu', () => {
       expect(badge).not.toBeNull();
 
       // posAtCoords can put a right-click on the badge in the hidden ++} before it
-      expect(getContextMenuItems(view, doc.indexOf('++}') + 1, badge)).toEqual([]);
+      const items = getContextMenuItems(view, doc.indexOf('++}') + 1, badge);
+      expect(items.map((i) => i.label)).toEqual(['Resolve Comment']);
       // The suggestion's own text still has them
       expect(getContextMenuItems(view, doc.indexOf('x'))).toHaveLength(2);
     });
 
-    it('nothing on a badge with a selection either', () => {
+    it('only Resolve Comment on a badge with a selection too', () => {
       const doc = 'a {++x++} b {++y++}{>>a note<<} c';
       const { view, cleanup: c } = createCriticMarkupEditorWithSelection(doc, 0, doc.length);
       cleanup = c;
       const badge = view.contentDOM.querySelector('.cm-comment-badge');
 
-      expect(getContextMenuItems(view, doc.indexOf('{>>'), badge)).toEqual([]);
+      const items = getContextMenuItems(view, doc.indexOf('{>>'), badge);
+      expect(items.map((i) => i.label)).toEqual(['Resolve Comment']);
+      items[0].action();
+      expect(view.state.doc.toString()).toBe('a {++x++} b {++y++} c');
       expect(getContextMenuItems(view, 1).map((i) => i.label)).toEqual(['Accept 2 Changes', 'Reject 2 Changes']);
     });
   });
@@ -197,10 +201,10 @@ describe('Resolve Comment', () => {
     cleanup();
   });
 
-  it('accepting the highlight also removes its comment', () => {
+  it('accept at the highlight leaves the comment; only Resolve removes it', () => {
     const { view, cleanup } = createCriticMarkupEditor(doc, doc.indexOf('ship') + 1);
-    acceptChangeAtCursor(view);
-    expect(view.state.doc.toString()).toBe('We ship it soon.');
+    expect(acceptChangeAtCursor(view)).toBe(false);
+    expect(view.state.doc.toString()).toBe(doc);
     cleanup();
   });
 });

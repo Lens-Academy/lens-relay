@@ -1,7 +1,7 @@
 // src/components/Editor/extensions/criticmarkup-context-menu.ts
 import type { EditorView } from '@codemirror/view';
 import { findRangeAtPosition, bulkChangeCount, acceptChangeAtCursor, rejectChangeAtCursor, resolveCommentAt } from './criticmarkup-commands';
-import { canAcceptRejectFacet, criticMarkupField } from './criticmarkup';
+import { canAcceptRejectFacet, commentOffsetTranslator, criticMarkupField } from './criticmarkup';
 import { commentThreadAt } from '../../../lib/criticmarkup-parser';
 
 export interface ContextMenuItem {
@@ -12,8 +12,8 @@ export interface ContextMenuItem {
 
 /**
  * Get context menu items for CriticMarkup: the accept/reject of the ✓ ✗
- * buttons there, which never act on a comment; on a comment or the text it is
- * on, Resolve Comment instead.
+ * buttons there, which never act on a comment; on a comment, its badge or the
+ * text it is on, Resolve Comment instead.
  *
  * @param view - The EditorView instance
  * @param atPosition - Optional position to check (for right-click). If not provided, uses cursor position.
@@ -23,7 +23,17 @@ export interface ContextMenuItem {
  * @returns Menu items if position is inside markup, empty array otherwise.
  */
 export function getContextMenuItems(view: EditorView, atPosition?: number, target?: EventTarget | null): ContextMenuItem[] {
-  if (target instanceof Element && target.closest('.cm-comment-badge')) return [];
+  // A comment's badge: its thread, named by the badge (posAtCoords is off on
+  // lines with hidden markup, and can land in a change before it)
+  const badge = target instanceof Element ? target.closest<HTMLElement>('.cm-comment-badge') : null;
+  if (badge) {
+    const abs = Number(badge.dataset.commentFrom);
+    if (!Number.isFinite(abs) || !view.state.facet(canAcceptRejectFacet)) return [];
+    // data-comment-from is the page's offset; a section editor's start it is offset by
+    const at = abs - view.state.facet(commentOffsetTranslator)(0);
+    if (commentThreadAt(view.state.field(criticMarkupField), at).length === 0) return [];
+    return [{ label: 'Resolve Comment', action: () => resolveCommentAt(view, at) }];
+  }
 
   // Check for bulk selection first: its suggestions, as on the bulk ✓ ✗
   const count = bulkChangeCount(view);

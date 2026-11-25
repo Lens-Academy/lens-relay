@@ -258,6 +258,25 @@ describe('CriticMarkup Commands', () => {
       expect(view.state.doc.toString()).toBe('a old b');
     });
 
+    it('Ctrl+Enter in the text a comment is on keeps the comment', () => {
+      const content = 'a {==seen==}{>>a note<<}{>>a reply<<} b';
+      const { view, cleanup: c } = createCriticMarkupEditor(content, content.indexOf('seen') + 2);
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(false);
+      expect(view.state.doc.toString()).toBe(content);
+    });
+
+    it('a selection inside the text a comment is on rejects nothing', () => {
+      const content = 'a {==seen==}{>>a note<<} b';
+      const at = content.indexOf('seen');
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(content, at + 1, at + 3);
+      cleanup = c;
+
+      expect(rejectChangeAtCursor(view)).toBe(false);
+      expect(view.state.doc.toString()).toBe(content);
+    });
+
     it('a selection with only comments and highlights in it changes nothing', () => {
       const content = `a ${NOTES} b`;
       const { view, cleanup: c } = createCriticMarkupEditorWithSelection(content, 0, content.length);

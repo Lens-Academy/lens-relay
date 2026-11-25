@@ -13,15 +13,27 @@ export function findRangeAtPosition(view: EditorView, pos: number): CriticMarkup
 }
 
 /**
- * Find the CriticMarkup range containing the cursor position that accept and
- * reject act on: never a comment (accepting or rejecting one deletes it,
- * replies and all), but a change around it or right after it.
+ * Whether accept and reject may act on `range` (of `ranges`, the document's
+ * parse): a suggestion, or a highlight no comment is on. Never a comment, nor
+ * the text a comment is on: acting on either deletes the thread, replies and
+ * all (withLinkedComments). The ✓ ✗ widget shows by the same rule.
+ */
+function acceptRejectActsOn(ranges: readonly CriticMarkupRange[], range: CriticMarkupRange): boolean {
+  if (isSuggestion(range)) return true;
+  if (range.type !== 'highlight') return false;
+  const next = ranges[ranges.indexOf(range) + 1];
+  return !(next?.type === 'comment' && next.from === range.to);
+}
+
+/**
+ * The CriticMarkup range at the cursor that accept and reject act on
+ * (acceptRejectActsOn): a change around or right after a comment, never the
+ * comment or the text it is on.
  */
 function findRangeAtCursor(view: EditorView): CriticMarkupRange | null {
   const pos = view.state.selection.main.head;
-  const range = findRangeAtPosition(view, pos);
-  if (range?.type !== 'comment') return range;
-  return view.state.field(criticMarkupField).find(r => r.type !== 'comment' && pos >= r.from && pos <= r.to) ?? null;
+  const ranges = view.state.field(criticMarkupField);
+  return ranges.find(r => pos >= r.from && pos <= r.to && acceptRejectActsOn(ranges, r)) ?? null;
 }
 
 /**
@@ -185,7 +197,8 @@ function rangesToApply(view: EditorView): CriticMarkupRange[] {
     return range ? [range] : [];
   }
   const suggestions = suggestionsInSelection(view);
-  if (suggestions.length === 0 && selected.length === 1 && selected[0].type === 'highlight') return selected;
+  if (suggestions.length === 0 && selected.length === 1
+    && acceptRejectActsOn(view.state.field(criticMarkupField), selected[0])) return selected;
   return suggestions;
 }
 
