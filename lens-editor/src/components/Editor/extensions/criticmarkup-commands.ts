@@ -1,7 +1,7 @@
 // src/components/Editor/extensions/criticmarkup-commands.ts
 import type { EditorView, KeyBinding } from '@codemirror/view';
 import { criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
-import { commentThreadAt, withLinkedComments, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
+import { commentThreadAt, countEdits, isAdjacentEditPair, isSuggestion, withLinkedComments, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 /**
  * Find the CriticMarkup range containing the given position.
@@ -13,10 +13,27 @@ export function findRangeAtPosition(view: EditorView, pos: number): CriticMarkup
 }
 
 /**
- * Find the CriticMarkup range containing the cursor position.
+ * Whether accept and reject may act on `range` (of `ranges`, the document's
+ * parse): a suggestion, or a highlight no comment is on. Never a comment, nor
+ * the text a comment is on: acting on either deletes the thread, replies and
+ * all (withLinkedComments). The ✓ ✗ widget shows by the same rule.
+ */
+function acceptRejectActsOn(ranges: readonly CriticMarkupRange[], range: CriticMarkupRange): boolean {
+  if (isSuggestion(range)) return true;
+  if (range.type !== 'highlight') return false;
+  const next = ranges[ranges.indexOf(range) + 1];
+  return !(next?.type === 'comment' && next.from === range.to);
+}
+
+/**
+ * The CriticMarkup range at the cursor that accept and reject act on
+ * (acceptRejectActsOn): a change around or right after a comment, never the
+ * comment or the text it is on.
  */
 function findRangeAtCursor(view: EditorView): CriticMarkupRange | null {
-  return findRangeAtPosition(view, view.state.selection.main.head);
+  const pos = view.state.selection.main.head;
+  const ranges = view.state.field(criticMarkupField);
+  return ranges.find(r => pos >= r.from && pos <= r.to && acceptRejectActsOn(ranges, r)) ?? null;
 }
 
 /**
@@ -28,6 +45,35 @@ export function findRangesInSelection(view: EditorView): CriticMarkupRange[] {
   if (sel.from === sel.to) return [];
   const ranges = view.state.field(criticMarkupField);
   return ranges.filter(r => r.from < sel.to && r.to > sel.from);
+}
+
+/**
+ * The suggestions (additions, deletions, substitutions) the selection
+ * overlaps, each deletion+addition pair whole, in document order: what the
+ * bulk ✓ ✗ accept or reject. Its comments and highlights stay as they are.
+ */
+export function suggestionsInSelection(view: EditorView): CriticMarkupRange[] {
+  const ranges = view.state.field(criticMarkupField);
+  const picked = new Set<CriticMarkupRange>();
+  for (const range of findRangesInSelection(view)) {
+    if (!isSuggestion(range)) continue;
+    const i = ranges.indexOf(range);
+    if (i > 0 && isAdjacentEditPair(ranges[i - 1], range)) picked.add(ranges[i - 1]);
+    picked.add(range);
+    if (i + 1 < ranges.length && isAdjacentEditPair(range, ranges[i + 1])) picked.add(ranges[i + 1]);
+  }
+  return [...picked].sort((a, b) => a.from - b.from);
+}
+
+/**
+ * The count on the bulk ✓ ✗, which show for a selection over several
+ * CriticMarkup ranges: its suggestions, a deletion+addition pair counted once.
+ * Null when the selection overlaps one range or none (that range's own ✓ ✗
+ * show instead); 0 when they are all comments and highlights (no buttons).
+ */
+export function bulkChangeCount(view: EditorView): number | null {
+  if (findRangesInSelection(view).length < 2) return null;
+  return countEdits(suggestionsInSelection(view));
 }
 
 /**
@@ -139,6 +185,24 @@ export function surgicalChangesFor(
 }
 
 /**
+ * The ranges accept and reject act on. With a non-collapsed selection: the
+ * suggestions it overlaps (suggestionsInSelection), or a highlight that is
+ * all it overlaps (its own ✓ ✗ show there). Otherwise the range at the
+ * cursor, never a comment.
+ */
+function rangesToApply(view: EditorView): CriticMarkupRange[] {
+  const selected = findRangesInSelection(view);
+  if (selected.length === 0) {
+    const range = findRangeAtCursor(view);
+    return range ? [range] : [];
+  }
+  const suggestions = suggestionsInSelection(view);
+  if (suggestions.length === 0 && selected.length === 1
+    && acceptRejectActsOn(view.state.field(criticMarkupField), selected[0])) return selected;
+  return suggestions;
+}
+
+/**
  * The changes for acting on `ranges`, with the comment threads and
  * highlights linked to them: a comment's highlight goes with its thread
  * (withLinkedComments).
@@ -149,42 +213,28 @@ function changesFor(view: EditorView, ranges: CriticMarkupRange[], action: 'acce
 }
 
 /**
- * Accept CriticMarkup changes. If a non-collapsed selection exists,
- * accepts all ranges overlapping the selection. Otherwise accepts
- * the single range at cursor position.
+ * Accept CriticMarkup changes: the suggestions a non-collapsed selection
+ * overlaps, or the change at the cursor (see rangesToApply).
  * Returns true if any change was accepted.
  */
 export function acceptChangeAtCursor(view: EditorView): boolean {
-  const selected = findRangesInSelection(view);
-  if (selected.length > 0) {
-    view.dispatch({ changes: changesFor(view, selected, 'accept') });
-    return true;
-  }
+  const targets = rangesToApply(view);
+  if (targets.length === 0) return false;
 
-  const range = findRangeAtCursor(view);
-  if (!range) return false;
-
-  view.dispatch({ changes: changesFor(view, [range], 'accept') });
+  view.dispatch({ changes: changesFor(view, targets, 'accept') });
   return true;
 }
 
 /**
- * Reject CriticMarkup changes. If a non-collapsed selection exists,
- * rejects all ranges overlapping the selection. Otherwise rejects
- * the single range at cursor position.
+ * Reject CriticMarkup changes: the suggestions a non-collapsed selection
+ * overlaps, or the change at the cursor (see rangesToApply).
  * Returns true if any change was rejected.
  */
 export function rejectChangeAtCursor(view: EditorView): boolean {
-  const selected = findRangesInSelection(view);
-  if (selected.length > 0) {
-    view.dispatch({ changes: changesFor(view, selected, 'reject') });
-    return true;
-  }
+  const targets = rangesToApply(view);
+  if (targets.length === 0) return false;
 
-  const range = findRangeAtCursor(view);
-  if (!range) return false;
-
-  view.dispatch({ changes: changesFor(view, [range], 'reject') });
+  view.dispatch({ changes: changesFor(view, targets, 'reject') });
   return true;
 }
 

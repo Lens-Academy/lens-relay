@@ -308,7 +308,7 @@ export function ContentPanel({
     const clickPos = view.posAtCoords({ x: e.clientX, y: e.clientY });
     if (clickPos == null) return;
 
-    const markupItems = getContextMenuItems(view, clickPos);
+    const markupItems = getContextMenuItems(view, clickPos, e.target);
     const items: ContextMenuItem[] = [...markupItems];
     if (onRequestAddComment) {
       items.push({
