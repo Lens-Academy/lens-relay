@@ -59,6 +59,19 @@ describe('ytext-comment-ops', () => {
     expect(threads[0].comments[1].content).toBe('reply text');
   });
 
+  it('keeps a new comment written against another one out of its thread', () => {
+    ytext.insert(0, 'Hello. World.');
+    insertCommentInYText(ytext, 'first', 6);
+    const first = parse(ytext.toString()).find((r) => r.type === 'comment')!;
+    // Just after it, and just before it
+    const after = insertCommentInYText(ytext, 'after', first.to);
+    expect(parse(ytext.toString()).find((r) => r.content === 'after')?.from).toBe(after);
+    insertCommentInYText(ytext, 'before', first.from);
+
+    const threads = parseThreads(parse(ytext.toString()));
+    expect(threads.map((t) => t.comments.map((c) => c.content))).toEqual([['before'], ['first'], ['after']]);
+  });
+
   it('deletes the entire criticmarkup range when deleteRangeInYText is called', () => {
     ytext.insert(0, 'Before.');
     insertCommentInYText(ytext, 'doomed', 6);

@@ -179,3 +179,112 @@ describe('a reply being written while others edit', () => {
     expect(screen.getByPlaceholderText(/reply…/i)).toHaveValue('half-written');
   });
 });
+
+describe('opening and closing a thread', () => {
+  const props = () => ({
+    resolveAnchorY: () => 100,
+    getViewportRect: () => ({ top: 0, height: 800 }),
+    scrollSource: fakeScrollSource(),
+    onReply: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(),
+  });
+  const isOpen = () => document.querySelector('.lens-comment-card.is-open') != null;
+
+  it('keeps a thread opened by the handle open when it moves, though the handle was made before the page had threads', () => {
+    const p = props();
+    const ref = createRef<CommentsLayerHandle>();
+    const { rerender } = render(<CommentsLayer ref={ref} threads={[]} {...p} />);
+    rerender(<CommentsLayer ref={ref} threads={[thread({ key: '100' })]} {...p} />);
+    act(() => ref.current!.focusThread('100'));
+    expect(isOpen()).toBe(true);
+
+    // Someone types above it, and another thread now starts where it was
+    rerender(<CommentsLayer ref={ref} threads={[thread({ key: '100', root: msg({ id: 'bob|2' }) }), thread({ key: '101' })]} {...p} />);
+
+    expect(document.querySelector('[data-comment-thread="101"] .is-open')).not.toBeNull();
+  });
+
+  it('closes the open thread on Escape, but not on an Escape in a field', () => {
+    const ref = createRef<CommentsLayerHandle>();
+    render(<CommentsLayer ref={ref} threads={[thread()]} {...props()} />);
+    act(() => ref.current!.focusThread('100'));
+
+    fireEvent.keyDown(screen.getByPlaceholderText(/reply…/i), { key: 'Escape' });
+    expect(isOpen()).toBe(true);
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(isOpen()).toBe(false);
+  });
+
+  it('closes the open thread by clearFocus (a click in other text)', () => {
+    const onFocusChange = vi.fn();
+    const ref = createRef<CommentsLayerHandle>();
+    render(<CommentsLayer ref={ref} threads={[thread()]} onFocusChange={onFocusChange} {...props()} />);
+    act(() => ref.current!.focusThread('100'));
+    act(() => ref.current!.clearFocus());
+    expect(isOpen()).toBe(false);
+    expect(onFocusChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('offers a new comment closed unsent again in the next new comment', () => {
+    const ref = createRef<CommentsLayerHandle>();
+    render(<CommentsLayer ref={ref} threads={[thread()]} getInsertKey={() => '5'} onAddComment={vi.fn()} {...props()} />);
+    act(() => ref.current!.openAddForm());
+    const box = screen.getByPlaceholderText(/add a comment…/i);
+    fireEvent.change(box, { target: { value: 'half a thought' } });
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(screen.queryByPlaceholderText(/add a comment…/i)).toBeNull();
+
+    act(() => ref.current!.openAddForm());
+    expect(screen.getByPlaceholderText(/add a comment…/i)).toHaveValue('half a thought');
+  });
+});
+
+describe('onOpenThreadChange', () => {
+  it('reports the open thread as it opens, moves and goes away', () => {
+    const onOpenThreadChange = vi.fn();
+    const ref = createRef<CommentsLayerHandle>();
+    const p = {
+      resolveAnchorY: () => 100,
+      getViewportRect: () => ({ top: 0, height: 800 }),
+      scrollSource: fakeScrollSource(),
+      onReply: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(),
+      onOpenThreadChange,
+    };
+    const { rerender } = render(<CommentsLayer ref={ref} threads={[thread()]} {...p} />);
+    act(() => ref.current!.focusThread('100'));
+    expect(onOpenThreadChange).toHaveBeenLastCalledWith('100');
+    // Text typed above it
+    rerender(<CommentsLayer ref={ref} threads={[thread({ key: '104' })]} {...p} />);
+    expect(onOpenThreadChange).toHaveBeenLastCalledWith('104');
+    // Resolved by someone else
+    rerender(<CommentsLayer ref={ref} threads={[]} {...p} />);
+    expect(onOpenThreadChange).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe('a new comment written in front of another', () => {
+  it('opens the new thread, not the one whose place it took', () => {
+    const p = {
+      resolveAnchorY: () => 100,
+      getViewportRect: () => ({ top: 0, height: 800 }),
+      scrollSource: fakeScrollSource(),
+      onReply: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(),
+      getInsertKey: () => '5',
+      onAddComment: vi.fn(() => '5'),
+    };
+    const old = thread({ key: '5', root: msg({ id: 'old|1', body: 'old one' }) });
+    const ref = createRef<CommentsLayerHandle>();
+    const { rerender } = render(<CommentsLayer ref={ref} threads={[old]} {...p} />);
+    act(() => ref.current!.openAddForm());
+    const box = screen.getByPlaceholderText(/add a comment…/i);
+    fireEvent.change(box, { target: { value: 'new one' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+
+    // The text arrives: the new thread at 5, the old one moved on
+    const created = thread({ key: '5', root: msg({ id: 'me|2', body: 'new one' }) });
+    rerender(<CommentsLayer ref={ref} threads={[created, { ...old, key: '30' }]} {...p} />);
+    // Someone types above both
+    rerender(<CommentsLayer ref={ref} threads={[{ ...created, key: '9' }, { ...old, key: '34' }]} {...p} />);
+
+    expect(document.querySelector('.lens-comment-card.is-open')?.textContent).toContain('new one');
+  });
+});

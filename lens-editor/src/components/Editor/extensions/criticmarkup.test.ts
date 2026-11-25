@@ -5,7 +5,7 @@ import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { syntaxTree } from '@codemirror/language';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSelection, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
-import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, commentClickCallback } from './criticmarkup';
+import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, commentClickCallback, setFocusedComment } from './criticmarkup';
 import { toggleSourceMode } from './livePreview';
 
 describe('CriticMarkup Extension', () => {
@@ -978,12 +978,49 @@ describe('CriticMarkup Extension', () => {
 
       const badges = [...view.contentDOM.querySelectorAll('.cm-comment-badge')];
       expect(badges).toHaveLength(1);
-      expect(badges[0].classList.contains('is-margin')).toBe(true);
+      expect(badges[0].parentElement?.classList.contains('cm-comment-badges')).toBe(true);
       expect(badges[0].textContent).toBe('2');
       expect(view.contentDOM.querySelector('.cm-comment-target')?.textContent).toBe('this part');
       // The comments' text stays hidden
       expect(view.contentDOM.textContent).not.toContain('on the text');
       expect(view.contentDOM.textContent).not.toContain('a reply');
+    });
+
+    it('draws the badges of one line side by side, each opening its own thread', () => {
+      const doc = 'one{>>first<<} two{>>second<<} end\nnext{>>third<<}';
+      const calls: unknown[][] = [];
+      const state = EditorState.create({
+        doc,
+        extensions: [
+          criticMarkupExtension(),
+          commentClickCallback.of((...args) => calls.push(args)),
+        ],
+      });
+      const view = new EditorView({ state, parent: document.body });
+      cleanup = () => view.destroy();
+
+      const groups = [...view.contentDOM.querySelectorAll('.cm-comment-badges')];
+      expect(groups.map((g) => [...g.children].map((b) => b.textContent))).toEqual([['1', '2'], ['3']]);
+      (groups[0].children[1] as HTMLElement).click();
+      expect(calls).toEqual([[doc.indexOf('{>>second')]]);
+    });
+
+    it('draws the open thread open, and keeps it so through edits before it', () => {
+      const doc = 'see {==this part==}{>>on the text<<} and here{>>on a point<<} end';
+      const { view, cleanup: c } = createCriticMarkupEditor(doc, 0);
+      cleanup = c;
+      const focused = () => [...view.contentDOM.querySelectorAll('[data-comment-focused]')].map((el) => el.textContent);
+
+      view.dispatch({ effects: setFocusedComment.of(doc.indexOf('{>>on the text')) });
+      expect(focused()).toEqual(['this part']);
+      // Someone types before it: the editor redraws the line, still open
+      view.dispatch({ changes: { from: 0, insert: 'You ' } });
+      expect(focused()).toEqual(['this part']);
+
+      view.dispatch({ effects: setFocusedComment.of(view.state.doc.toString().indexOf('{>>on a point')) });
+      expect(focused()).toEqual(['2']);
+      view.dispatch({ effects: setFocusedComment.of(null) });
+      expect(focused()).toEqual([]);
     });
 
     it('hides a comment over several lines whole, its line breaks too, with its badge', () => {

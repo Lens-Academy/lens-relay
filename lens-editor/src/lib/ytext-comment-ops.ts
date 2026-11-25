@@ -28,20 +28,30 @@ function buildCommentMarkup(content: string): string {
 }
 
 /**
- * Insert a new comment at `pos` in the Y.Text. With `highlightFrom`, the
- * text from there to `pos` is what the comment is on: it is wrapped in a
- * highlight the comment follows, {==text==}{>>comment<<}, as a CriticMarkup
- * comment on a span is written. Returns where the comment starts (its
- * thread's key).
+ * Insert a new comment at `pos` in the Y.Text, as a thread of its own. With
+ * `highlightFrom`, the text from there to `pos` is what the comment is on: it
+ * is wrapped in a highlight the comment follows, {==text==}{>>comment<<}, as
+ * a CriticMarkup comment on a span is written. Returns where the comment
+ * starts (its thread's key).
+ *
+ * Comments that touch are one thread (parseThreads), so a new comment right
+ * after or before another one is kept apart from it by a space; written
+ * against it, it became a reply in that comment's thread. The space stays in
+ * the text: with the comments hidden or stripped, `word{>>a<<} {>>b<<}.`
+ * reads "word ." (there is no separator that threading by adjacency allows
+ * and the text doesn't show).
  */
 export function insertCommentInYText(ytext: Y.Text, content: string, pos: number, highlightFrom?: number): number {
   const markup = buildCommentMarkup(content);
+  const text = ytext.toString();
+  const after = text.slice(pos - 3, pos) === '<<}' ? ' ' : '';
+  const before = text.slice(pos, pos + 3) === '{>>' ? ' ' : '';
   if (highlightFrom == null || highlightFrom >= pos) {
-    ytext.insert(pos, markup);
-    return pos;
+    ytext.insert(pos, `${after}${markup}${before}`);
+    return pos + after.length;
   }
   const wrap = () => {
-    ytext.insert(pos, `==}${markup}`);
+    ytext.insert(pos, `==}${markup}${before}`);
     ytext.insert(highlightFrom, '{==');
   };
   if (ytext.doc) ytext.doc.transact(wrap);
@@ -55,7 +65,7 @@ export function insertCommentInYText(ytext: Y.Text, content: string, pos: number
  * thread, matching how parseThreads groups adjacent comments.
  */
 export function replyInYText(ytext: Y.Text, content: string, threadEndPos: number): void {
-  insertCommentInYText(ytext, content, threadEndPos);
+  ytext.insert(threadEndPos, buildCommentMarkup(content));
 }
 
 /**
