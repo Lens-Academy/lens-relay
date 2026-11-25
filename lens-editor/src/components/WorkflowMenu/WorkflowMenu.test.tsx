@@ -48,6 +48,15 @@ describe('WorkflowMenu', () => {
     expect(screen.getByRole('menuitemradio', { name: 'Use system setting' })).toHaveAttribute('aria-checked', 'false');
   });
 
+  it('names the links to other pages under a heading of their own', async () => {
+    const user = userEvent.setup();
+    renderMenu();
+    await user.click(screen.getByRole('button', { name: /open workflows menu/i }));
+    const pages = screen.getByRole('group', { name: 'Other pages' });
+    expect(pages).toContainElement(screen.getByRole('menuitem', { name: /review suggestions/i }));
+    expect(pages).toContainElement(screen.getByRole('menuitem', { name: /add source/i }));
+  });
+
   it('opens workflow links from the top menu', async () => {
     const user = userEvent.setup();
     renderMenu();

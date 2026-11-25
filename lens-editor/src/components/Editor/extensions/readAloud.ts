@@ -24,6 +24,7 @@ import {
   type MarkdownReading,
 } from '../../../lib/read-aloud/markdown-reading';
 import { readAloudAvailable } from '../../../lib/read-aloud/api';
+import { authorshipModeField } from './authorship';
 
 interface Marks {
   sentence: { from: number; to: number } | null;
@@ -256,17 +257,25 @@ export class ReadAloudController {
     }
     const scroller = this.view.scrollDOM.getBoundingClientRect();
     const content = this.view.contentDOM.getBoundingClientRect();
-    // In the margin, level with the line's first row, in a column of its own
-    // 48px left of the text (line box + 6px; the line box starts at the
-    // content's padding edge): from the text out, the authorship strips
-    // (6-25px), a heading's or block's fold arrow (24-44px, sharedFolds.ts,
-    // index.css), then this, 4px clear of the arrow, on every line alike
+    // Level with the line's first row. The line box starts at the content's
+    // padding edge and the text 6px in; from the text out lie the authorship
+    // strip (17-20px), a heading's or block's fold arrow (24-44px,
+    // sharedFolds.ts) and, in Expanded and Inline modes, the author names
+    // (26px and beyond). So the button has a column of its own 48-70px left
+    // of the text, clear of the strip and the arrow; where author names fill
+    // that margin, it is a smaller one in the gap between the strip and the
+    // text (2-16px), as it first was.
     const padLeft = parseFloat(getComputedStyle(this.view.contentDOM).paddingLeft) || 0;
-    const size = 22;
+    const mode = this.view.state.field(authorshipModeField, false);
+    const besideText = mode === 'expanded' || mode === 'inline';
+    const size = besideText ? 14 : 22;
+    const gap = besideText ? 2 : 48;
+    const textLeft = content.left + padLeft + 6;
     const lineMid = (coords.top + coords.bottom) / 2;
+    this.button.classList.toggle('is-beside-text', besideText);
     this.button.style.display = '';
     this.button.style.top = `${Math.round(lineMid - size / 2 - scroller.top + this.view.scrollDOM.scrollTop)}px`;
-    this.button.style.left = `${Math.max(0, Math.round(content.left + padLeft + 6 - 48 - size - scroller.left + this.view.scrollDOM.scrollLeft))}px`;
+    this.button.style.left = `${Math.max(0, Math.round(textLeft - gap - size - scroller.left + this.view.scrollDOM.scrollLeft))}px`;
   }
 
   private onMouseDown = (e: MouseEvent) => {
@@ -340,9 +349,9 @@ export function getReadAloud(view: EditorView | null): ReadAloudController | nul
 }
 
 const readAloudTheme = EditorView.baseTheme({
-  // A soft blue for the sentence and a stronger one for the word, with dark values (index.css)
-  '.cm-read-aloud-sentence': { backgroundColor: 'var(--lens-read-sentence, rgba(35, 131, 226, 0.14))', borderRadius: '2px' },
-  '.cm-read-aloud-word': { backgroundColor: 'var(--lens-read-word, rgba(35, 131, 226, 0.32))', borderRadius: '2px' },
+  // Lens orange for the sentence and a stronger one for the word, with dark values (index.css)
+  '.cm-read-aloud-sentence': { backgroundColor: 'var(--lens-read-sentence, #fde6c8)', borderRadius: '2px' },
+  '.cm-read-aloud-word': { backgroundColor: 'var(--lens-read-word, #e6b988)', borderRadius: '2px' },
   '.cm-read-aloud-hover': { backgroundColor: 'rgba(0, 0, 0, 0.05)', borderRadius: '2px' },
   '.cm-content.cm-read-aloud-over-text': { cursor: 'pointer' },
   // Notion's block handle: a small grey square button that darkens on hover
@@ -363,12 +372,16 @@ const readAloudTheme = EditorView.baseTheme({
     transition: 'background-color 120ms, color 120ms',
     animation: 'cm-read-aloud-play-in 140ms ease-out',
   },
+  // Lens orange on hover, as the reading highlight
   '.cm-read-aloud-line-play:hover': {
-    color: 'var(--lens-icon, #383836)',
-    backgroundColor: 'var(--lens-hover-bg, rgba(55, 53, 47, 0.06))',
+    color: 'var(--lens-read-accent, #b87018)',
+    backgroundColor: 'var(--lens-read-sentence, #fde6c8)',
   },
   // The triangle a pixel right of centre, where it looks centred
   '.cm-read-aloud-line-play svg': { width: '12px', height: '12px', fill: 'currentColor', marginLeft: '1px' },
+  // Between the authorship strip and the text, where author names fill the margin
+  '.cm-read-aloud-line-play.is-beside-text': { width: '14px', height: '14px', borderRadius: '4px' },
+  '.cm-read-aloud-line-play.is-beside-text svg': { width: '9px', height: '9px' },
   '@keyframes cm-read-aloud-play-in': { from: { opacity: '0' } },
 });
 

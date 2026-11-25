@@ -14,11 +14,14 @@ interface SegmentedToggleProps {
   leftTitle?: string;
   /** Tooltip for right option */
   rightTitle?: string;
+  /** Extra classes on the track, e.g. to make it fill its row */
+  className?: string;
 }
 
 /**
- * A segmented toggle control showing two options side-by-side.
- * The active option is highlighted with a white background.
+ * A segmented toggle control showing two options side-by-side in a grey
+ * track; the active option is a raised white segment (index.css,
+ * `.lens-segmented`, with its dark-mode colours).
  */
 export function SegmentedToggle({
   leftLabel,
@@ -29,6 +32,7 @@ export function SegmentedToggle({
   ariaLabel,
   leftTitle,
   rightTitle,
+  className = '',
 }: SegmentedToggleProps) {
   const handleClick = (newValue: SegmentedValue) => {
     if (newValue !== value) {
@@ -36,36 +40,23 @@ export function SegmentedToggle({
     }
   };
 
-  const baseButtonClass =
-    'px-3 py-1 text-xs font-medium transition-colors rounded';
-  const activeClass = 'bg-white text-gray-900 shadow-sm';
-  const inactiveClass = 'text-gray-500 hover:text-gray-700';
-  const disabledClass = 'opacity-50 cursor-not-allowed';
+  const option = (side: SegmentedValue, label: ReactNode, title?: string) => (
+    <button
+      type="button"
+      onClick={() => handleClick(side)}
+      disabled={disabled}
+      title={title}
+      aria-pressed={value === side}
+      className={`lens-segmented-option${value === side ? ' is-active' : ''}`}
+    >
+      {label}
+    </button>
+  );
 
   return (
-    <div
-      role="group"
-      aria-label={ariaLabel}
-      className="inline-flex items-center bg-gray-200 rounded p-0.5"
-    >
-      <button
-        type="button"
-        onClick={() => handleClick('left')}
-        disabled={disabled}
-        title={leftTitle}
-        className={`${baseButtonClass} ${value === 'left' ? activeClass : inactiveClass} ${disabled ? disabledClass : ''}`}
-      >
-        {leftLabel}
-      </button>
-      <button
-        type="button"
-        onClick={() => handleClick('right')}
-        disabled={disabled}
-        title={rightTitle}
-        className={`${baseButtonClass} ${value === 'right' ? activeClass : inactiveClass} ${disabled ? disabledClass : ''}`}
-      >
-        {rightLabel}
-      </button>
+    <div role="group" aria-label={ariaLabel} className={`lens-segmented ${className}`.trim()}>
+      {option('left', leftLabel, leftTitle)}
+      {option('right', rightLabel, rightTitle)}
     </div>
   );
 }

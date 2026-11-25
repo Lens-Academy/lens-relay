@@ -73,11 +73,11 @@ function folderDoc(): Y.Doc {
   return doc;
 }
 
-function renderTree(activeUuid: string | null, onNavigate = vi.fn()) {
+function renderTree(activeUuid: string | null, onNavigate = vi.fn(), meta: Record<string, ReturnType<typeof md>> = metadata) {
   const tree = (uuid: string | null) => (
     <NavigationContext.Provider
       value={{
-        metadata,
+        metadata: meta,
         folderDocs: new Map([['Lens Edu', folderDoc()]]),
         folderNames: ['Lens Edu'],
         errors: new Map(),
@@ -181,6 +181,37 @@ describe('CourseTree', () => {
     await user.click(within(rows()[0]).getByRole('button', { name: 'Expand' }));
     await waitFor(() => expect(labels()).toContain('ModuleDemo Module'));
     openSpy.mockRestore();
+  });
+
+  it('groups courses under their folders of courses/, archived ones closed', () => {
+    renderTree(null, vi.fn(), {
+      ...metadata,
+      '/Lens Edu/courses/user-facing/Live Course.md': md('c4'),
+      '/Lens Edu/courses/archived/Old Course.md': md('c5'),
+    });
+    expect(labels()).toEqual(['archived', 'user-facing', 'CourseLive Course', 'CourseDemo Course']);
+    expect(rows()[0]).toHaveAttribute('aria-expanded', 'false');
+    expect(rows()[1]).toHaveAttribute('aria-expanded', 'true');
+    expect(getOrConnect).not.toHaveBeenCalled();
+  });
+
+  it('opens an archived folder when it holds the open document\'s course', async () => {
+    renderTree('c5', vi.fn(), { ...metadata, '/Lens Edu/courses/archived/Old Course.md': md('c5') });
+    await waitFor(() => expect(labels()).toContain('CourseOld Course'));
+    expect(rows()[0]).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('reopens a folder closed by hand when a page inside it is opened', async () => {
+    const meta = { ...metadata, '/Lens Edu/courses/user-facing/Live Course.md': md('c4') };
+    const { setActive } = renderTree(null, vi.fn(), meta);
+    const user = userEvent.setup();
+    await user.click(within(rows()[0]).getByRole('button', { name: 'Collapse' }));
+    expect(labels()).toEqual(['user-facing', 'CourseDemo Course']);
+
+    setActive('c4');
+
+    await waitFor(() => expect(labels()).toContain('CourseLive Course'));
+    expect(rows()[0]).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('says so when the open document belongs to no course', () => {

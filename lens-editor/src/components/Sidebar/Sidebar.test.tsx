@@ -63,7 +63,7 @@ describe('Sidebar view toggle', () => {
     expect(screen.getByText('modules')).toBeInTheDocument();
     expect(screen.queryByTestId('course-tree')).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Course' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Courses' }));
     expect(screen.getByTestId('course-tree')).toBeInTheDocument();
     expect(screen.getByRole('treeitem')).toHaveTextContent('Demo Course');
     expect(screen.queryByText('modules')).not.toBeInTheDocument();

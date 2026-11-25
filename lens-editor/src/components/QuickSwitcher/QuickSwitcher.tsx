@@ -228,9 +228,9 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50" />
+        <Dialog.Overlay className="fixed inset-0 z-[1100] bg-black/50" />
         <Dialog.Content
-          className="fixed top-[20%] max-md:top-2 left-1/2 -translate-x-1/2 w-full max-w-[600px] max-md:w-[calc(100vw-16px)] bg-white rounded-lg shadow-xl overflow-hidden"
+          className="fixed z-[1100] top-[20%] max-md:top-2 left-1/2 -translate-x-1/2 w-full max-w-[600px] max-md:w-[calc(100vw-16px)] bg-white rounded-lg shadow-xl overflow-hidden"
           aria-describedby={undefined}
           onKeyDown={handleKeyDown}
         >

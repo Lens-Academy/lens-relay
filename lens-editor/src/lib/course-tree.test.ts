@@ -7,6 +7,7 @@ import {
   leadingWikilink,
   isCoursePath,
   listCourses,
+  groupCoursesByFolder,
 } from './course-tree';
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
 
@@ -50,6 +51,30 @@ describe('listCourses', () => {
     expect(isCoursePath('/Lens Edu/courses/live/Grouped Course.md')).toBe(true);
     const courses = listCourses({ ...metadata, '/Lens Edu/courses/live/Grouped Course.md': md('c4') });
     expect(courses.map(c => c.label)).toEqual(['Demo Course', 'Grouped Course', 'Other Course', 'Private Course']);
+  });
+});
+
+describe('groupCoursesByFolder', () => {
+  it('puts courses under their folders of courses/, folders first, as the file tree does', () => {
+    const courses = listCourses({
+      ...metadata,
+      '/Lens Edu/courses/user-facing/Live Course.md': md('c4'),
+      '/Lens Edu/courses/in-development/Draft B.md': md('c5'),
+      '/Lens Edu/courses/in-development/draft A.md': md('c6'),
+    });
+    const roots = groupCoursesByFolder(courses);
+    expect(roots.map(r => r.label)).toEqual(['in-development', 'user-facing', 'Demo Course', 'Other Course', 'Private Course']);
+    expect(roots[0]).toMatchObject({ kind: 'group', folder: true, path: '/Lens Edu/courses/in-development' });
+    expect(roots[0].children.map(c => c.label)).toEqual(['draft A', 'Draft B']);
+    expect(roots[1].children.map(c => c.uuid)).toEqual(['c4']);
+  });
+
+  it('keeps a subfolder of one shared folder apart from the same name in another', () => {
+    const roots = groupCoursesByFolder(listCourses({
+      '/Lens Edu/courses/archived/A.md': md('a'),
+      '/Lens Edu Private/courses/archived/B.md': md('b'),
+    }));
+    expect(roots.map(r => [r.label, r.children.length])).toEqual([['archived', 1], ['archived', 1]]);
   });
 });
 

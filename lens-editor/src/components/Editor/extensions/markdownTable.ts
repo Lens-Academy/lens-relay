@@ -793,9 +793,6 @@ const tableTheme = EditorView.theme({
     color: 'var(--lens-text)',
     background: 'var(--lens-page-bg)',
   },
-  '.cm-md-table tbody tr:hover td': {
-    background: 'var(--lens-table-row-hover)',
-  },
   '.cm-md-table th:focus, .cm-md-table td:focus': {
     background: 'var(--lens-bg-blue)',
     boxShadow: 'inset 0 0 0 2px var(--lens-blue)',

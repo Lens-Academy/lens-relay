@@ -230,7 +230,10 @@ export function WorkflowMenu({ children }: { children?: ReactNode }) {
               <div className="lens-menu-divider" />
             </>
           )}
-          <div className="space-y-px">
+          {/* The pages the menu goes to, named apart from this page's settings above */}
+          {workflows.length > 0 && <>
+          <div className="lens-menu-label px-2 pt-1 pb-1" id="other-pages-label">Other pages</div>
+          <div className="space-y-px" role="group" aria-labelledby="other-pages-label">
             {workflows.map(item => {
               const active = location.pathname === item.path;
               return (
@@ -253,6 +256,7 @@ export function WorkflowMenu({ children }: { children?: ReactNode }) {
               );
             })}
           </div>
+          </>}
           {/* Notion's Settings › Appearance */}
           <div className="lens-menu-divider" />
           <div className="lens-menu-label px-2 pt-1 pb-1" id="appearance-label">Appearance</div>

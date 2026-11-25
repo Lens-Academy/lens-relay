@@ -25,10 +25,10 @@ describe('SegmentedToggle', () => {
     const leftButton = screen.getByText('Left').closest('button');
     const rightButton = screen.getByText('Right').closest('button');
 
-    // Left should be highlighted (has bg-white for active state)
-    expect(leftButton).toHaveClass('bg-white');
-    // Right should not be highlighted
-    expect(rightButton).not.toHaveClass('bg-white');
+    expect(leftButton).toHaveAttribute('aria-pressed', 'true');
+    expect(leftButton).toHaveClass('is-active');
+    expect(rightButton).toHaveAttribute('aria-pressed', 'false');
+    expect(rightButton).not.toHaveClass('is-active');
   });
 
   it('highlights the right option when value is right', () => {
@@ -37,10 +37,10 @@ describe('SegmentedToggle', () => {
     const leftButton = screen.getByText('Left').closest('button');
     const rightButton = screen.getByText('Right').closest('button');
 
-    // Right should be highlighted
-    expect(rightButton).toHaveClass('bg-white');
-    // Left should not be highlighted
-    expect(leftButton).not.toHaveClass('bg-white');
+    expect(rightButton).toHaveAttribute('aria-pressed', 'true');
+    expect(rightButton).toHaveClass('is-active');
+    expect(leftButton).toHaveAttribute('aria-pressed', 'false');
+    expect(leftButton).not.toHaveClass('is-active');
   });
 
   it('calls onChange with "right" when clicking right option', async () => {

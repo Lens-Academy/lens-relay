@@ -5,20 +5,26 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { render, fireEvent, screen } from '@testing-library/react';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { AuthorshipModeToggle } from './AuthorshipModeToggle';
+import { AuthorshipModeToggle, RecentChangesToggle } from './AuthorshipModeToggle';
 import { useAuthorshipSettings } from './useAuthorshipSettings';
-import { authorshipHoverField, authorshipModeField, loadAuthorshipMode } from '../Editor/extensions/authorship';
+import { authorshipHoverField, authorshipModeField, loadAuthorshipMode, recentEnabledField, recentWindowField } from '../Editor/extensions/authorship';
 
 function makeView() {
   return new EditorView({
-    state: EditorState.create({ doc: '', extensions: [authorshipModeField, authorshipHoverField] }),
+    state: EditorState.create({ doc: '', extensions: [authorshipModeField, authorshipHoverField, recentEnabledField, recentWindowField] }),
     parent: document.body,
   });
 }
 
-/** The menu section with its settings, as EditorArea holds them */
+/** The menu's two rows with their settings, as EditorArea holds them */
 function Authorship({ view }: { view: EditorView | null }) {
-  return <AuthorshipModeToggle settings={useAuthorshipSettings(view)} />;
+  const settings = useAuthorshipSettings(view);
+  return (
+    <>
+      <AuthorshipModeToggle settings={settings} />
+      <RecentChangesToggle settings={settings} />
+    </>
+  );
 }
 
 const views: EditorView[] = [];
@@ -99,5 +105,26 @@ describe('AuthorshipModeToggle', () => {
     const later = makeView();
     views.push(later);
     expect(later.state.field(authorshipHoverField)).toBe(true);
+  });
+
+  it('has "Highlight recent changes" as a row of its own, outside the Authorship options', () => {
+    const view = makeView();
+    views.push(view);
+    render(<Authorship view={view} />);
+    // The Authorship options are closed, and the switch is there anyway
+    expect(screen.getByRole('button', { name: /Authorship/ })).toHaveAttribute('aria-expanded', 'false');
+    const recent = screen.getByRole('menuitemcheckbox', { name: /Highlight recent changes/ });
+    expect(recent).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByRole('group', { name: 'Recent changes window' })).not.toBeInTheDocument();
+
+    fireEvent.click(recent);
+    expect(view.state.field(recentEnabledField)).toBe(true);
+    expect(recent).toHaveAttribute('aria-checked', 'true');
+    // While on, its time window under it
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '1h' }));
+    expect(view.state.field(recentWindowField)).toBe(3600_000);
+    // Opening Authorship no longer shows a second copy
+    fireEvent.click(screen.getByRole('button', { name: /Authorship/ }));
+    expect(screen.getAllByText('Highlight recent changes')).toHaveLength(1);
   });
 });

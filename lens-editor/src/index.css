@@ -40,9 +40,11 @@
   --lens-hover-bg: rgba(33, 27, 23, 0.05);
   --lens-pressed-bg: rgba(33, 27, 23, 0.1);
   --lens-pill-bg: rgba(42, 28, 0, 0.07);
-  /* Read-aloud: the sentence being read and its word (readAloud.ts) */
-  --lens-read-sentence: rgba(35, 131, 226, 0.14);
-  --lens-read-word: rgba(35, 131, 226, 0.32);
+  /* Read-aloud: the sentence being read and its word (readAloud.ts), in
+     Lens orange as the platform's reader (lens-orange-100, #e6b988) */
+  --lens-read-sentence: #fde6c8;
+  --lens-read-word: #e6b988;
+  --lens-read-accent: #b87018;
   --lens-border: #e6e5e3;
   --lens-border-secondary: #f0efed;
   --lens-border-strong: #d4d3cf;
@@ -53,7 +55,6 @@
   --lens-checkbox-border: #383836;
   --lens-table-border: #e6e5e3;
   --lens-table-header-bg: #f7f6f3;
-  --lens-table-row-hover: #f9f8f7;
   /* Notion's background colours (callouts, tags) */
   --lens-bg-gray: rgba(42, 28, 0, 0.07);
   --lens-bg-brown: rgba(139, 46, 0, 0.086);
@@ -118,8 +119,9 @@
   --lens-hover-bg: rgba(255, 255, 255, 0.055);
   --lens-pressed-bg: rgba(255, 255, 255, 0.11);
   --lens-pill-bg: rgba(255, 255, 235, 0.1);
-  --lens-read-sentence: rgba(35, 131, 226, 0.22);
-  --lens-read-word: rgba(35, 131, 226, 0.45);
+  --lens-read-sentence: rgba(230, 145, 56, 0.24);
+  --lens-read-word: rgba(230, 145, 56, 0.5);
+  --lens-read-accent: #f0a35a;
   --lens-border: #383836;
   --lens-border-secondary: #2c2c2b;
   --lens-border-strong: #5f5e59;
@@ -129,7 +131,6 @@
   --lens-checkbox-border: #e6e5e3;
   --lens-table-border: #383836;
   --lens-table-header-bg: rgba(255, 255, 255, 0.03);
-  --lens-table-row-hover: rgba(255, 255, 255, 0.03);
   --lens-bg-gray: rgba(255, 255, 235, 0.1);
   --lens-bg-brown: rgba(255, 177, 129, 0.192);
   --lens-bg-orange: rgba(255, 147, 75, 0.278);
@@ -1524,13 +1525,41 @@
   font-size: 14px;
   color: var(--lens-text-tertiary);
 }
-/* The page area (EditorArea) is a container: the dashes stay out of the way
-   of the 580px text column, and leave where there is no room beside it */
 .lens-page-area {
   container: lens-page / inline-size;
 }
+/* The page area (EditorArea) is a container. Where it is too narrow for the
+   dashes beside the 580px text column (comments and the right panel open on
+   a laptop), the outline is one icon at its top right, above the page's
+   title, and the headings open under it */
+.lens-outline-icon {
+  display: none;
+}
 @container lens-page (max-width: 700px) {
-  .lens-outline { display: none; }
+  .lens-outline {
+    top: 8px;
+    right: 8px;
+    transform: none;
+  }
+  .lens-outline-dashes {
+    gap: 0 !important;
+    padding: 6px;
+    color: var(--lens-icon-secondary);
+  }
+  .lens-outline-dashes:hover {
+    color: var(--lens-icon);
+    background-color: var(--lens-hover-bg);
+  }
+  .lens-outline-dash { display: none; }
+  .lens-outline-icon { display: block; }
+  .lens-outline-panel {
+    top: 0;
+    transform-origin: right top;
+    transform: translate(10px, 0) scale(0.96);
+  }
+  .lens-outline-panel.is-open {
+    transform: translate(0, 0);
+  }
 }
 
 /* CriticMarkup styles */
@@ -2479,7 +2508,11 @@ html, body {
    light grey background eases in on hover, the name and icon darkening; the
    open page has a darker grey and its name is darker and medium. A folder's
    flap opens a little on hover; the shared folders are section labels. */
+/* A row fills its 31px slot (treeLayout.ts): a 30px item, then 1px, so the
+   name sits in the middle of it as in the sticky folder headers
+   (StickyScrollOverlay.tsx), which do not move when a row becomes one */
 .lens-tree-row {
+  height: 100%;
   padding-bottom: 1px;
 }
 .lens-tree-row {
@@ -2552,10 +2585,12 @@ html, body {
   background-color: var(--lens-bg-blue);
   box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.57);
 }
+/* A shared folder's name (Lens, Lens Edu) as a section label: small, in
+   the sidebar's secondary grey, dark enough to read at a glance */
 .lens-tree-item.is-section {
   font-size: 12px;
   font-weight: 500;
-  color: var(--lens-text-tertiary);
+  color: var(--lens-text-secondary);
 }
 .lens-tree-icon {
   position: relative;
@@ -2653,31 +2688,42 @@ html, body {
   background: var(--lens-page-bg);
   box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.57), 0 0 0 2px rgba(35, 131, 226, 0.2);
 }
-/* Files and Course: small tabs under the search, the chosen one darker on a
-   grey pill */
-.lens-sidebar-tabs {
-  display: flex;
-  gap: 2px;
-  margin-top: 4px;
-  padding: 0 2px;
+/* A segmented control (SegmentedToggle.tsx): two options in a grey track,
+   the active one a raised white segment */
+.lens-segmented {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  background-color: var(--lens-pill-bg);
+  border-radius: 7px;
 }
-.lens-sidebar-tab {
-  height: 24px;
-  padding: 0 8px;
+.lens-segmented-option {
+  flex: 1 1 0;
+  height: 22px;
+  padding: 0 10px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--lens-text-tertiary);
-  border-radius: 6px;
+  color: var(--lens-text-secondary);
+  border-radius: 5px;
   cursor: pointer;
-  transition: background-color 100ms, color 100ms;
+  transition: background-color 100ms, color 100ms, box-shadow 100ms;
 }
-.lens-sidebar-tab:hover {
-  color: var(--lens-sidebar-text);
-  background: var(--lens-hover-bg);
-}
-.lens-sidebar-tab.is-active {
+.lens-segmented-option:hover:not(.is-active):not(:disabled) {
   color: var(--lens-text);
-  background: var(--lens-pressed-bg);
+}
+.lens-segmented-option.is-active {
+  color: var(--lens-text);
+  background-color: var(--lens-popover-bg);
+  box-shadow: 0 0 0 1px rgba(15, 15, 15, 0.05), 0 1px 2px rgba(15, 15, 15, 0.1);
+}
+.lens-segmented-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* Files | Courses under the sidebar's search row, across the sidebar */
+.lens-sidebar-segmented {
+  display: flex;
+  margin: 4px 2px 0;
 }
 /* "+" on a folder (CreateMenu.tsx), while the pointer is over it, and its menu */
 .lens-tree-actions {

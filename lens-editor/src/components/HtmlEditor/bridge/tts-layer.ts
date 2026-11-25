@@ -53,9 +53,11 @@ const STYLE_ID = 'lens-tts-highlight-style';
 const MAX_UNITS = 5000;
 const BLOCK_PAUSE_S = 0.3;
 
+// Lens orange, as --lens-read-sentence / --lens-read-word in index.css (light
+// values): this runs inside the page's frame, which can't read the editor's tokens
 const HIGHLIGHT_CSS = `
-::highlight(lens-tts-sentence) { background-color: rgba(35, 131, 226, 0.14); }
-::highlight(lens-tts-word) { background-color: rgba(35, 131, 226, 0.32); }
+::highlight(lens-tts-sentence) { background-color: #fde6c8; }
+::highlight(lens-tts-word) { background-color: #e6b988; }
 ::highlight(lens-tts-hover) { background-color: rgba(0, 0, 0, 0.05); }
 html.lens-tts-over-text, html.lens-tts-over-text * { cursor: pointer !important; }
 `;
