@@ -2655,29 +2655,42 @@ html, body {
 }
 /* Files and Course: small tabs under the search, the chosen one darker on a
    grey pill */
-.lens-sidebar-tabs {
-  display: flex;
-  gap: 2px;
-  margin-top: 4px;
-  padding: 0 2px;
+/* A segmented control (SegmentedToggle.tsx): two options in a grey track,
+   the active one a raised white segment */
+.lens-segmented {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  background-color: var(--lens-pill-bg);
+  border-radius: 7px;
 }
-.lens-sidebar-tab {
-  height: 24px;
-  padding: 0 8px;
+.lens-segmented-option {
+  flex: 1 1 0;
+  height: 22px;
+  padding: 0 10px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--lens-text-tertiary);
-  border-radius: 6px;
+  color: var(--lens-text-secondary);
+  border-radius: 5px;
   cursor: pointer;
-  transition: background-color 100ms, color 100ms;
+  transition: background-color 100ms, color 100ms, box-shadow 100ms;
 }
-.lens-sidebar-tab:hover {
-  color: var(--lens-sidebar-text);
-  background: var(--lens-hover-bg);
-}
-.lens-sidebar-tab.is-active {
+.lens-segmented-option:hover:not(.is-active):not(:disabled) {
   color: var(--lens-text);
-  background: var(--lens-pressed-bg);
+}
+.lens-segmented-option.is-active {
+  color: var(--lens-text);
+  background-color: var(--lens-popover-bg);
+  box-shadow: 0 0 0 1px rgba(15, 15, 15, 0.05), 0 1px 2px rgba(15, 15, 15, 0.1);
+}
+.lens-segmented-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* Files | Courses under the sidebar's search row, across the sidebar */
+.lens-sidebar-segmented {
+  display: flex;
+  margin: 4px 2px 0;
 }
 /* "+" on a folder (CreateMenu.tsx), while the pointer is over it, and its menu */
 .lens-tree-actions {

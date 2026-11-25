@@ -5,6 +5,7 @@ import { openDocInNewTab } from '../../../lib/url-utils';
 import {
   courseChildrenFromText,
   findCourseAncestors,
+  groupCoursesByFolder,
   listCourses,
   type CourseNodeKind,
   type CourseTreeNode,
@@ -12,6 +13,7 @@ import {
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { useBacklinksVersion } from '../../../hooks/useBacklinksVersion';
 import { useDocTexts, type DocTextState } from '../../../hooks/useDocTexts';
+import { FOLDER_ICON_SVG } from '../treeLayout';
 
 const INDENT = 14;
 
@@ -78,6 +80,8 @@ export function CourseTree({ activeUuid }: CourseTreeProps) {
   const backlinksVersion = useBacklinksVersion(folderDocs);
 
   const courses = useMemo(() => listCourses(metadata), [metadata]);
+  // Under their folders of courses/ (user-facing, in-development, ...), as in the file tree
+  const roots = useMemo(() => groupCoursesByFolder(courses), [courses]);
 
   // Everything upward of the active doc to its course; those rows open by default.
   const ancestors = useMemo(() => {
@@ -122,7 +126,11 @@ export function CourseTree({ activeUuid }: CourseTreeProps) {
         : node.children;
       const pending = !!node.uuid && !cycle && (doc === undefined || doc.status === 'loading');
       const expandable = !cycle && (pending || children.length > 0);
-      const expanded = expandable && (overrides[id] ?? (!!node.uuid && ancestorSet.has(node.uuid)));
+      // A folder of courses starts open (archived ones closed) and always when it holds the open document's course
+      const openByDefault = node.folder
+        ? !/^archived$/i.test(node.label) || node.children.some((c) => !!c.uuid && ancestorSet.has(c.uuid))
+        : !!node.uuid && ancestorSet.has(node.uuid);
+      const expanded = expandable && (overrides[id] ?? openByDefault);
       rows.push({
         node,
         id,
@@ -133,17 +141,17 @@ export function CourseTree({ activeUuid }: CourseTreeProps) {
         error: doc?.status === 'error',
         cycle,
       });
-      // Course roots load only once opened; everything below loads as soon
-      // as it is on screen, so a row knows whether it can expand.
-      if (node.uuid && !cycle && (depth > 0 || expanded)) needed.push(node.uuid);
+      // Courses (at the top or in a folder) load only once opened; everything
+      // below loads as soon as it is on screen, so a row knows whether it can expand.
+      if (node.uuid && !cycle && (expanded || node.kind !== 'course')) needed.push(node.uuid);
       if (!expanded) return;
       if (node.uuid) onPath.add(node.uuid);
       for (const child of children) visit(child, id, depth + 1);
       if (node.uuid) onPath.delete(node.uuid);
     };
-    for (const course of courses) visit(course, '', 0);
+    for (const root of roots) visit(root, '', 0);
     return { rows, needed };
-  }, [courses, docs, overrides, ancestorSet, childrenOf]);
+  }, [roots, docs, overrides, ancestorSet, childrenOf]);
 
   const neededKey = needed.join('|');
   useEffect(() => {
@@ -271,6 +279,9 @@ export function CourseTree({ activeUuid }: CourseTreeProps) {
                 </svg>
               )}
             </button>
+            {node.folder && (
+              <span className="ml-1 flex-shrink-0 flex text-[var(--lens-sidebar-icon)]" dangerouslySetInnerHTML={{ __html: FOLDER_ICON_SVG }} />
+            )}
             {badge && (
               <span
                 className={`ml-1 px-1 py-px rounded text-[9px] font-semibold uppercase tracking-wide flex-shrink-0 max-w-[4.5rem] truncate ${BADGE_CLASS[node.kind as BadgedKind]}`}
@@ -282,6 +293,7 @@ export function CourseTree({ activeUuid }: CourseTreeProps) {
             <span
               className={`ml-1.5 truncate ${
                 node.unresolved ? 'text-red-600 line-through'
+                  : node.folder ? 'text-gray-700'
                   : node.kind === 'group' ? 'text-gray-500 italic text-xs'
                     : navigable ? 'text-gray-700' : 'text-gray-500'
               }`}

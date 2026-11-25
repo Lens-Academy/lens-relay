@@ -44,6 +44,8 @@ export interface CourseTreeNode {
   path?: string;
   /** The wikilink pointed at a file that is not in the folder metadata. */
   unresolved?: boolean;
+  /** A `group` that is a subfolder of `courses/` (user-facing, in-development, ...) rather than a section group. */
+  folder?: boolean;
   /** Children known from the parent's text alone (field links of a section). */
   children: CourseTreeNode[];
 }
@@ -125,6 +127,34 @@ export function listCourses(metadata: FolderMetadata): CourseTreeNode[] {
       path,
       children: [],
     }));
+}
+
+/**
+ * The courses as the file tree shows them: each subfolder of `courses/`
+ * (user-facing, in-development, archived, ...) is a folder group holding its
+ * courses, folders first, then the courses that sit in `courses/` itself,
+ * each sorted by name as the file tree sorts.
+ */
+export function groupCoursesByFolder(courses: CourseTreeNode[]): CourseTreeNode[] {
+  const byName = (a: CourseTreeNode, b: CourseTreeNode) => a.label.toLowerCase().localeCompare(b.label.toLowerCase());
+  const folders = new Map<string, CourseTreeNode>();
+  const loose: CourseTreeNode[] = [];
+  for (const course of courses) {
+    const match = course.path?.match(/^(\/[^/]+\/courses)\/(.+)\/[^/]+$/i);
+    if (!match) {
+      loose.push(course);
+      continue;
+    }
+    const folderPath = `${match[1]}/${match[2]}`;
+    let folder = folders.get(folderPath);
+    if (!folder) {
+      folder = { key: `folder:${folderPath}`, kind: 'group', folder: true, label: match[2], path: folderPath, children: [] };
+      folders.set(folderPath, folder);
+    }
+    folder.children.push(course);
+  }
+  for (const folder of folders.values()) folder.children.sort(byName);
+  return [...[...folders.values()].sort(byName), ...loose.sort(byName)];
 }
 
 /**

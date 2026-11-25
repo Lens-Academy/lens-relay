@@ -21,7 +21,7 @@ import { findTemplates, prepareTemplateText, type TemplateOption } from '../../l
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 import { renamePreservingExtension } from '../../lib/filename-utils';
-import type { SegmentedValue } from '../SegmentedToggle';
+import { SegmentedToggle, type SegmentedValue } from '../SegmentedToggle';
 import { CourseTree } from './CourseTree/CourseTree';
 import { persistedChoice } from '../../lib/persisted-pref';
 
@@ -43,7 +43,7 @@ export function Sidebar() {
   // Resolve short UUID to full compound ID (empty string = no active doc)
   const activeDocId = useResolvedDocId(shortCompoundId, metadata).docId || '';
 
-  // Files (the shared folders) or Course (the embed tree of the open course)
+  // Files (the shared folders) or Courses (each course's embed tree, the open document's opened)
   const [view, setView] = useState<SidebarView>(sidebarView.load);
   const handleViewChange = useCallback((value: SegmentedValue) => {
     const next: SidebarView = value === 'right' ? 'course' : 'files';
@@ -340,33 +340,23 @@ export function Sidebar() {
 
   return (
     <aside className="lens-sidebar-panel w-full h-full flex flex-col">
-      {/* Notion's sidebar top: a search row, then the Files and Course tabs */}
+      {/* Notion's sidebar top: a search row, then Files | Courses */}
       <div className="px-2 pt-1 pb-1">
         <SearchInput
           value={searchTerm}
           onChange={setSearchTerm}
           placeholder="Search"
         />
-        <div role="group" aria-label="Sidebar view" className="lens-sidebar-tabs">
-          <button
-            type="button"
-            aria-pressed={view !== 'course'}
-            title="Browse the shared folders"
-            onClick={() => handleViewChange('left')}
-            className={`lens-sidebar-tab${view !== 'course' ? ' is-active' : ''}`}
-          >
-            Files
-          </button>
-          <button
-            type="button"
-            aria-pressed={view === 'course'}
-            title="Browse the open course as a tree"
-            onClick={() => handleViewChange('right')}
-            className={`lens-sidebar-tab${view === 'course' ? ' is-active' : ''}`}
-          >
-            Course
-          </button>
-        </div>
+        <SegmentedToggle
+          leftLabel="Files"
+          rightLabel="Courses"
+          value={view === 'course' ? 'right' : 'left'}
+          onChange={handleViewChange}
+          ariaLabel="Sidebar view"
+          leftTitle="Browse the shared folders"
+          rightTitle="Browse the courses as trees"
+          className="lens-sidebar-segmented"
+        />
       </div>
 
       {/* Tree content or search results */}
