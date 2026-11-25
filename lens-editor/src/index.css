@@ -40,9 +40,11 @@
   --lens-hover-bg: rgba(33, 27, 23, 0.05);
   --lens-pressed-bg: rgba(33, 27, 23, 0.1);
   --lens-pill-bg: rgba(42, 28, 0, 0.07);
-  /* Read-aloud: the sentence being read and its word (readAloud.ts) */
-  --lens-read-sentence: rgba(35, 131, 226, 0.14);
-  --lens-read-word: rgba(35, 131, 226, 0.32);
+  /* Read-aloud: the sentence being read and its word (readAloud.ts), in
+     Lens orange as the platform's reader (lens-orange-100, #e6b988) */
+  --lens-read-sentence: #fde6c8;
+  --lens-read-word: #e6b988;
+  --lens-read-accent: #b87018;
   --lens-border: #e6e5e3;
   --lens-border-secondary: #f0efed;
   --lens-border-strong: #d4d3cf;
@@ -118,8 +120,9 @@
   --lens-hover-bg: rgba(255, 255, 255, 0.055);
   --lens-pressed-bg: rgba(255, 255, 255, 0.11);
   --lens-pill-bg: rgba(255, 255, 235, 0.1);
-  --lens-read-sentence: rgba(35, 131, 226, 0.22);
-  --lens-read-word: rgba(35, 131, 226, 0.45);
+  --lens-read-sentence: rgba(230, 145, 56, 0.24);
+  --lens-read-word: rgba(230, 145, 56, 0.5);
+  --lens-read-accent: #f0a35a;
   --lens-border: #383836;
   --lens-border-secondary: #2c2c2b;
   --lens-border-strong: #5f5e59;
