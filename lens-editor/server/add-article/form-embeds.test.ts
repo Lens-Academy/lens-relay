@@ -19,7 +19,10 @@ const evidenceMocks = vi.hoisted(() => ({
   writeSourceEvidence: vi.fn(),
 }));
 
-vi.mock("./fetch", () => ({ ...fetchMocks, MIN_ARTICLE_CHARS: 200 }));
+vi.mock("./fetch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./fetch")>()),
+  ...fetchMocks,
+}));
 vi.mock("../add-video/relay-docs", () => relayMocks);
 vi.mock("./source-evidence", () => evidenceMocks);
 
@@ -61,6 +64,11 @@ describe("formTitleFromHtml", () => {
   it("takes og:title without the provider suffix", () => {
     const html = `<head><meta property="og:title" content="Offboarding - Airtable"><title>x</title></head>`;
     expect(formTitleFromHtml(html, "Airtable")).toBe("Offboarding");
+  });
+
+  it("keeps an apostrophe and reads content before property", () => {
+    const html = `<meta content="Alex&#39;s form - Airtable" property="og:title">`;
+    expect(formTitleFromHtml(html, "Airtable")).toBe("Alex's form");
   });
 
   it("gives nothing when the page names only the provider", () => {

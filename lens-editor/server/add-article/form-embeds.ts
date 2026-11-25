@@ -1,3 +1,4 @@
+import { extractHtmlMeta } from "./fetch";
 import type { ArticleMeta } from "./types";
 
 /**
@@ -56,23 +57,10 @@ export function formEmbedFromUrl(raw: string): FormEmbed | null {
 
 /** The form's title from its page's og:title or <title>, without the provider suffix. */
 export function formTitleFromHtml(html: string, provider: string): string {
-  const raw =
-    /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']*)["']/i.exec(html)?.[1] ??
-    /<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1] ??
-    "";
-  const title = decodeBasicEntities(raw)
-    .replace(new RegExp(`\\s*[-–|]\\s*${provider}\\s*$`, "i"), "")
+  const title = extractHtmlMeta(html)
+    .title.replace(new RegExp(`\\s*[-–|]\\s*${provider}\\s*$`, "i"), "")
     .trim();
   return title.toLowerCase() === provider.toLowerCase() ? "" : title;
-}
-
-function decodeBasicEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&#x27;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
 }
 
 export function formEmbedMeta(form: FormEmbed, title: string, createdDate: string): ArticleMeta {
