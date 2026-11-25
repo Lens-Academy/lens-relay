@@ -196,7 +196,7 @@ describe('Sidebar with multi-folder metadata', () => {
     );
 
     // Find the file node text, then its clickable parent row
-    const fileText = screen.getByText('Welcome.md');
+    const fileText = screen.getByText('Welcome');
     const fileRow = fileText.closest('[class*="cursor-pointer"]') as HTMLElement;
     expect(fileRow).not.toBeNull();
 
@@ -230,7 +230,7 @@ describe('Sidebar with multi-folder metadata', () => {
       </MemoryRouter>
     );
 
-    const fileText = screen.getByText('Welcome.md');
+    const fileText = screen.getByText('Welcome');
     const fileRow = fileText.closest('[class*="cursor-pointer"]') as HTMLElement;
     expect(fileRow).not.toBeNull();
 

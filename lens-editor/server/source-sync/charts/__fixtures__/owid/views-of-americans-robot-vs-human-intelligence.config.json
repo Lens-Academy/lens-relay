@@ -1,0 +1,17 @@
+{
+ "slug": "views-of-americans-robot-vs-human-intelligence",
+ "title": "Views of Americans about robot vs. human intelligence",
+ "subtitle": "Survey respondents were asked, \"Which one, if any, of the following statements do you most agree with?\"",
+ "note": "Number of respondents ranges between n = 1001 and n = 1085 US adults per survey wave.",
+ "chartTypes": [
+  "StackedBar"
+ ],
+ "selectedEntityNames": [
+  "All adults"
+ ],
+ "selectedFacetStrategy": "entity",
+ "yAxis": {
+  "min": 0,
+  "facetDomain": "independent"
+ }
+}

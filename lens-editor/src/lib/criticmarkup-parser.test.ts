@@ -1,6 +1,6 @@
 // src/lib/criticmarkup-parser.test.ts
 import { describe, it, expect } from 'vitest';
-import { parse, parseThreads, decodeCommentContent, countPendingEdits } from './criticmarkup-parser';
+import { parse, parseThreads, decodeCommentContent, countPendingEdits, withLinkedComments, commentThreadAt } from './criticmarkup-parser';
 
 describe('CriticMarkup Parser', () => {
   describe('basic patterns', () => {
@@ -325,5 +325,31 @@ describe('countPendingEdits', () => {
 
   it('returns zero for plain text', () => {
     expect(countPendingEdits('title: Nothing pending')).toBe(0);
+  });
+});
+
+describe('a comment and the text it highlights', () => {
+  // A highlight with a thread of two comments, then a comment on a point
+  const comment = (author: string, timestamp: number, body: string) =>
+    `{>>${JSON.stringify({ author, timestamp })}@@${body}<<}`;
+  const doc = `We {==ship it==}${comment('ann', 1, 'why?')}${comment('bo', 2, 'because')} soon${comment('cy', 3, 'note')}`;
+  const ranges = parse(doc);
+  const [highlight, first, reply, point] = ranges;
+  const types = (rs: typeof ranges) => rs.map((r) => `${r.type}:${r.content}`);
+
+  it('removing the highlight takes its whole thread with it', () => {
+    expect(types(withLinkedComments(ranges, [highlight]))).toEqual(['highlight:ship it', 'comment:why?', 'comment:because']);
+  });
+
+  it('removing all of a thread takes its highlight with it, one reply does not', () => {
+    expect(types(withLinkedComments(ranges, [first, reply]))).toEqual(['highlight:ship it', 'comment:why?', 'comment:because']);
+    expect(types(withLinkedComments(ranges, [reply]))).toEqual(['comment:because']);
+    expect(types(withLinkedComments(ranges, [point]))).toEqual(['comment:note']);
+  });
+
+  it('finds the thread from the highlighted text or from its comments', () => {
+    expect(types(commentThreadAt(ranges, doc.indexOf('ship')))).toEqual(['comment:why?', 'comment:because']);
+    expect(types(commentThreadAt(ranges, reply.from + 2))).toEqual(['comment:why?', 'comment:because']);
+    expect(types(commentThreadAt(ranges, doc.indexOf('soon')))).toEqual([]);
   });
 });

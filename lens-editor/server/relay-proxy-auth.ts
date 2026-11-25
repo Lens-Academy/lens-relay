@@ -55,7 +55,7 @@ export function checkProxyAccess(
     return { allowed: true };
   }
 
-  // GET /search — allowed (results may include cross-folder docs but content is still gated)
+  // GET /search — allowed; scopeRelayPath limits the results to the token's folder
   if (method === 'GET' && path === '/search') {
     return { allowed: true };
   }
@@ -183,4 +183,48 @@ export function checkProxyAccessWithBody(
   }
 
   return checkProxyAccess(method, path, query, auth);
+}
+
+/**
+ * The relay path to forward for an allowed request. For a folder-scoped
+ * token, GET /search gets `folder_uuid` set to the token's folder (replacing
+ * any the client sent), so the relay returns only that folder's results.
+ * Every other request is forwarded unchanged.
+ */
+export function scopeRelayPath(method: string, relayPath: string, auth: ProxyAuthResult): string {
+  if (auth.isAllFolders || method !== 'GET') return relayPath;
+  const queryIdx = relayPath.indexOf('?');
+  const pathOnly = queryIdx >= 0 ? relayPath.slice(0, queryIdx) : relayPath;
+  if (pathOnly !== '/search') return relayPath;
+  const params = new URLSearchParams(queryIdx >= 0 ? relayPath.slice(queryIdx + 1) : '');
+  params.set('folder_uuid', auth.payload.folder); // drops every client value
+  return `${pathOnly}?${params.toString()}`;
+}
+
+/**
+ * The body to forward to the relay for a body-checked request that passed
+ * the access check. For POST /doc/trash it sets `scope_folder` to a
+ * folder-scoped token's folder name (overwriting anything the client sent;
+ * removed for all-folders tokens), so the relay's inbound-links refusal names
+ * only documents in that folder and counts the rest. Every other body is
+ * forwarded unchanged.
+ */
+export function relayBodyFor(
+  method: string,
+  path: string,
+  auth: ProxyAuthResult,
+  parsedBody: unknown,
+  rawBody: Buffer,
+  allowedFolderName?: string,
+): Buffer {
+  if (method !== 'POST' || path !== '/doc/trash') return rawBody;
+  if (typeof parsedBody !== 'object' || parsedBody === null || Array.isArray(parsedBody)) {
+    return rawBody;
+  }
+  const body: Record<string, unknown> = { ...(parsedBody as Record<string, unknown>) };
+  delete body.scope_folder;
+  if (!auth.isAllFolders && allowedFolderName) {
+    body.scope_folder = allowedFolderName;
+  }
+  return Buffer.from(JSON.stringify(body), 'utf8');
 }

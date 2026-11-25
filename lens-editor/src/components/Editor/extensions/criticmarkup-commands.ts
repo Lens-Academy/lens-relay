@@ -1,7 +1,7 @@
 // src/components/Editor/extensions/criticmarkup-commands.ts
 import type { EditorView, KeyBinding } from '@codemirror/view';
 import { criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
-import { countEdits, isAdjacentEditPair, isSuggestion, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
+import { commentThreadAt, countEdits, isAdjacentEditPair, isSuggestion, withLinkedComments, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 /**
  * Find the CriticMarkup range containing the given position.
@@ -190,6 +190,16 @@ function rangesToApply(view: EditorView): CriticMarkupRange[] {
 }
 
 /**
+ * The changes for acting on `ranges`, with the comment threads and
+ * highlights linked to them: a comment's highlight goes with its thread
+ * (withLinkedComments).
+ */
+function changesFor(view: EditorView, ranges: CriticMarkupRange[], action: 'accept' | 'reject'): CmChange[] {
+  return withLinkedComments(view.state.field(criticMarkupField), ranges)
+    .flatMap(r => surgicalChangesFor(view, r, action));
+}
+
+/**
  * Accept CriticMarkup changes: the suggestions a non-collapsed selection
  * overlaps, or the change at the cursor (see rangesToApply).
  * Returns true if any change was accepted.
@@ -198,7 +208,7 @@ export function acceptChangeAtCursor(view: EditorView): boolean {
   const targets = rangesToApply(view);
   if (targets.length === 0) return false;
 
-  view.dispatch({ changes: targets.flatMap(r => surgicalChangesFor(view, r, 'accept')) });
+  view.dispatch({ changes: changesFor(view, targets, 'accept') });
   return true;
 }
 
@@ -211,7 +221,19 @@ export function rejectChangeAtCursor(view: EditorView): boolean {
   const targets = rangesToApply(view);
   if (targets.length === 0) return false;
 
-  view.dispatch({ changes: targets.flatMap(r => surgicalChangesFor(view, r, 'reject')) });
+  view.dispatch({ changes: changesFor(view, targets, 'reject') });
+  return true;
+}
+
+/**
+ * Resolve the comment at `pos` (in its thread, or in the text it
+ * highlights): remove the thread and the highlight, keeping the text.
+ * Returns false when there is no comment there.
+ */
+export function resolveCommentAt(view: EditorView, pos: number): boolean {
+  const thread = commentThreadAt(view.state.field(criticMarkupField), pos);
+  if (thread.length === 0) return false;
+  view.dispatch({ changes: changesFor(view, thread, 'accept') });
   return true;
 }
 

@@ -137,7 +137,7 @@ relay server token:
 - `POST /api/attachments/import` (lens-editor, edit share token): body
   `{folder, url | content_base64, file_path? | stem?, mimetype?, overwrite?}`.
   Fetches with the importer's SSRF guard (or decodes base64), sniffs magic
-  bytes (png/jpeg/gif/webp only, SVG rejected), enforces 20 MiB hard / 5 MiB
+  bytes (png/jpeg/gif/webp, or svg after sanitizing), enforces 20 MiB hard / 5 MiB
   soft, dedups via `by-hash`, uploads via `/doc/attachment`.
 
 **Naming.** Importer figures: `<slug>-fig<N>-<sha1_8>.<ext>` /
@@ -248,19 +248,46 @@ hint WEUR, Standard storage class, private):
 0 * * * * nice -n 10 /root/lens-relay/scripts/r2-backup.sh >> /var/log/r2-backup.log 2>&1
 ```
 
-| Tier | Prefix | Made | Kept |
-|------|--------|------|------|
-| Hourly | `hourly/YYYY-MM-DD-HH/` | every hour | 24 |
-| Daily | `daily/YYYY-MM-DD/` | first hourly of the day | 22 days |
-| Weekly | `weekly/YYYY-WW/` | once a week, from the oldest daily | ~26 weeks |
+| Tier | Prefix | Holds | Made | Kept |
+|------|--------|-------|------|------|
+| Daily | `daily/YYYY-MM-DD/` | every object | first run of the day | 22 days |
+| Hourly | `hourly/YYYY-MM-DD-HH/` | the objects that changed since the last snapshot | every hour in which an object changed | that day and the next |
+| Weekly | `weekly/YYYY-WW/` | every object, as in the oldest daily (about three weeks older than its name) | once a week | ~26 weeks |
+| Record | `lists/YYYY-MM-DD-HH/objects.tsv` | every object and the MD5 the backups hold for it | every hour | that day and the next |
+| | `current/` | the newest backed-up version of every object | | |
+| | `done/daily/…/ok`, `done/weekly/…/ok` | marks a daily or weekly complete | after its copy | with it |
 
-Every snapshot is a full copy of the bucket. Source and destination use the
-same rclone remote (`r2bk`), so each copy is a server-side `CopyObject`
-inside Cloudflare and no data passes through prod; a run takes a few minutes
-at low priority. Expiry goes by the date in the snapshot name, not object
-age. A failed copy is removed so the next run starts clean. Cost is mostly
-requests: ~8k objects per snapshot is ~6M Class A operations a month (about
-$23); storage is ~30 GB.
+The header of `scripts/r2-backup.sh` says how a run works. An hour is
+restored from its day's daily and that day's hourlies up to it, so hourlies
+and records are pruned a whole day at a time, once the next day is over: 24
+to 48 hours are kept. Source and destination use the same rclone remote
+(`r2bk`), so each copy is a server-side `CopyObject` inside Cloudflare and no
+data passes through prod.
+
+**When a run fails** it writes one `FAILED:` line to the log and exits 1,
+and the next run tries again. A daily or weekly that a run did not finish
+has no `done/` marker, so it is never used. One `FAILED:` line needs no
+action. The same `FAILED:` line in two runs in a row, or "the live bucket
+lists as empty", needs a person. While the daily fails, each run stops
+before its hourly and its pruning. Nothing alerts on these lines yet.
+
+**The first run after this script was deployed** marks the dailies and
+weeklies that the old script made as "made by the old backup script, not
+checked to be complete" (`done/backfill/ok` records that this is done), and
+copies every object once into that hour's hourly and into `current/`: about
+21k Class A requests, once.
+
+**Cost** is requests: R2 bills each list call and each copy (Class A, $4.50
+per million after the first million a month). On 28 Oct 2026 the bucket held
+10,721 objects and 1 to 17 changed in an hour, so an hourly run made about
+45 Class A requests and the daily copy about 10,700: under 0.5M a month.
+Copying every object every hour, as the old script did, cost about 21M a
+month (~$90): Cloudflare measured 715k Class A requests a day on 27 Oct 2026.
+Storage is ~30 GB.
+
+`scripts/r2-backup.test.sh` runs both scripts over simulated days against
+local folders, including a failure at each step
+(CI: `.github/workflows/r2-backup.yml`).
 
 - **Credentials:** R2 API token `relay-backup-job` (Object Read & Write on
   `lens-relay-storage` and `lens-relay-backups` only), configured as the
@@ -275,15 +302,39 @@ $23); storage is ~30 GB.
   uploaded into the bucket under their original names, so they expire on
   their original schedule.
 
-**Restoring.** Copying back writes into the live bucket, and the relay keeps
-loaded documents in memory and saves them over the store, so make sure the
-document is not loaded (or stop the relay) before copying:
+**Restoring.** `scripts/r2-backup-restore.sh [--confirm] POINT TARGET [OBJECT]`
+restores the bucket, or one document or attachment, into an empty folder,
+then checks it: exactly the objects that existed at that point, each with its
+MD5. A difference is an error. POINT is one of:
+
+- a daily, `daily/2026-10-28`;
+- a weekly, `weekly/2026-43` (the script says which daily it holds);
+- an hour, `2026-10-28-14`. If that hour has no record (its run failed), the
+  script uses the last hour before it that has one, and says so. With none,
+  it refuses.
+
+OBJECT is a document folder or an attachment path; see
+[R2 Storage Structure](#r2-storage-structure). The script first prints a plan:
+the point, how many objects, what it reads and where it writes. At a terminal
+it then asks you to type `restore`. Without a terminal (for example in an AI
+agent's shell) it stops with exit 3 unless `--confirm` is given. An AI agent
+must show the owner that plan and get a yes before it adds `--confirm`, and
+again before it copies anything into the live bucket.
+
+**Before you copy anything back, make sure the relay does not have that
+document loaded, or stop the relay.** The relay keeps loaded documents in
+memory and saves them over the store, so it would overwrite the copy.
 
 ```bash
-rclone lsf --dirs-only r2bk:lens-relay-backups/hourly                 # list snapshots
-rclone copy r2bk:lens-relay-backups/hourly/<snapshot>/<doc> /tmp/restore/<doc>   # inspect first
-rclone copy r2bk:lens-relay-backups/hourly/<snapshot>/<doc> r2bk:lens-relay-storage/<doc>
+rclone lsf --dirs-only r2bk:lens-relay-backups/lists                          # hours with a record
+scripts/r2-backup-restore.sh 2026-10-28-14 /tmp/restore <doc>                 # <doc> as it was at 14:00
+rclone copy /tmp/restore/<doc> r2bk:lens-relay-storage/<doc>                  # after inspecting it
 ```
+
+Leave out `<doc>` for the whole bucket (~600 MB; check the free disk first).
+Hourly snapshots that the old script made are full copies without a record,
+so the restore script refuses them; copy from them directly. They are pruned
+two days after the deploy.
 
 ## Key Files
 
@@ -488,8 +539,9 @@ It is off until `ILIAD_SYNC_COURSE` names the course file.
 
 **What a run does.** Every `SOURCE_SYNC_INTERVAL_MINUTES` it asks the site
 which source commit it was built from and reads the course file. If the
-course file's `upstream_commit` is that commit, the run ends: one request and
-one file read. Otherwise it reads the 28 worksheets and every module and lens
+course file's `upstream_commit` is that commit and its `sync_rules` is the
+version of the sync's rules (`SYNC_RULES` in `course-files.ts`), the run
+ends: one request and one file read. Otherwise it reads the 28 worksheets and every module and lens
 of the course, and writes, moves and trashes what differs. The course file's
 `upstream_commit` is written last, so a run that stops early is done again by
 the next one.
@@ -519,8 +571,12 @@ set: git records a moved module as a delete and an add.
 files stay as the last run left them.
 
 **Run it again without a new Iliad commit** (after a fix to the converter or
-the layout is deployed): delete the `upstream_commit:` line from the course
-file's frontmatter in the editor. The next run does a full pass.
+the layout is deployed): a code change that must reach the course at once
+increases `SYNC_RULES` in `course-files.ts`. Then the first run after the
+deploy does a full pass. By hand: delete the `upstream_commit:` line from the
+course file's frontmatter in the editor. Before either, make sure that
+`ILIAD_SYNC_APPROVE_RETIREMENT` is empty: an approval is for one source
+commit, and the new pass at that commit would use it too.
 
 **What a person may change.** The text of a synced lens is overwritten at
 the next new Iliad commit, whichever page that commit changes; the editor's
@@ -529,11 +585,46 @@ next run puts it back or folds it into the lens before. These survive a run:
 frontmatter fields the sync does not write; reading cards, which stay after
 the same text (a card moves only when the text before it changes);
 entries in an Iliad module that are not Iliad lenses (readings, a lens of our
-own) and their order; and everything in the course file except
-`upstream_commit`. A reading entry is removed when the source of its day
-stops linking to it. Iliad moving a link to another address of the same work
-(arXiv abs or pdf, LessWrong or the Alignment Forum) does not remove it;
-moving it to a copy on another site does.
+own) and their order; choice groups in a module; and everything in the
+course file except `upstream_commit` and `sync_rules`. A reading entry is
+removed when the source of its day stops linking to it. Iliad moving a link
+to another address of the same work (arXiv abs or pdf, LessWrong or the
+Alignment Forum) does not remove it; moving it to a copy on another site
+does.
+
+**Choice groups.** Where Iliad lets a learner pick some of several readings,
+the module lists them under `# Choose: k`. The learner completes k of them.
+The sync puts the readings after an Iliad lens into a group in three cases:
+
+- The lens's text gives them as alternatives: "Read [A], or [B], or [C]".
+- The lens's text says to pick ("Pick one", "one of these papers"), and a
+  list of the readings follows.
+- A card list of the hand import (`:::require_x_optional_lenses{x=k}`) in
+  the lens asks for k of them.
+
+A card in a lens whose reading is now in a group leaves the lens, because
+the module offers the reading in the group. A card list leaves only when a
+group holds every reading it names.
+
+The sync reads the text for this only when the text is new or changed, or
+when `SYNC_RULES` changes. So a person who takes readings out of a group
+keeps them out until Iliad changes that text. A group in a module stays,
+whoever made it. When Iliad stops linking a reading of a group, the reading
+leaves the group. A group with no more readings than it asks for is no
+choice: the sync takes its heading out, keeps its readings as plain entries,
+and says so in the log.
+
+The sync writes each group at the level of the lens entries: `# Choose:`,
+with `## Lens:` entries below it and no `optional::` on them. It writes the
+other readings after an Iliad lens at that lens's level too. The platform
+reads an entry one level below the lens entries as part of the entry above
+it, and does not show it. (`choices.ts`; `arrangeChoices` in
+`course-files.ts`.)
+
+**Pending suggestions.** The sync reads every file as Lens publishes it, with
+each pending suggestion rejected. A file that the run does not change keeps
+its suggestions. A file that the run rewrites loses them, and the log names
+the file.
 
 **Changes that lose something wait.** A change that retires a lens, moves
 where a lens starts, or removes a reading or a card is applied only once the
@@ -586,6 +677,77 @@ source.
 --content <checkout of lens-edu-relay>` reads the live site and reports what
 it would do; `--apply` changes the copy. It cannot write to a relay.
 
+## Atlas course sync
+
+The lens-editor server keeps a course in Lens Edu a read-only copy of the AI
+Safety Atlas's Google Docs, one module per chapter and one lens and article
+per section (`lens-editor/server/source-sync/atlas/`; how it works is in the
+headers of `types.ts` and `sync.ts`). The hand-curated Atlas course is a
+different course; the sync does not touch it.
+
+**Turn it on.** Put the course on one line in `/root/lens-relay/.env`, as
+`ATLAS_SYNC_COURSES='[ ... ]'`, a JSON list with one entry per course; the
+real course is `lens-editor/scripts/atlas-sync.config.example.json`. Each
+Doc must be shared "anyone with the link can view", or with the service
+account of `GOOGLE_SERVICE_ACCOUNT_JSON`. Recreate the container
+(`docker compose -f docker-compose.prod.yaml up -d lens-editor`). A
+configuration with a mistake logs `[atlas-sync] not started:` and every
+problem, and leaves only this sync off. A change to the configuration
+(credits, folder, prefixes) reaches the files at the next run.
+
+**Turn it off.** Empty `ATLAS_SYNC_COURSES` and recreate the container. The
+files stay as the last run left them.
+
+**Charts.** Each interactive figure of Our World in Data (an `iframe` table
+whose src is an OWID grapher page), and each `chart` table, that has a still
+image gets a chart file `Lens Edu/charts/<course folder>/<id>.md`, which
+lens-platform draws in place of that image. When the sync reads a chart's data, when it
+replaces a file, and when it trashes one: the header of
+`lens-editor/server/source-sync/charts/refresh.ts`. A chart with no file
+(OWID retired it, or does not let its data be downloaded) stays a still
+image.
+
+**The log.** `docker logs lens-editor 2>&1 | grep atlas-sync`. A run prints
+one line, `<course> at <revision>: ...`, then one line per warning. What may
+need a person:
+
+- *`N lens(es) are gone from the Docs for over an hour ... retired none`.*
+  The sync retires at most 3 lenses at once, and never a whole chapter, by
+  itself. If the Docs lost the text by mistake, put it back. If the loss is
+  right, set `ATLAS_SYNC_APPROVE_RETIREMENT=<the value in the message>` in
+  `.env`, recreate the container, and empty the variable again after the
+  run. The value names those lenses, so it stands while the Docs change
+  elsewhere, and approves no other lenses.
+- *`<Doc link> was left out of this run`.* The Doc could not be read (not
+  shared, deleted, network), its TITLE does not read `Chapter <N> -
+  <Title>`, or an image of it failed to download. Its files stay as they
+  are and nothing of it is retired. While the Docs stay as they were, the
+  next runs log `still blocked` and look again in full once an hour.
+- *`The chart "<id>" ... keeps its data of <date>: ...`, `... has no data,
+  so its figure stays a still image: ...` or `"<path>" is not a chart file
+  the sync can read`.* The chart's source answered with an error, or with
+  data that failed a check, or someone edited the chart file. Each is
+  logged once a day, when the chart is read; a source that answers 404 or
+  403 (OWID retired the chart, or does not let its data be downloaded) is
+  logged once, when it starts, and tried again weekly. Nothing to do unless
+  it lasts: then replace the figure in the Doc. A `highlight` row's names
+  that match nothing in the data are logged once.
+- *`N chart(s) were not read`.* The run's time for charts ran out (OWID
+  slow); the next run reads them first.
+- *`failed: ...`.* Nothing was changed; the message says what to do (a lens
+  that a module lists is missing, two lenses share an id, a course file the
+  sync did not write, or a course file that was moved: set
+  `ATLAS_SYNC_COURSES` to its new path). A file that changed during the run
+  needs nothing: the next run plans again.
+
+**Run it again without a change in the Docs** (after a fix to the converter
+is deployed): increase `ATLAS_SYNC_RULES` in `atlas/sync.ts`, or delete the
+`sync_rules:` line of the course file in the editor.
+
+**Try it on a copy.** `cd lens-editor && npx tsx scripts/atlas-sync.ts`
+prints its options. It reads a saved copy of the Docs and writes only to a
+directory on disk.
+
 ## Lens Editor Production Promotion
 
 The Lens Editor promotion feature compares the relay-owned staging repository
@@ -616,7 +778,7 @@ PROMOTION_BRANCH_PREFIX=promote/lens-editor
 PROMOTION_MERGE_METHOD=SQUASH
 PROMOTION_GITHUB_OWNER=Lens-Academy
 PROMOTION_GITHUB_REPO=lens-edu-production
-GITHUB_TOKEN=github_pat_with_pull_request_and_automerge_permissions
+GITHUB_TOKEN=github_pat_that_can_open_and_merge_pull_requests
 ```
 
 `PROMOTION_ENABLED=false` disables the routes. With
@@ -656,13 +818,21 @@ keys. The Lens Editor image includes `git` and `openssh-client`; compose sets
 `GIT_SSH_COMMAND=ssh -F /data/lens-editor-promotion-ssh/config` for promotion
 Git operations.
 
-The GitHub token is for GitHub API operations: creating pull requests and
-enabling auto-merge. It is not used by `git clone`/`git push` while the remote
-uses SSH. The promotion service never pushes to the staging repository; it only
-pushes short-lived branches to the production repository whose names begin with
-`PROMOTION_BRANCH_PREFIX`. Keep GitHub branch protection or rulesets enabled for
-production `main` and staging `staging`; a write-enabled deploy key cannot
-enforce branch-prefix restrictions by itself.
+The GitHub token is for GitHub API operations: it opens each promotion's pull
+request, then merges it at once. When the production branch still requires
+something (a required check, a review), it asks for auto-merge instead, which
+needs "Allow auto-merge" in the repository settings. A fine-grained token needs
+"Contents" and "Pull requests" set to read and write. If the merge fails, the
+pull request stays open and the editor says why. The token is not used by
+`git clone`/`git push` while the remote uses SSH.
+
+The promotion service never pushes to the staging repository; it only pushes
+short-lived branches to the production repository whose names begin with
+`PROMOTION_BRANCH_PREFIX`. A write-enabled deploy key cannot enforce
+branch-prefix restrictions by itself, so protect production's `production`
+branch and staging's `staging` branch with branch protection or rulesets. A
+rule that requires a pull request with no approvals still lets promotions merge
+at once; a required check or approval makes them wait for auto-merge instead.
 
 Let the promotion service create the scratch clone on first use. It marks that
 checkout with local git config and rejects existing checkouts without that

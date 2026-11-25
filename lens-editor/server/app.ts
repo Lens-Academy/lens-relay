@@ -15,9 +15,13 @@ import { validatePromotionPaths } from './promotion/path-validation.ts';
 import { createPromotionRoutes, type PromotionRouteService } from './promotion/routes.ts';
 import { createContentStatusRoutes } from './content-status/routes.ts';
 import { createTtsRoutes } from './tts/routes.ts';
-import type {
-  PromotionChangesResponse,
-  PromotionPrResponse,
+import { createJevRoutes } from './jev/routes.ts';
+import { createHistoryRoutes } from './history/routes.ts';
+import {
+  PromotionError,
+  type PromotionBranch,
+  type PromotionChangesResponse,
+  type PromotionPrResponse,
 } from './promotion/types.ts';
 
 export interface AppConfig {
@@ -29,42 +33,58 @@ interface PromotionGitService {
   getChanges(): Promise<PromotionChangesResponse>;
   getStatus(path: string): Promise<unknown>;
   getDiff(path: string): Promise<unknown>;
-  createPromotionBranch(input: { paths: string[] }): Promise<{
-    branch: string;
-    mainSha: string;
-    sourceStagingSha: string;
-  }>;
+  createPromotionBranch(input: { paths: string[] }): Promise<PromotionBranch>;
+  /** Drop the cached branch heads, so the next read fetches production again. */
+  forgetFetched(): void;
 }
 
 interface PromotionGitHubService {
-  createPullRequest(input: {
-    branch: string;
-    mainSha: string;
-    sourceStagingSha: string;
-    paths: string[];
-    title?: string;
-  }): Promise<PromotionPrResponse>;
+  createPullRequest(input: PromotionBranch & { paths: string[]; title?: string }): Promise<PromotionPrResponse>;
 }
 
 export function createPromotionRouteService(
   gitPromotion: PromotionGitService,
   githubPromotion: PromotionGitHubService,
 ): PromotionRouteService {
+  async function promote(input: { paths: string[]; title?: string }): Promise<PromotionPrResponse> {
+    const changes = await gitPromotion.getChanges();
+    const paths = validatePromotionPaths(input.paths, changes.files);
+    const branch = await gitPromotion.createPromotionBranch({ paths });
+    const pr = await githubPromotion.createPullRequest({
+      ...branch,
+      paths,
+      ...(input.title !== undefined ? { title: input.title } : {}),
+    });
+    // An open tab's poll during the merge may have cached production as it was.
+    if (pr.merge === 'merged') gitPromotion.forgetFetched();
+    return pr;
+  }
+
+  // One promotion at a time, each branching from production as the last one
+  // left it: two that overlapped would branch from the same production, and
+  // merging the older one second could leave a file mixing both versions. A
+  // second request is refused rather than queued, because a queued one could
+  // outlast the tunnel's 100 s and then merge with nobody watching.
+  let promoting = false;
+
   return {
     getChanges: () => gitPromotion.getChanges(),
     getStatus: path => gitPromotion.getStatus(path),
     getDiff: path => gitPromotion.getDiff(path),
     async createPromotionPr(input) {
-      const changes = await gitPromotion.getChanges();
-      const paths = validatePromotionPaths(input.paths, changes.files);
-      const branch = await gitPromotion.createPromotionBranch({ paths });
-      return githubPromotion.createPullRequest({
-        branch: branch.branch,
-        mainSha: branch.mainSha,
-        sourceStagingSha: branch.sourceStagingSha,
-        paths,
-        ...(input.title !== undefined ? { title: input.title } : {}),
-      });
+      if (promoting) {
+        throw new PromotionError(
+          409,
+          'Another promotion is under way. Try again when it has finished, in a few seconds.',
+          'promotion_running',
+        );
+      }
+      promoting = true;
+      try {
+        return await promote(input);
+      } finally {
+        promoting = false;
+      }
     },
   };
 }
@@ -118,7 +138,13 @@ export function createApp(config: AppConfig): Hono {
       if (!resp.ok) return c.text(`Upstream error: ${resp.status}`, 502);
       const contentType = resp.headers.get('content-type') ?? 'application/octet-stream';
       const body = await resp.arrayBuffer();
-      return c.body(body, 200, { 'Content-Type': contentType });
+      // Served from the editor's origin: never let a fetched file (an SVG, an
+      // HTML page) run script here. <img> and fetch() are unaffected.
+      return c.body(body, 200, {
+        'Content-Type': contentType,
+        'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+        'X-Content-Type-Options': 'nosniff',
+      });
     } catch (err) {
       return c.text(`Fetch failed: ${err}`, 502);
     }
@@ -164,6 +190,12 @@ export function createApp(config: AppConfig): Hono {
 
   // Read-aloud: a Speechify proxy for any share link (503 without a key).
   app.route('/api/tts', createTtsRoutes());
+
+  // Jev for the check workbench, for edit links (503 without JEV_API_KEY).
+  app.route('/api/jev', createJevRoutes());
+
+  // A Lens Edu file's past versions, from the promote feature's git copy (503 without one).
+  app.route('/api/history', createHistoryRoutes());
 
   // The SPA shell (index.html) references content-hashed asset filenames that
   // change on every deploy, so it must never be cached hard. Serving it

@@ -2,6 +2,7 @@ import type {
   ArticleImportMode,
   ArticleJobStatus,
 } from "../../shared/article-import-contract";
+import type { JobLinkBack } from "../../shared/source-links-contract";
 import type { VideoInput } from "../add-video/video-url";
 
 export type { ArticleImportMode };
@@ -12,8 +13,10 @@ export interface ArticleMeta {
   title: string;
   author: string[];
   source_url: string;
-  published: string; // YYYY-MM-DD, empty if unknown
+  published: string; // YYYY-MM-DD, or YYYY-MM / YYYY when the source states no more; empty if unknown
   description: string; // empty if unknown
+  /** The author's name is genuinely part of the title; set by the reviewer. */
+  allowAuthorInTitle?: boolean;
 }
 
 export interface ArticleJob {
@@ -84,6 +87,13 @@ export interface ArticleJob {
    *  replacing its transcript and timings in place, instead of skipping it as
    *  a duplicate. */
   replaceExisting?: boolean;
+  /** Pages whose links to this source become wikilinks once the job ends. */
+  link_back?: JobLinkBack[];
+  /** Doc id of the page whose link-back created the job; absent for an import
+   *  started anywhere else (the Add Source page, an agent without link_from).
+   *  Only that page's Stop may cancel the job, and only while no other page
+   *  waits on it. */
+  started_by?: string;
   created_at: string;
   updated_at: string;
 }

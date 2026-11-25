@@ -302,6 +302,42 @@ describe("revertProtectedEdits — frontmatter", () => {
     expect(result.meta.description).toBe("Better description");
   });
 
+  it("lets a reviewer add allowAuthorInTitle, and carries it into meta", () => {
+    const body = `${NOTE_PLACEHOLDER}\n\nBody text.`;
+    const added = doc(body, FRONTMATTER.replace("tags:", "allowAuthorInTitle: true\ntags:"));
+    const result = revertProtectedEdits(doc(body), added);
+    expect(result.reverted).toEqual([]);
+    expect(result.meta.allowAuthorInTitle).toBe(true);
+  });
+
+  it("protects allowAuthorInTitle once set", () => {
+    const body = `${NOTE_PLACEHOLDER}\n\nBody text.`;
+    const set = doc(body, FRONTMATTER.replace("tags:", "allowAuthorInTitle: true\ntags:"));
+    const result = revertProtectedEdits(set, doc(body));
+    expect(result.reverted.map((r) => r.detail)).toEqual(["restored removed frontmatter field allowAuthorInTitle"]);
+    expect(result.meta.allowAuthorInTitle).toBe(true);
+  });
+
+  it("reverts allowAuthorInTitle with a value other than true", () => {
+    const body = `${NOTE_PLACEHOLDER}\n\nBody text.`;
+    const edited = doc(body, FRONTMATTER.replace("tags:", 'allowAuthorInTitle: "yes"\ntags:'));
+    const result = revertProtectedEdits(doc(body), edited);
+    expect(result.reverted.map((r) => r.detail)).toEqual(["removed added frontmatter field allowAuthorInTitle"]);
+    expect(result.meta.allowAuthorInTitle).toBeUndefined();
+  });
+
+  // Prevents: a whole review pass failing because the source states only a
+  // month or a year, which Lens accepts.
+  it("accepts a date as precise as the source states, and nothing malformed", () => {
+    const body = `${NOTE_PLACEHOLDER}\n\nBody text.`;
+    const withDate = (date: string) => doc(body, FRONTMATTER.replace("published: 2026-06-16", `published: ${date}`));
+    expect(revertProtectedEdits(doc(body), withDate("2020-09")).meta.published).toBe("2020-09");
+    expect(revertProtectedEdits(doc(body), withDate("1998")).meta.published).toBe("1998");
+    expect(revertProtectedEdits(doc(body), withDate("2014-07-05")).meta.published).toBe("2014-07-05");
+    expect(() => revertProtectedEdits(doc(body), withDate("2020-13"))).toThrow("invalid date");
+    expect(() => revertProtectedEdits(doc(body), withDate("sometime"))).toThrow("invalid date");
+  });
+
   it("still enforces non-negotiable shape errors (empty title/body)", () => {
     const edited = doc("Body.", FRONTMATTER.replace('title: "Old Title"', 'title: ""'));
     expect(() => revertProtectedEdits(doc("Body."), edited)).toThrow("title");

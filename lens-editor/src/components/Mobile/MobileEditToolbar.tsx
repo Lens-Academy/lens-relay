@@ -99,7 +99,7 @@ export function MobileEditToolbar({ view, onAddComment }: MobileEditToolbarProps
   return createPortal(
     <div
       id="mobile-edit-toolbar"
-      className="fixed inset-x-0 z-30 flex items-center overflow-x-auto bg-[#f6f6f6] border-t border-gray-200 px-1"
+      className="fixed inset-x-0 z-30 flex items-center overflow-x-auto bg-[var(--lens-sidebar-bg)] border-t border-gray-200 px-1"
       style={{ bottom: bottomOffset }}
     >
       {onAddComment && (

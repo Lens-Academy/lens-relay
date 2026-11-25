@@ -1,0 +1,14 @@
+{
+ "chart": {
+  "title": "Affiliation of research teams building notable AI systems, by year of publication"
+ },
+ "columns": {
+  "yearly_count": {
+   "shortName": "yearly_count",
+   "titleShort": "Annual number of AI systems by researcher affiliation",
+   "shortUnit": "",
+   "unit": "AI systems",
+   "citationShort": "Epoch AI (2026) – with major processing by Our World in Data"
+  }
+ }
+}

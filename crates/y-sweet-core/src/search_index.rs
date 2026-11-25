@@ -9,6 +9,9 @@ use tantivy::schema::{Field, Schema, TextFieldIndexing, TextOptions, Value, STOR
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 
+/// Ranked hits read per round by [`SearchIndex::search_in_folder`].
+const SEARCH_FOLDER_PAGE: usize = 100;
+
 /// A single search result with relevance score and snippet.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
@@ -172,15 +175,65 @@ impl SearchIndex {
     /// (e.g. title-only matches), falls back to a manual substring search
     /// that extracts context around the first matching query term.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        self.search_in_folder(query, limit, None)
+    }
+
+    /// Like [`Self::search`], restricted to documents whose stored folder
+    /// name equals `folder` (`None` = every folder).
+    ///
+    /// The folder field is stored, not indexed, so the filter runs on ranked
+    /// hits: it pages through them until `limit` hits from `folder` are found
+    /// or the hits run out. Hits from other folders never reach the snippet
+    /// generator or the result.
+    pub fn search_in_folder(
+        &self,
+        query: &str,
+        limit: usize,
+        folder: Option<&str>,
+    ) -> Result<Vec<SearchResult>> {
         // Guard: empty or whitespace-only queries return nothing
-        if query.trim().is_empty() {
+        if query.trim().is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
 
         let (parsed_query, _errors) = self.query_parser.parse_query_lenient(query);
 
         let searcher = self.reader.searcher();
-        let top_docs = searcher.search(&parsed_query, &TopDocs::with_limit(limit))?;
+        let top_docs: Vec<(f32, TantivyDocument)> = match folder {
+            None => searcher
+                .search(&parsed_query, &TopDocs::with_limit(limit))?
+                .into_iter()
+                .map(|(score, addr)| Ok((score, searcher.doc(addr)?)))
+                .collect::<Result<_>>()?,
+            Some(folder) => {
+                let page = limit.max(SEARCH_FOLDER_PAGE);
+                let mut kept = Vec::with_capacity(limit);
+                let mut offset = 0;
+                loop {
+                    let hits = searcher
+                        .search(&parsed_query, &TopDocs::with_limit(page).and_offset(offset))?;
+                    let exhausted = hits.len() < page;
+                    for (score, addr) in hits {
+                        let retrieved: TantivyDocument = searcher.doc(addr)?;
+                        let in_folder = retrieved
+                            .get_first(self.folder_field)
+                            .and_then(|v| v.as_str())
+                            == Some(folder);
+                        if in_folder {
+                            kept.push((score, retrieved));
+                            if kept.len() == limit {
+                                break;
+                            }
+                        }
+                    }
+                    if kept.len() == limit || exhausted {
+                        break;
+                    }
+                    offset += page;
+                }
+                kept
+            }
+        };
 
         // Set up snippet generator for the body field
         let mut snippet_generator =
@@ -195,9 +248,7 @@ impl SearchIndex {
             .collect();
 
         let mut results = Vec::with_capacity(top_docs.len());
-        for (score, doc_address) in top_docs {
-            let retrieved: TantivyDocument = searcher.doc(doc_address)?;
-
+        for (score, retrieved) in top_docs {
             let doc_id = retrieved
                 .get_first(self.doc_id_field)
                 .and_then(|v| v.as_str())

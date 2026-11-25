@@ -102,6 +102,22 @@ describe('remoteCarets', () => {
     expect(caret(view)!.classList.contains('cm-ySelectionCaret-fresh')).toBe(false);
   });
 
+  it('never draws the own caret, also after the doc rotated its clientID', () => {
+    const { view, local, ytext } = setup();
+    view.focus();
+    view.dispatch({ selection: { anchor: 4 } });
+    expect(local.getLocalState()!.cursor).toBeTruthy();
+    expect(caret(view)).toBeNull();
+
+    // Provenance moves the doc to a fresh clientID at midnight or on a name
+    // change; the awareness keeps publishing under its original one.
+    ytext.doc!.clientID = local.clientID + 100;
+    view.dispatch({ selection: { anchor: 6 } });
+    local.emit('change', [{ added: [], updated: [local.clientID], removed: [] }, 'local']);
+    view.dispatch({ changes: { from: 0, insert: 'x' } });
+    expect(caret(view)).toBeNull();
+  });
+
   it('publishes the local cursor through toAbs and reads remote ones through toCm', () => {
     // The view shows text[3..8) of "hello world" ("lo wo").
     const { view, local, moveRemote, ytext } = setup('hello world', {

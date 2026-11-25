@@ -49,6 +49,7 @@ export function MobileNavBar({ onOpenQuickSwitcher }: MobileNavBarProps) {
       : []),
     ...(access.review ? [{ label: 'Review suggestions', action: () => navigate('/review') }] : []),
     ...(access.recent ? [{ label: 'Recent changes', action: () => navigate('/recent') }] : []),
+    ...(access.conceptMap ? [{ label: 'Concept map', action: () => navigate('/concept-map') }] : []),
     ...(access.promote ? [{ label: 'Promote to production', action: () => navigate('/promote') }] : []),
     ...(access.addSource ? [{ label: 'Add source', action: () => navigate('/add-source') }] : []),
   ];
@@ -59,7 +60,7 @@ export function MobileNavBar({ onOpenQuickSwitcher }: MobileNavBarProps) {
   return (
     <nav
       id="mobile-nav-bar"
-      className="flex-shrink-0 flex items-stretch bg-[#f6f6f6] border-t border-gray-200"
+      className="flex-shrink-0 flex items-stretch bg-[var(--lens-sidebar-bg)] border-t border-gray-200"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       aria-label="Mobile navigation"
     >

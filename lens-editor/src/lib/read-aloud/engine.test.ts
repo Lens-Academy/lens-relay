@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ReadAloudEngine, prefetchDepthFor, type FetchSpeech, type ReadAloudHighlight } from './engine';
+import { LOOKAHEAD_SECONDS, PAGE_SOURCE, ReadAloudEngine, prefetchDepthFor, type FetchSpeech, type ReadAloudHighlight } from './engine';
 import { TtsUnavailableError, type StreamEvent } from './api';
 import type { PcmPlayer } from './player';
 
@@ -82,14 +82,14 @@ describe('ReadAloudEngine', () => {
     await flush();
     player.playbackTime = 0.6;
     runFrame();
-    expect(highlights.at(-1)).toEqual({ unit: 0, word: { start: 6, end: 10 } });
+    expect(highlights.at(-1)).toEqual({ source: PAGE_SOURCE, unit: 0, word: { start: 6, end: 10 } });
     player.playbackTime = 1.1;
     runFrame();
-    expect(highlights.at(-1)).toEqual({ unit: 1, word: { start: 0, end: 5 } });
+    expect(highlights.at(-1)).toEqual({ source: PAGE_SOURCE, unit: 1, word: { start: 0, end: 5 } });
     expect(engine.getSnapshot()).toMatchObject({ current: 1, status: 'playing' });
     engine.setPrefs({ highlightMode: 'sentence' });
     runFrame();
-    expect(highlights.at(-1)).toEqual({ unit: 1, word: null });
+    expect(highlights.at(-1)).toEqual({ source: PAGE_SOURCE, unit: 1, word: null });
   });
 
   it('stops at the end, when the player has played everything', async () => {
@@ -102,6 +102,83 @@ describe('ReadAloudEngine', () => {
     player.onEmpty?.();
     expect(engine.getSnapshot()).toMatchObject({ status: 'idle', current: null, open: true });
     expect(highlights.at(-1)).toBeNull();
+  });
+
+  it('fetches only a little ahead of what is heard, also after a jump', async () => {
+    const { engine, player, requested } = setup();
+    const units = Array.from({ length: 300 }, (_, i) => ({ text: `Sentence ${i}` }));
+    engine.setUnits(units);
+    engine.play(0);
+    await flush();
+    // Each sentence is 1 s of audio: queued up to the look-ahead, plus a few being fetched.
+    const ahead = LOOKAHEAD_SECONDS + prefetchDepthFor(1.5) + 2;
+    expect(requested.length).toBeLessThanOrEqual(ahead);
+    expect(player.queued.length).toBeGreaterThanOrEqual(LOOKAHEAD_SECONDS);
+
+    // Playback moves on: the queue is topped up.
+    player.playbackTime = 30;
+    runFrame();
+    await flush();
+    expect(requested.length).toBeGreaterThan(ahead);
+    expect(requested.length).toBeLessThanOrEqual(30 + ahead);
+
+    // A click on a later sentence costs the sentences near it, not the rest of the page.
+    requested.length = 0;
+    engine.play(200);
+    await flush();
+    expect(requested[0]).toBe('Sentence 200');
+    expect(requested.length).toBeLessThanOrEqual(ahead);
+  });
+
+  it('tops up the queue on the player\'s progress reports alone (a background tab has no frames)', async () => {
+    const { engine, player, requested } = setup();
+    engine.setUnits(Array.from({ length: 100 }, (_, i) => ({ text: `Sentence ${i}` })));
+    engine.play(0);
+    await flush();
+    const queued = player.queued.length;
+    const fetched = requested.length;
+    player.playbackTime = 20;
+    (player as unknown as { onProgress: (() => void) | null }).onProgress?.();
+    await flush();
+    expect(player.queued.length).toBeGreaterThan(queued);
+    expect(requested.length).toBeGreaterThan(fetched);
+  });
+
+  it('queues a sentence inserted right after the last queued one', async () => {
+    const { engine, player, requested } = setup();
+    const units = Array.from({ length: 40 }, (_, i) => ({ text: `Sentence ${i}` }));
+    engine.setUnits(units);
+    engine.play(0);
+    await flush();
+    const at = player.queued.length; // the first unit not queued yet
+    engine.setUnits([...units.slice(0, at), { text: 'Inserted i' }, ...units.slice(at)], null);
+    player.playbackTime = 10;
+    runFrame();
+    await flush();
+    expect(requested).toContain('Inserted i');
+  });
+
+  it('keeps playing when an edit removes the sentence waiting to be queued', async () => {
+    const { engine, player, requested } = setup();
+    const units = Array.from({ length: 40 }, (_, i) => ({ text: `Sentence ${i}` }));
+    engine.setUnits(units);
+    engine.play(0);
+    await flush();
+    const queued = player.queued.length;
+    const next = queued; // 1 s sentences, no pauses: the first one not queued yet
+    const edited = units.filter((_, i) => i !== next);
+    engine.setUnits(edited, null);
+    expect(player.queued.length).toBe(queued); // no restart
+    requested.length = 0;
+    player.playbackTime = 10;
+    runFrame();
+    await flush();
+    expect(player.queued.length).toBeGreaterThan(queued);
+    expect(requested).not.toContain(`Sentence ${next}`);
+
+    // An edit that ends the page with what is queued drains it.
+    engine.setUnits(edited.slice(0, player.queued.length), null);
+    expect(player.drained).toBe(true);
   });
 
   it('skips and pauses', async () => {
@@ -180,5 +257,62 @@ describe('ReadAloudEngine', () => {
     engine.play(0);
     await flush();
     expect(requested).toEqual(['The A.S.I. risk']);
+  });
+
+  it('reads another source (a comment), then is back on the page where it was', async () => {
+    const { engine, player, requested, highlights } = setup();
+    engine.setUnits([{ text: 'Page one' }, { text: 'Page two' }, { text: 'Page three' }]);
+    engine.playPage(1);
+    await flush();
+    runFrame();
+    expect(highlights.at(-1)).toMatchObject({ source: PAGE_SOURCE, unit: 1 });
+
+    requested.length = 0;
+    engine.playOther('comment:t1', [{ text: 'Nice point' }, { text: 'Agreed' }], 0);
+    await flush();
+    expect(requested).toEqual(['Nice point', 'Agreed']);
+    expect(engine.getSnapshot()).toMatchObject({ source: 'comment:t1', unitCount: 2 });
+    runFrame();
+    expect(highlights.at(-1)).toMatchObject({ source: 'comment:t1', unit: 0 });
+
+    // The page changes meanwhile: kept for later, not read now.
+    engine.setUnits([{ text: 'Page one' }, { text: 'Page two' }, { text: 'Page three' }, { text: 'Page four' }]);
+    expect(engine.getSnapshot().unitCount).toBe(2);
+
+    // The comment ends: back on the page, and Play goes on from page sentence 1.
+    player.onEmpty?.();
+    expect(engine.getSnapshot()).toMatchObject({ source: PAGE_SOURCE, status: 'idle', unitCount: 4 });
+    requested.length = 0;
+    engine.play();
+    await flush();
+    expect(requested[0]).toBe('Page two');
+  });
+
+  it('goes from a comment straight back to a clicked page sentence', async () => {
+    const { engine, requested } = setup();
+    engine.setUnits([{ text: 'Page one' }, { text: 'Page two' }]);
+    engine.playPage(0);
+    engine.playOther('comment:t1', [{ text: 'Hello' }]);
+    requested.length = 0;
+    engine.playPage(1);
+    await flush();
+    expect(engine.getSnapshot().source).toBe(PAGE_SOURCE);
+    expect(requested[0]).toBe('Page two');
+  });
+
+  it('resumes the page at the same sentence after an edit above it during a comment', async () => {
+    const { engine, requested } = setup();
+    engine.setUnits([{ text: 'Page one' }, { text: 'Page two' }, { text: 'Page three' }]);
+    engine.playPage(2);
+    await flush();
+    runFrame();
+    engine.playOther('comment:t1', [{ text: 'Hello' }]);
+    // Two sentences inserted above; the caller's mapping (here a stale one) is only a hint.
+    engine.setUnits([{ text: 'New a' }, { text: 'New b' }, { text: 'Page one' }, { text: 'Page two' }, { text: 'Page three' }], 0);
+    engine.stop();
+    requested.length = 0;
+    engine.play();
+    await flush();
+    expect(requested[0]).toBe('Page three');
   });
 });

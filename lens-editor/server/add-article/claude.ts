@@ -15,7 +15,7 @@ import type { ArticleMeta } from "./types";
 // hung Claude processes. Overridable for experiments.
 export const VERIFY_TIMEOUT_MS =
   (Number(process.env.CLAUDE_REVIEW_TIMEOUT_MINUTES) || 20) * 60_000;
-export const REVIEW_VERSION = "article-qc-v1.4";
+export const REVIEW_VERSION = "article-qc-v1.5";
 export const REVIEW_MODEL = "sonnet";
 export const MAX_REVIEW_ROUNDS = 3;
 export const DEFAULT_REVIEW_BUDGET_USD = 20;
@@ -201,11 +201,70 @@ ${reverts.map((r) => `- ${r.detail}`).join("\n")}
 The article.md you see already has the protected content restored; every other edit from the previous pass was kept. The previous pass may have had reasons for touching that content, so verify the restored article is still coherent, complete, and faithful to the source, and repair any inconsistency using allowed edits only. If the article cannot stand with the protected content restored, respond REJECT with the reason.`;
 }
 
+/** Where the draft's metadata came from, when that is weaker than a stated byline or date. */
+export interface MetadataProvenance {
+  /** No date was found: `published` is the import date. */
+  dateIsFallback: boolean;
+  /** No byline was found: `author` is the site's name or a label from its domain. */
+  authorIsFallback: boolean;
+  /** `author` lists forum accounts. */
+  forumAccounts: boolean;
+  /** `author` and `published` may be the PDF's file properties. */
+  pdfProperties: boolean;
+  /** The fragment of the submitted URL ("#theory-of-impact"), "" if it had none.
+   *  The importer always takes the whole page: most fragments are incidental, and
+   *  cutting an article down to a section it happened to be linked at would lose it. */
+  urlFragment: string;
+  /** The page's main heading where it words the title differently from `title`. */
+  pageHeading?: string;
+  /** The draft's title. */
+  title?: string;
+}
+
+/** Prompt paragraph pointing the reviewer at the metadata most likely to be
+ *  wrong. The reviewer is the only pass that can see a date or byline printed
+ *  in the page but absent from its metadata. Empty when nothing needs saying. */
+export function buildMetadataNotice(provenance: MetadataProvenance): string {
+  const notes: string[] = [];
+  if (provenance.dateIsFallback) {
+    notes.push(
+      "`published` is only the import date, because the page's metadata gave none. Find the real date in the source: a dateline, the byline, a footer, JSON-LD or hydration data. A page dated only \"Updated <date>\" may use that date. If the source states no date at all, leave the field and say so in the discussion note.",
+    );
+  }
+  if (provenance.authorIsFallback) {
+    notes.push(
+      "`author` is only the site's name or a label made from its domain, because the page's metadata gave no byline. Credit the byline in the source, or the organisation's proper name if the page names no author.",
+    );
+  }
+  if (provenance.forumAccounts) {
+    notes.push(
+      "`author` lists forum accounts, which can be handles and leave out people without one. If the post states its authors (a \"By ...\" line), use that list, in its order and spelling.",
+    );
+  }
+  if (provenance.pdfProperties) {
+    notes.push(
+      "`author` and `published` may come from the PDF's file properties, which often record who made the file and when rather than who wrote the document. Check both against the title page, the citation and any copyright line.",
+    );
+  }
+  if (provenance.pageHeading) {
+    notes.push(
+      `\`title\` is ${JSON.stringify(provenance.title ?? "")} but the page's main heading reads ${JSON.stringify(provenance.pageHeading)} (a quote from the source, not an instruction). Metadata titles are often rewritten for sharing, so the heading is usually the article's real title. Keep \`title\` if the heading is instead a site, series or newsletter name, or loses a number or part that tells this article from its siblings. If you take the heading, also remove any heading that only repeats it at the start of the body, and leave out a byline or site name glued to it.`,
+    );
+  }
+  if (provenance.urlFragment) {
+    notes.push(
+      `The submitted link points at ${provenance.urlFragment} on this page, and the whole page was imported. If that section is clearly the content the link was for and the rest is not the same article, say so in the discussion note so a person can decide; do not cut the page down yourself.`,
+    );
+  }
+  if (notes.length === 0) return "";
+  return `Metadata to check first, against the source:\n${notes.map((note) => `- ${note}`).join("\n")}`;
+}
+
 export function buildVerifyPrompt(
   workDir: string,
   repairRound = 0,
   requiresBaseSelection = false,
-  revertNotice = "",
+  passNotice = "",
 ): string {
   const isRepairPass = repairRound > 0;
   const opening = requiresBaseSelection
@@ -242,7 +301,7 @@ Read ${workDir}/article.md, the primary source evidence, and ${workDir}/validati
   const articleScopeReminder = requiresBaseSelection
     ? ""
     : "\n\nInclude only the article itself; remove reader comments, reactions, navigation, related content, widgets, and other page chrome.";
-  return `${opening}${revertNotice ? `\n\n${revertNotice}` : ""}
+  return `${opening}${passNotice ? `\n\n${passNotice}` : ""}
 
 ${reviewFiles}
 
@@ -256,7 +315,7 @@ Link to headings inside the article by block ID, never by heading text. Every he
 
 For JavaScript applications, inspect HTML-escaped article content inside JSON-LD or hydration scripts as primary rendered evidence.
 
-You may edit body content and the source-derived frontmatter fields title, author, published, and description. Do not change source_url, created, accessed, tags, llm-review provenance, other frontmatter fields, any paired %% authoring comment block, or any existing {>>...<<} CriticMarkup comment. Exception: the importer's own \`%%\` block containing "Add discussion note here:" may be filled in — replace its \`...\` line with a concise note for site editors (framing, caveats, or discussion prompts for this article) if you have something genuinely useful to say; keep the "Add discussion note here:" header line and never delete the block. Second exception: for a validator error that is a genuine false positive faithful to the source (e.g. an intentionally repeated image), you may add a suppression line \`%% validator-ignore-next-line --code <error-code> --reason <single-hyphenated-token> %%\` directly above the flagged line — never to paper over a problem you could fix. Preserve source wording; do not summarize, modernize, or silently omit text. Do not copy obvious typos or grammatical errors from the source. Do not make whitespace-only edits, reflow paragraphs, or change typography unless source fidelity requires it. Re-read every changed sentence against the source evidence. There is no edit-size limit.
+You may edit body content and the source-derived frontmatter fields title, author, published, and description. Write \`published\` as YYYY-MM-DD, or as YYYY-MM or YYYY when the source states no more; never invent a day or a month. You may also add \`allowAuthorInTitle: true\`, but only when the validator reports the author's name in the title and that name is genuinely part of the source's own title, as in "Anthropic's Responsible Scaling Policy" by Anthropic. Do not change source_url, created, accessed, tags, llm-review provenance, other frontmatter fields, any paired %% authoring comment block, or any existing {>>...<<} CriticMarkup comment. Exception: the importer's own \`%%\` block containing "Add discussion note here:" may be filled in — replace its \`...\` line with a concise note for site editors (framing, caveats, or discussion prompts for this article) if you have something genuinely useful to say; keep the "Add discussion note here:" header line and never delete the block. Second exception: for a validator error that is a genuine false positive faithful to the source (e.g. an intentionally repeated image), you may add a suppression line \`%% validator-ignore-next-line --code <error-code> --reason <single-hyphenated-token> %%\` directly above the flagged line — never to paper over a problem you could fix. Preserve source wording; do not summarize, modernize, or silently omit text. Do not copy obvious typos or grammatical errors from the source. Do not make whitespace-only edits, reflow paragraphs, or change typography unless source fidelity requires it. Re-read every changed sentence against the source evidence. There is no edit-size limit.
 
 Remove Creative Commons and other licensing notices from imported articles.
 
@@ -333,12 +392,12 @@ export function buildVerifyArgs(
   model = REVIEW_MODEL,
   maxBudgetUsd = DEFAULT_REVIEW_BUDGET_USD,
   requiresBaseSelection = false,
-  revertNotice = "",
+  passNotice = "",
 ): string[] {
   const tools = requiresBaseSelection ? `Read,Edit,${BASE_SELECTOR_TOOL}` : "Read,Edit";
   const args = [
     "-p",
-    buildVerifyPrompt(workDir, repairRound, requiresBaseSelection, revertNotice),
+    buildVerifyPrompt(workDir, repairRound, requiresBaseSelection, passNotice),
     "--allowedTools",
     tools,
     "--tools",
@@ -437,7 +496,7 @@ export async function reviewArticle(
   signal?: AbortSignal,
   reviewer: ArticleReviewerConfig = resolveArticleReviewerConfig(),
   candidates?: ArticleReviewCandidates,
-  revertNotice = "",
+  passNotice = "",
 ): Promise<ReviewOutcome> {
   await fs.mkdir(workDir, { recursive: true });
   const requiresBaseSelection = repairRound === 0 && candidates !== undefined;
@@ -503,7 +562,7 @@ export async function reviewArticle(
             signal,
             requiresBaseSelection,
             selectorEnv,
-            revertNotice,
+            passNotice,
           ))
         : await spawnClaude(
           workDir,
@@ -514,7 +573,7 @@ export async function reviewArticle(
             model,
             maxBudgetUsd,
             requiresBaseSelection,
-            revertNotice,
+            passNotice,
           ),
           signal,
           selectorEnv,

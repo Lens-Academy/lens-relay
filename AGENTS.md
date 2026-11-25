@@ -49,7 +49,7 @@ docs/                 # Operational documentation
 | Component | Location | Description |
 |-----------|----------|-------------|
 | **relay-server** | `crates/` | Rust-based CRDT sync server (y-sweet). Custom HMAC auth fixes for service accounts. |
-| **lens-editor** | `lens-editor/` | Web-based editor for relay documents. React + CodeMirror + yjs. Connects to relay-server via WebSocket. Includes Discord API proxy bridge (Express backend) and the import APIs the relay MCP tools proxy to: `/api/add-article` (`import_source`, `import_status`) and `/api/attachments/import` (`import_attachment`). |
+| **lens-editor** | `lens-editor/` | Web-based editor for relay documents. React + CodeMirror + yjs. Connects to relay-server via WebSocket. Includes Discord API proxy bridge (Express backend) and the import APIs the relay MCP tools proxy to: `/api/add-article` (`import_source`, `import_status`, and `link_from` link-backs) and `/api/attachments/import` (`import_attachment`). |
 | **relay-git-sync** | External: `No-Instructions/relay-git-sync` | Syncs relay shared folders to GitHub repos via webhooks. Runs as Docker container on production server. |
 | **Relay.md plugin** | External: `No-Instructions/Relay` | Obsidian plugin for real-time collaboration via relay-server. |
 
@@ -58,7 +58,7 @@ docs/                 # Operational documentation
 - **Relay server URL:** https://relay.lensacademy.org
 - **Production server:** Hetzner VPS (46.224.127.155), Docker containers
 - **Storage:** Cloudflare R2 bucket `lens-relay-storage`
-- **Backups:** hourly/daily/weekly snapshots in R2 bucket `lens-relay-backups`, copied inside Cloudflare by `scripts/r2-backup.sh`; see the Backups section of `docs/server-ops.md`
+- **Backups:** daily and weekly full copies, and hourly copies of what changed, in R2 bucket `lens-relay-backups`, made inside Cloudflare by `scripts/r2-backup.sh`; restore with `scripts/r2-backup-restore.sh`, which does nothing until confirmed: show the owner the plan it prints and get a yes before you add `--confirm`, and again before you copy anything into `lens-relay-storage`; see the Backups section of `docs/server-ops.md`
 - **Tunnel:** Cloudflare Tunnel (no inbound ports needed)
 - **Relay ID:** `cb696037-0f72-4e93-8717-4e433129d789`
 - **Relay watchdog:** Detects when `relay-server` is running but unresponsive and automatically restarts it; see `docs/relay-watchdog.md`.
@@ -241,7 +241,7 @@ backlinks are the ones persisted before the restart, refreshed doc by doc. Rules
   a worker that is waiting for the lock as alive, but everything else queues behind the holder.
 
 **Attachments over MCP** (`crates/relay/src/mcp/tools/import_attachment.rs`,
-`lens-editor/server/attachments/`): `import_attachment` hosts png/jpeg/gif/webp under
+`lens-editor/server/attachments/`): `import_attachment` hosts png/jpeg/gif/webp/svg (svg sanitized) under
 `<folder>/attachments/` from a URL or base64 (magic-byte sniffing, sha256 dedup, 5 MiB
 soft / 20 MiB hard, `overwrite` keeps the file id), `read` returns image attachments as
 MCP image blocks, and `POST /doc/attachment` answers 409 on same-path-different-bytes.
@@ -272,11 +272,30 @@ Only the production server writes synced files: the Vite dev server syncs only i
 a whole course is not one article, so it has its own steps, named in `iliad/types.ts`: read the published
 site at one source commit (`snapshot.ts`), turn each worksheet's built MDX into Lens markdown (`convert.ts`),
 group it into lenses (`plan.ts`), and compose, move and write the lens, module and course files
-(`course-files.ts`). Learner progress is keyed on a lens `id`, so a lens is pinned to the place it starts at
+(`course-files.ts`). Readings the source offers as a choice go into a `# Choose:` group: `choices.ts`
+reads the text, `arrangeChoices` in `course-files.ts` writes the groups. Learner progress is keyed on a lens `id`, so a lens is pinned to the place it starts at
 in the source (`upstream_key` in its frontmatter) and found again by its text when that place is renamed;
 nothing but the files records which lenses exist. Off until `ILIAD_SYNC_COURSE` names the course file; only
 the production server writes, and `npx tsx scripts/iliad-sync.ts` runs it against a directory. Operating it:
 `docs/server-ops.md`, "Iliad course sync".
+
+**Import and link sources** (`docs/plans/2026-11-02-import-and-link-sources.md`,
+`lens-editor/src/components/SourceLinksBar/`, `lens-editor/server/add-article/source-links.ts`,
+`crates/relay/src/server/link_source.rs`, `crates/relay/src/mcp/tools/source_link_note.rs`): whoever adds a link to an
+external article or video on a Markdown page gets a one-line offer in the editor, once per link, and `create`/`edit` end
+with the same offer for agents. Nothing is imported unless someone accepts, and links already on a page, or added by
+someone else, are never offered (the editor goes by who wrote the URL's characters).
+Accepting imports each source and replaces its link with a wikilink, directly for a person and through the edit policy
+for an agent. `POST /api/add-article` with `linkBack` (MCP `import_source` with `link_from`) links what is already in the
+library at once and records a link-back on the job for the rest, so the server finishes the swap (`POST /doc/link-source`)
+after the tab is closed. A failed import leaves the link as it was. Pages under `Lens Edu/` are refused, because the
+platform leaves a wikilink to an article as literal text. A dismissal is for everyone, through the page's `link_offers_v0` map; an ignored
+offer, and an accepted import's end, are remembered per browser. The library lookup is an in-memory index on the editor server, refreshed from
+`POST /doc/frontmatters` at most every 15 minutes (`server/add-article/library-index.ts`), and matches more strictly
+than the importer's dedup (`sameSource`), because a wrong match rewrites a page. The scanner exists twice,
+`shared/external-links.ts` and `crates/y-sweet-core/src/external_links.rs`, and both run
+`shared/external-link-cases.json`. Deploy the relay before the editor: without the two relay endpoints, lookups stay
+empty and swaps end `failed`.
 
 **Trash instead of delete** (`crates/relay/src/server/trash.rs`,
 `crates/relay/src/mcp/tools/delete_doc.rs`): the MCP `delete` tool (Admin/Edit only)
@@ -311,12 +330,16 @@ resolves / re-anchors, and `edit` warns when it removes quoted text. Measure anc
 
 **Read-aloud in the editor** (`lens-editor/src/lib/read-aloud/`, `server/tts/`): a Listen button on Markdown and HTML
 pages plays the page through Speechify (simba-3.2, the platform's model and voice), sentence by sentence with word
-highlighting, after lens-platform's immersion reader but without its audio cache. The editor server proxies
+highlighting, after lens-platform's immersion reader but without its audio cache. It queues at most
+`LOOKAHEAD_SECONDS` (15 s) of audio ahead of what is heard, so a jump, restart or speed change throws away little
+(the per-link cap counts every sentence requested). The editor server proxies
 `POST /api/tts/stream` (any valid share link; `SPEECHIFY_API_KEY`, per-link hourly character cap
 `TTS_CHARS_PER_HOUR`); without the key the button hides. Markdown: `Editor/extensions/readAloud.ts` maps sentences to
 source positions (`markdown-reading.ts`), so it works with CodeMirror's virtualised DOM. HTML: the preview frame's
 `bridge/tts-layer.ts` sends the page's sentences to the parent and draws highlights and hover play buttons inside the
 frame. While audio plays a click jumps to the sentence; otherwise clicks behave as usual.
+A click on a comment's text while audio plays reads that thread from there and then stops, with Play going back to
+the page where it was (`Comments/commentReadAloud.ts`, the engine's `playOther`).
 
 **Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
 - The MCP `edit` tool applies Markdown edits directly when they only add text or change
@@ -337,6 +360,11 @@ editor and the platform validator; see `docs/concept-relationships.md` before ch
 A `read` of a concept file starts with its place in the concept graph (`parent-concepts:` frontmatter: parent concepts with
 their paths up, child concepts with counts; `crates/relay/src/mcp/tools/concept_graph.rs`), computed like the editor's
 header; same doc, "Concept graph" (parsing rules tagged "concept graph rules v1 #N" in both).
+
+**Cap transcripts in MCP `read`** (`crates/relay/src/mcp/tools/cap_transcripts.rs`): a `read` of a document that links
+Cap videos (`cap.so/s/<id>`) ends with each video's transcript, which Cap makes itself and serves for public shares. A
+transcript not ready yet, or a private or silent video, gets a one-line reason instead; finished transcripts are cached in
+memory. lens-platform's `core/cap_recordings.py` reads Cap the same way for links posted in Discord.
 
 **Course checks in MCP replies** (`crates/relay/src/mcp/tools/course_checks.rs`): an MCP
 `edit` or `create` of a `Lens Edu/**/*.md` file other than an article ends with lens-platform's

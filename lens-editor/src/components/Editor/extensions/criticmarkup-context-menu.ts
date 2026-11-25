@@ -1,6 +1,8 @@
 // src/components/Editor/extensions/criticmarkup-context-menu.ts
 import type { EditorView } from '@codemirror/view';
-import { findRangeAtPosition, bulkChangeCount, acceptChangeAtCursor, rejectChangeAtCursor } from './criticmarkup-commands';
+import { findRangeAtPosition, bulkChangeCount, acceptChangeAtCursor, rejectChangeAtCursor, resolveCommentAt } from './criticmarkup-commands';
+import { canAcceptRejectFacet, criticMarkupField } from './criticmarkup';
+import { commentThreadAt } from '../../../lib/criticmarkup-parser';
 
 export interface ContextMenuItem {
   label: string;
@@ -10,8 +12,8 @@ export interface ContextMenuItem {
 
 /**
  * Get context menu items for CriticMarkup: the accept/reject of the ✓ ✗
- * buttons there. None on a comment, which has no ✓ ✗ (accepting or rejecting
- * a comment deletes it).
+ * buttons there, which never act on a comment; on a comment or the text it is
+ * on, Resolve Comment instead.
  *
  * @param view - The EditorView instance
  * @param atPosition - Optional position to check (for right-click). If not provided, uses cursor position.
@@ -45,8 +47,15 @@ export function getContextMenuItems(view: EditorView, atPosition?: number, targe
   const pos = atPosition ?? view.state.selection.main.head;
   const range = findRangeAtPosition(view, pos);
 
-  if (!range || range.type === 'comment') {
+  if (!range) {
     return [];
+  }
+
+  // A comment, or the text it highlights: resolving removes both, keeping
+  // the text (for those who may accept changes)
+  if (commentThreadAt(view.state.field(criticMarkupField), pos).length > 0) {
+    if (!view.state.facet(canAcceptRejectFacet)) return [];
+    return [{ label: 'Resolve Comment', action: () => resolveCommentAt(view, pos) }];
   }
 
   // If we're checking a click position different from cursor,

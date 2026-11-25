@@ -2,7 +2,8 @@
  * For the file-step tests: a course of four worksheets shaped like the hand
  * import (cluster A with a module per day, cluster B as one module with a
  * submodule per day), files kept in memory, and a "source" made from what a
- * course already says, so that a test changes only what it is about.
+ * course already says, so that a test changes only what it is about. Its
+ * cards are plain cards; a test about the hand import's card list makes one.
  */
 
 import type { SyncInput } from "../../course-files";
@@ -64,8 +65,8 @@ provenance_recorded_at: '2026-10-08'
 ${body}
 `;
 const text = (markdown: string) => `#### Text\ncontent::\n${markdown}`;
-const reading = (id: string) => `---\nid: ${id}\ntitle: "${id}"\n---\n\n#### Article\nsource:: [[../articles/${id}]]\n`;
-const article = (id: string) => `---\ntitle: "${id}"\nauthor: Someone\nsource_url: https://example.org/${id}\npublished: 2020-01-01\n---\n\nThe text of ${id}.\n`;
+export const reading = (id: string) => `---\nid: ${id}\ntitle: "${id}"\n---\n\n#### Article\nsource:: [[../articles/${id}]]\n`;
+export const article = (id: string) => `---\ntitle: "${id}"\nauthor: Someone\nsource_url: https://example.org/${id}\npublished: 2020-01-01\n---\n\nThe text of ${id}.\n`;
 
 export const MINI: Record<string, string> = {
   "Lens Edu/courses/mini.md": `---
@@ -143,15 +144,11 @@ source:: [[../Lenses/Iliad B.3.2 - Degeneracy]]
     "alignment",
     text(`\\## Targets
 
-Read one of these: [CEV](https://example.org/cev), [Corrigibility](https://example.org/corrigibility).
+Read these: [CEV](https://example.org/cev), [Corrigibility](https://example.org/corrigibility).
 
-:::require_x_optional_lenses{x=1}
 ::card[[../Lenses/cev|CEV]]
 
-> Most important: section 3.
-
 ::card[[../Lenses/corrigibility|Corrigibility]]
-:::
 
 Then discuss in groups.
 
@@ -216,7 +213,7 @@ export function memoryFiles(initial: Record<string, string> = MINI): CourseFiles
  * import opens a hidden section with a "%% ..." line there).
  */
 export function atomsOf(lens: LensState, state: CourseState, firstOfWorksheet: boolean): Atom[] {
-  const body = readLensBody(splitFrontmatter(lens.content).body);
+  const body = readLensBody(splitFrontmatter(lens.published).body);
   const videoIds = new Map([...state.transcripts].map(([id, path]) => [path, id]));
   const atoms: Atom[] = [];
   const open = (anchor: string, level: Atom["level"], title: string) => atoms.push({ anchor, level, title, words: 0, parts: [], links: [] });

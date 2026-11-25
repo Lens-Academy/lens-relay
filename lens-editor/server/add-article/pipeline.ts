@@ -1,7 +1,8 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import type { ArticleImportMode, ArticleJob, ArticleMeta } from "./types";
-import { fetchRawBytes, MIN_ARTICLE_CHARS } from "./fetch";
+import { fetchRawBytes, fetchRawHtml, MIN_ARTICLE_CHARS } from "./fetch";
+import { formEmbedFromUrl, formEmbedMeta, formTitleFromHtml, type FormEmbed } from "./form-embeds";
 import { embedPdfImages } from "./pdf";
 import { dedupUrlVariants } from "./url-normalize";
 import { hostRemoteImages, newImageBudget, type HostImagesResult } from "./image-hosting";
@@ -12,6 +13,7 @@ import {
   MAX_REVIEW_ROUNDS,
   UNREVIEWED_STATUS,
   REVIEW_VERSION,
+  buildMetadataNotice,
   buildRevertNotice,
   resolveArticleReviewerConfig,
   reviewArticle,
@@ -60,6 +62,7 @@ import { importVideo } from "../add-video/pipeline";
 import { resolveVideoEmbeds } from "./video-embeds";
 import { maybeCreateLens } from "../lens-doc";
 import { DuplicateDocumentError } from "./duplicate";
+import { frontmatterText, parseFrontmatter } from "../yaml";
 
 const WORK_BASE = "/tmp/articles";
 const EVIDENCE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -88,6 +91,8 @@ function relayArticleFolder(): string {
 interface ExistingArticleMatch {
   path: string;
   stubContent?: string;
+  /** The spelling that matched: the stored source_url but for a trailing slash. */
+  matchedUrl?: string;
 }
 
 interface ArticleImportBehavior {
@@ -110,6 +115,62 @@ export function articleImportBehavior(
       throw new Error(`Unhandled article import mode: ${exhaustive}`);
     }
   }
+}
+
+/**
+ * Write an online form's embed record (see form-embeds.ts). Every import mode
+ * writes the same file: a form has no text to stub, import or build a lens on.
+ */
+async function processFormEmbed(
+  job: ArticleJob,
+  form: FormEmbed,
+  createdDate: string,
+  folder: string,
+  reporter: ArticleReviewReporter,
+  setStage: (stage: string) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  const topFolder = folder.split("/")[0];
+  await setStage("checking-duplicates");
+  const existing = await findExistingArticle([job.url, form.embedUrl], signal);
+  if (existing) {
+    throw new DuplicateDocumentError(
+      `This form already has an embed file: ${topFolder}${existing.path}`,
+      topFolder + existing.path,
+      existing.matchedUrl,
+    );
+  }
+
+  await setStage("fetching-form-title");
+  let title = "";
+  try {
+    title = formTitleFromHtml(await fetchRawHtml(form.embedUrl, signal), form.provider);
+  } catch (err) {
+    signal?.throwIfAborted();
+    console.warn(`[add-article] could not read the form's title, using "${form.provider} form": ${err}`);
+  }
+  const meta = formEmbedMeta(form, title, createdDate);
+  job.title = meta.title;
+
+  await setStage("writing");
+  const markdown = generateArticleMarkdown(meta, "", createdDate);
+  const filenameBase = generateArticleFilenameBase(meta.author, meta.title);
+  const docPath = await withArticleWriteLock(async () => {
+    signal?.throwIfAborted();
+    const candidates = articleFilenameCandidates(filenameBase, form.embedUrl).map(
+      (b) => `${folder}/${b}.md`,
+    );
+    const taken = await checkRelayDocsExist(candidates, signal);
+    const chosen = candidates.find((p) => !taken[p]);
+    if (!chosen) throw new Error(`Document already exists: ${candidates[0]}`);
+    await createRelayDoc(chosen, markdown, signal);
+    return chosen;
+  });
+  job.relay_url = editorOpenUrl(docPath);
+  job.relay_path = docPath;
+  job.updated_at = new Date().toISOString();
+  await reporter.finalDocument(markdown);
+  console.log(`[add-article] Wrote form embed ${docPath}`);
 }
 
 /**
@@ -153,6 +214,7 @@ async function processYouTubeVideo(
       signal?.throwIfAborted();
       console.warn(`[add-article] could not read ${existingPath} to see whether it is a video stub: ${err}`);
     }
+    if (content !== null) job.title ??= documentTitle(content);
     if (content !== null && isStub(content, VIDEO_STUB)) {
       job.relay_url = editorOpenUrl(topFolder + existingPath);
       if (behavior.stubOnly) {
@@ -210,7 +272,7 @@ async function processYouTubeVideo(
   job.title = payload.title;
   job.updated_at = new Date().toISOString();
 
-  await importVideo(job.id, payload, job.created_at, {
+  const { mdPath } = await importVideo(job.id, payload, job.created_at, {
     createLens: behavior.createLens,
     replaceExisting,
     stubPath,
@@ -223,9 +285,14 @@ async function processYouTubeVideo(
       job.updated_at = new Date().toISOString();
     },
   });
+  job.relay_path = mdPath;
   console.log(
     `[add-article] Imported video transcript for ${job.url} ("${payload.title}")`,
   );
+}
+
+function documentTitle(markdown: string): string | undefined {
+  return frontmatterText(parseFrontmatter(markdown)?.title);
 }
 
 async function findExistingArticle(
@@ -234,12 +301,13 @@ async function findExistingArticle(
 ): Promise<ExistingArticleMatch | null> {
   const variants = dedupUrlVariants(...urls);
   const result = await checkRelayArticleUrls(variants, signal);
-  const path = variants.map((variant) => result.found[variant]).find(Boolean);
-  if (!path) return null;
+  const matchedUrl = variants.find((variant) => result.found[variant]);
+  if (!matchedUrl) return null;
+  const path = result.found[matchedUrl]!;
   const stub = variants
     .map((variant) => result.stubs[variant])
     .find((candidate) => candidate?.path === path);
-  return { path, stubContent: stub?.content };
+  return { path, stubContent: stub?.content, matchedUrl };
 }
 
 // Serializes the resolve-filename → write step across concurrently-running jobs
@@ -346,6 +414,16 @@ export function ensureRequiredMeta(
   return { ...meta, author, published: meta.published || createdDate };
 }
 
+/** The fragment of a submitted URL, unless it is a browser's text-highlight link. */
+function urlFragment(url: string): string {
+  try {
+    const { hash } = new URL(url);
+    return hash.startsWith("#:~:") ? "" : hash;
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Import an article deterministically: fetch raw HTML, isolate the article and
  * convert HTML→Markdown with a fixed converter (no LLM in the body path), then
@@ -387,6 +465,11 @@ export async function processArticle(
     return processYouTubeVideo(job, job.video, behavior, setStage, signal);
   }
 
+  const form = formEmbedFromUrl(job.url);
+  if (form) {
+    return processFormEmbed(job, form, createdDate, folder, reporter, setStage, signal);
+  }
+
   // Reject the common duplicate case before downloading and parsing the page.
   // A matched stub is retained for a later full import to promote in place.
   let existingStub: ExistingArticleMatch | null = null;
@@ -398,12 +481,15 @@ export async function processArticle(
         throw new DuplicateDocumentError(
           `This URL was already imported: ${topFolder}${existing.path}`,
           topFolder + existing.path,
+          existing.matchedUrl,
         );
       }
       if (isStubOnly) {
+        job.title ??= documentTitle(existing.stubContent);
         throw new DuplicateDocumentError(
           `An article stub already exists for this URL: ${topFolder}${existing.path}`,
           topFolder + existing.path,
+          existing.matchedUrl,
         );
       }
       existingStub = existing;
@@ -435,6 +521,13 @@ export async function processArticle(
       // relabelling that companion body as the rendered candidate.
       ex = { ...ex, meta: { ...ex.meta, title: titledCandidate.meta.title } };
     }
+  }
+  if (evidence.manifest.linked_tables) {
+    await reporter.programmatic({
+      code: "programmatic.linked-tables-inlined",
+      count: evidence.manifest.linked_tables.inlined.length,
+      detail: evidence.manifest.linked_tables,
+    });
   }
   await reporter.extraction({
     via: ex.via,
@@ -789,6 +882,16 @@ export async function processArticle(
       signal,
       reviewer,
       reviewCandidates,
+      buildMetadataNotice({
+        // Either candidate may have found what the other missed.
+        dateIsFallback: availableExtractions.every((candidate) => !candidate.meta.published),
+        authorIsFallback: availableExtractions.every((candidate) => candidate.meta.author.length === 0),
+        forumAccounts: ex.via === "forum-adapter",
+        pdfProperties: ex.via.startsWith("pdf"),
+        urlFragment: urlFragment(job.url),
+        pageHeading: availableExtractions.map((candidate) => candidate.pageHeading).find(Boolean),
+        title: meta.title,
+      }),
     );
     trackReviewModel(outcome.model);
     if (

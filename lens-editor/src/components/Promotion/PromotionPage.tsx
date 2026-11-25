@@ -15,6 +15,7 @@ import { urlForDoc } from '../../lib/url-utils';
 import { RELAY_ID } from '../../lib/constants';
 import { editorPathToPromotionPath, promotionPathToEditorPath } from '../../lib/promotion-paths';
 import { DiffViewer } from './DiffViewer';
+import { PromotionPrResult } from './PromotionPrResult';
 
 const MAX_PROMOTION_PATHS = 1000;
 const EMPTY_CURRICULUM: PromotionCurriculumIndex = { courses: [], modules: [], memberships: {} };
@@ -152,11 +153,13 @@ export function PromotionPage() {
   const [prResult, setPrResult] = useState<PromotionPrResultState | null>(null);
   const diffRequestRef = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
+  const changesRequestRef = useRef(0);
+  // Also called after a merge, so the files now in production leave the list.
+  const loadChanges = useCallback((afterMerge = false) => {
+    const requestId = ++changesRequestRef.current;
     getPromotionChanges()
       .then(response => {
-        if (cancelled) return;
+        if (changesRequestRef.current !== requestId) return;
         setChanges(response);
         const available = new Set(response.files.map(file => file.path));
         setSelected(previous => {
@@ -166,17 +169,24 @@ export function PromotionPage() {
         });
       })
       .catch(loadError => {
-        if (cancelled) return;
-        setError(errorMessage(loadError));
+        if (changesRequestRef.current !== requestId) return;
+        setError(
+          afterMerge
+            ? 'The merge worked, but the list of changes could not be reloaded. Reload the page to see what is left to promote.'
+            : errorMessage(loadError),
+        );
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (changesRequestRef.current === requestId) setLoading(false);
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, [queryPromotionPath]);
+
+  useEffect(() => {
+    loadChanges();
+    return () => {
+      changesRequestRef.current += 1;
+    };
+  }, [loadChanges]);
 
   const curriculum = changes?.curriculum ?? EMPTY_CURRICULUM;
   const baseMatches = useCallback((file: PromotionFileChange, includeSelection = true) => {
@@ -329,6 +339,7 @@ export function PromotionPage() {
     try {
       const response = await createPromotionPr({ paths: selectedPaths });
       setPrResult({ response, pathsKey });
+      if (response.merge === 'merged') loadChanges(true);
     } catch (submitError) {
       setError(errorMessage(submitError));
     } finally {
@@ -342,7 +353,9 @@ export function PromotionPage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-gray-900">Production promotion</h1>
-            <p className="text-sm text-gray-500">Select staging changes to promote to production.</p>
+            <p className="text-sm text-gray-500">
+              Select staging changes to promote to production. Promoting merges them into production straight away.
+            </p>
           </div>
           <button
             type="button"
@@ -350,7 +363,7 @@ export function PromotionPage() {
             disabled={selectedPaths.length === 0 || submitting || prMatchesSelection}
             className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 disabled:bg-gray-300"
           >
-            {submitting ? 'Creating PR...' : 'Create promotion PR'}
+            {submitting ? 'Promoting...' : 'Promote to production'}
           </button>
         </div>
 
@@ -366,29 +379,7 @@ export function PromotionPage() {
           </p>
         )}
 
-        {prResult && (
-          <section className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-950">
-            <h2 className="font-semibold">Pull request created</h2>
-            <a
-              href={prResult.response.prUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-1 inline-block font-medium underline"
-            >
-              Pull request #{prResult.response.prNumber}
-            </a>
-            {prResult.response.branch && (
-              <div className="mt-1 font-mono text-xs text-emerald-900">{prResult.response.branch}</div>
-            )}
-            {prResult.response.autoMergeEnabled ? (
-              <p className="mt-2 text-emerald-800">Auto-merge enabled.</p>
-            ) : (
-              <p className="mt-2 text-amber-800">
-                {prResult.response.warning || 'Auto-merge was not enabled.'}
-              </p>
-            )}
-          </section>
-        )}
+        {prResult && <PromotionPrResult response={prResult.response} className="mb-4" />}
 
         {!loading && changes && (
           <>

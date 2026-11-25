@@ -558,7 +558,15 @@ export interface TrashResponse {
  * (HTTP 409, code "inbound_links"). Retry with `force` to trash anyway;
  * the links are left untouched. */
 export class TrashRefusedError extends RelayApiError {
-  constructor(message: string, public readonly referencing: TrashReferencingDoc[]) {
+  /** `referencingOtherFolders`: documents in folders the caller's key cannot
+   * see that also link in. A folder-limited key gets them counted, never
+   * named, so `referencing` alone can be empty while links still exist.
+   * 0 when the relay sends no count (unscoped key, or an older relay). */
+  constructor(
+    message: string,
+    public readonly referencing: TrashReferencingDoc[],
+    public readonly referencingOtherFolders = 0,
+  ) {
     super(message, 409);
     this.name = 'TrashRefusedError';
   }
@@ -583,7 +591,7 @@ export async function trashPath(path: string, force = false): Promise<TrashRespo
 
   if (!response.ok) {
     const text = await response.text();
-    let parsed: { error?: unknown; code?: unknown; referencing?: unknown } | null = null;
+    let parsed: { error?: unknown; code?: unknown; referencing?: unknown; referencing_other_folders?: unknown } | null = null;
     try {
       parsed = text ? JSON.parse(text) : null;
     } catch {
@@ -599,7 +607,9 @@ export async function trashPath(path: string, force = false): Promise<TrashRespo
           && typeof (r as TrashReferencingDoc).path === 'string'
           && typeof (r as TrashReferencingDoc).count === 'number')
         .map(r => ({ path: r.path, count: r.count }));
-      throw new TrashRefusedError(message, referencing);
+      const hidden = parsed.referencing_other_folders;
+      const otherFolders = typeof hidden === 'number' && Number.isFinite(hidden) && hidden > 0 ? Math.floor(hidden) : 0;
+      throw new TrashRefusedError(message, referencing, otherFolders);
     }
     throw new RelayApiError(message, response.status);
   }

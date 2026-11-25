@@ -53,6 +53,7 @@ use y_sweet_core::{
         DebouncedSyncProtocolEventSender, DocumentUpdatedEvent, EventDispatcher, EventEnvelope,
         EventSender, SyncProtocolEventSender, UnifiedEventDispatcher, WebhookSender,
     },
+    external_links,
     link_indexer::{self, LinkIndexer},
     metrics::RelayMetrics,
     recent_changes_index::RecentChangesIndex,
@@ -65,6 +66,7 @@ use y_sweet_core::{
 };
 use yrs::{GetString, Map, ReadTxn, Text, Transact, WriteTxn};
 
+mod link_source;
 mod trash;
 pub use trash::{
     restore_hint as trash_restore_hint, InboundRef, PurgeReport, PurgedEntry, TrashError,
@@ -373,6 +375,10 @@ struct SearchQuery {
     q: String,
     #[serde(default = "default_search_limit")]
     limit: usize,
+    /// Limit results to this folder (a folder uuid). The editor proxy sets it
+    /// from a folder-scoped share token; absent = every folder.
+    #[serde(default)]
+    folder_uuid: Option<String>,
 }
 
 fn default_search_limit() -> usize {
@@ -1012,6 +1018,8 @@ pub struct Server {
     metrics: Arc<RelayMetrics>,
     link_indexer: Option<Arc<LinkIndexer>>,
     search_index: Option<Arc<SearchIndex>>,
+    /// Removes the search index directory when the Server is dropped.
+    _search_index_dir: Option<SearchIndexDir>,
     search_ready: Arc<std::sync::atomic::AtomicBool>,
     search_tx: Option<tokio::sync::mpsc::Sender<String>>,
     search_pending: Option<Arc<DashMap<String, link_indexer::PendingEntry>>>,
@@ -1054,6 +1062,15 @@ pub struct WorkerReceivers {
         tokio::sync::mpsc::Receiver<String>,
         Arc<DashMap<String, link_indexer::PendingEntry>>,
     )>,
+}
+
+/// Deletes the search index directory on drop.
+struct SearchIndexDir(std::path::PathBuf);
+
+impl Drop for SearchIndexDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 impl Server {
@@ -1134,6 +1151,7 @@ impl Server {
                 None
             }
         };
+        let search_index_dir = search_index.is_some().then(|| SearchIndexDir(index_path));
         let search_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         // Create search channel and pending map (workers spawned later via spawn_workers)
@@ -1187,6 +1205,7 @@ impl Server {
             metrics,
             link_indexer: Some(link_indexer),
             search_index,
+            _search_index_dir: search_index_dir,
             search_ready,
             search_tx: search_tx_final,
             search_pending: search_pending_final,
@@ -3642,6 +3661,7 @@ impl Server {
             metrics: RelayMetrics::new().expect("metrics init should not fail in tests"),
             link_indexer: None,
             search_index: None,
+            _search_index_dir: None,
             search_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             search_tx: None,
             search_pending: None,
@@ -3682,6 +3702,7 @@ impl Server {
             metrics: RelayMetrics::new().expect("metrics init should not fail in tests"),
             link_indexer: None,
             search_index: Some(search_index),
+            _search_index_dir: None,
             search_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             search_tx: None,
             search_pending: None,
@@ -4838,6 +4859,8 @@ impl Server {
             .route("/doc/check", post(handle_check_documents))
             .route("/doc/check-video-ids", post(handle_check_video_ids))
             .route("/doc/check-source-urls", post(handle_check_source_urls))
+            .route("/doc/frontmatters", post(handle_doc_frontmatters))
+            .route("/doc/link-source", post(link_source::handle_link_source))
             .route(
                 "/doc/attachment",
                 post(handle_upsert_attachment).layer(DefaultBodyLimit::max(30 * 1024 * 1024)),
@@ -5614,6 +5637,18 @@ async fn handle_search(
         })));
     }
 
+    // A folder that does not resolve to a name returns nothing rather than
+    // falling back to every folder.
+    let folder = match &params.folder_uuid {
+        None => None,
+        Some(uuid) => Some(server_state.folder_name_for_uuid(uuid).ok_or_else(|| {
+            AppError::new(
+                StatusCode::NOT_FOUND,
+                anyhow!("Folder '{}' not found", uuid),
+            )
+        })?),
+    };
+
     let search_index = server_state.search_index.clone().ok_or_else(|| {
         AppError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -5622,10 +5657,12 @@ async fn handle_search(
     })?;
 
     // Run search in blocking context (tantivy is sync)
-    let results = tokio::task::spawn_blocking(move || search_index.search(&q, limit))
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let results = tokio::task::spawn_blocking(move || {
+        search_index.search_in_folder(&q, limit, folder.as_deref())
+    })
+    .await
+    .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?
+    .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let total_hits = results.len();
     Ok(Json(json!({
@@ -6670,6 +6707,69 @@ async fn handle_check_source_urls(
     }
 
     Ok(Json(CheckSourceUrlsResponse { found, stubs }))
+}
+
+#[derive(Deserialize)]
+struct DocFrontmattersRequest {
+    folder: String,
+    subfolder: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DocFrontmatter {
+    /// Full path, e.g. "Lens Edu/articles/x.md".
+    path: String,
+    /// The raw leading `---` block, or "" when the doc's head has none.
+    frontmatter: String,
+}
+
+#[derive(Serialize)]
+struct DocFrontmattersResponse {
+    docs: Vec<DocFrontmatter>,
+}
+
+/// The frontmatter of every Markdown doc under a folder, for the editor
+/// server's library index (it keeps the URL spelling rules, so it does the
+/// matching). Reads every doc, one at a time.
+async fn handle_doc_frontmatters(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Json(body): Json<DocFrontmattersRequest>,
+) -> Result<Json<DocFrontmattersResponse>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    let prefix = match &body.subfolder {
+        Some(sub) => format!("{}/{}/", body.folder, sub),
+        None => format!("{}/", body.folder),
+    };
+    let mut matching_paths: Vec<String> = server_state
+        .doc_resolver()
+        .all_paths()
+        .into_iter()
+        .filter(|p| p.starts_with(&prefix) && p.ends_with(".md") && !p.contains("/_trash/"))
+        .collect();
+    matching_paths.sort_unstable();
+
+    let mut docs = Vec::with_capacity(matching_paths.len());
+    for path in matching_paths {
+        let doc_id = match server_state.doc_resolver().resolve_path(&path) {
+            Some(info) => info.doc_id,
+            None => continue,
+        };
+        if server_state.ensure_doc_loaded(&doc_id).await.is_err() {
+            continue;
+        }
+        // Longer than the duplicate check's head: a block cut off here reads as
+        // no frontmatter, and the article would drop out of the library index.
+        let head = match read_doc_head(&server_state, &doc_id, 32_000) {
+            Some(h) => h,
+            None => continue,
+        };
+        let frontmatter = external_links::frontmatter_of(&head).to_string();
+        docs.push(DocFrontmatter { path, frontmatter });
+    }
+
+    Ok(Json(DocFrontmattersResponse { docs }))
 }
 
 #[derive(Deserialize)]
@@ -8224,6 +8324,26 @@ async fn metrics_endpoint(State(_server_state): State<Arc<Server>>) -> Result<St
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[tokio::test]
+    async fn search_index_dir_is_removed_when_server_is_dropped() {
+        let (server, _receivers) = Server::new(
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            Vec::new(),
+            CancellationToken::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        let dir = server._search_index_dir.as_ref().unwrap().0.clone();
+        assert!(dir.exists());
+        drop(server);
+        assert!(!dir.exists());
+    }
     use axum::body::{to_bytes, Body};
     use axum::http::{Method, Request};
     use serde_json::Value as JsonValue;
@@ -9594,6 +9714,98 @@ mod test {
             body["stubs"]["https://ai-safety-atlas.com/chapters/v1/risks/introduction/"].is_null()
         );
         assert!(body["found"]["https://unimported.example/x"].is_null());
+    }
+
+    async fn post_doc_frontmatters(
+        server: &Arc<Server>,
+        body: JsonValue,
+    ) -> (StatusCode, JsonValue) {
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/doc/frontmatters")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(JsonValue::Null),
+        )
+    }
+
+    // Prevents: the library index missing an article, listing a trashed one,
+    // or a body's text being read as frontmatter
+    #[tokio::test]
+    async fn doc_frontmatters_lists_each_docs_raw_block() {
+        let server = Server::new_for_test();
+        let (a, b, c, d, e) = (
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            "33333333-3333-4333-8333-333333333333",
+            "44444444-4444-4444-8444-444444444444",
+            "55555555-5555-4555-8555-555555555555",
+        );
+        insert_test_folder_doc(
+            &server,
+            "Lens Edu",
+            &[
+                ("/articles/a.md", a, "markdown"),
+                ("/articles/none.md", b, "markdown"),
+                ("/articles/long.md", c, "markdown"),
+                ("/_trash/articles/old.md", d, "markdown"),
+                ("/Lenses/l.md", e, "markdown"),
+            ],
+        )
+        .await;
+        let block = "---\ntitle: A\nsource_url: https://example.com/a\n---\n";
+        insert_test_content_doc(&server, a, &format!("{block}\nBody.\n---\nmore")).await;
+        insert_test_content_doc(&server, b, "No frontmatter.\n---\nnot: this\n---\n").await;
+        // Closes past the head the endpoint reads.
+        let long = format!("---\ntitle: L\nnote: {}\n---\n", "x".repeat(40_000));
+        insert_test_content_doc(&server, c, &long).await;
+        insert_test_content_doc(&server, d, block).await;
+        insert_test_content_doc(&server, e, block).await;
+
+        let (status, body) = post_doc_frontmatters(
+            &server,
+            json!({ "folder": "Lens Edu", "subfolder": "articles" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            json!({ "docs": [
+                { "path": "Lens Edu/articles/a.md", "frontmatter": block },
+                { "path": "Lens Edu/articles/long.md", "frontmatter": "" },
+                { "path": "Lens Edu/articles/none.md", "frontmatter": "" },
+            ]})
+        );
+
+        // Without a subfolder: the whole folder, still no trash.
+        let (status, body) = post_doc_frontmatters(&server, json!({ "folder": "Lens Edu" })).await;
+        assert_eq!(status, StatusCode::OK);
+        let paths: Vec<&str> = body["docs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|doc| doc["path"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "Lens Edu/Lenses/l.md",
+                "Lens Edu/articles/a.md",
+                "Lens Edu/articles/long.md",
+                "Lens Edu/articles/none.md",
+            ]
+        );
     }
 
     // Frontmatter-precise: a URL that appears only in the body must NOT match

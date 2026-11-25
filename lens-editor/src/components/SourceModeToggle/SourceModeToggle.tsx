@@ -1,30 +1,11 @@
 import { EditorView } from '@codemirror/view';
 import { toggleSourceMode } from '../Editor/extensions/livePreview';
-import { SegmentedToggle, type SegmentedValue } from '../SegmentedToggle';
+import { MenuSwitchRow } from '../Menu/MenuSwitchRow';
 
 interface SourceModeToggleProps {
   editorView: EditorView | null;
   isSourceMode: boolean;
   onSourceModeChange: (sourceMode: boolean) => void;
-}
-
-// Eye icon (Heroicons Mini) - represents formatted/preview view
-function PreviewIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 20 20"
-      fill="currentColor"
-      className="w-4 h-4"
-    >
-      <path d="M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z" />
-      <path
-        fillRule="evenodd"
-        d="M.664 10.59a1.651 1.651 0 010-1.186A10.004 10.004 0 0110 3c4.257 0 7.893 2.66 9.336 6.41.147.381.146.804 0 1.186A10.004 10.004 0 0110 17c-4.257 0-7.893-2.66-9.336-6.41zM14 10a4 4 0 11-8 0 4 4 0 018 0z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
 }
 
 // Code icon (Heroicons Mini) - represents raw source view
@@ -35,6 +16,7 @@ function SourceIcon() {
       viewBox="0 0 20 20"
       fill="currentColor"
       className="w-4 h-4"
+      aria-hidden="true"
     >
       <path
         fillRule="evenodd"
@@ -46,39 +28,49 @@ function SourceIcon() {
 }
 
 /**
- * Toggle for switching between live preview and source mode.
- *
- * - Live Preview: Markdown renders with formatting (headings sized, syntax hidden)
- * - Source: Shows all raw markdown syntax
+ * Source mode, a switch in the page menu: on, the page shows its raw
+ * markdown; off, the live preview (headings sized, syntax hidden).
  */
 export function SourceModeToggle({ editorView, isSourceMode, onSourceModeChange }: SourceModeToggleProps) {
-  const handleChange = (value: SegmentedValue) => {
+  const handleToggle = () => {
     if (!editorView) return;
-    const newSourceMode = value === 'left';
-    onSourceModeChange(newSourceMode);
-    toggleSourceMode(editorView, newSourceMode);
+    onSourceModeChange(!isSourceMode);
+    toggleSourceMode(editorView, !isSourceMode);
   };
 
   return (
-    <SegmentedToggle
-      leftLabel={
-        <span className="inline-flex items-center gap-1.5">
-          <SourceIcon />
-          <span>Source</span>
-        </span>
-      }
-      rightLabel={
-        <span className="inline-flex items-center gap-1.5">
-          <PreviewIcon />
-          <span>Preview</span>
-        </span>
-      }
-      leftTitle="Source Mode"
-      rightTitle="Live Preview"
-      value={isSourceMode ? 'left' : 'right'}
-      onChange={handleChange}
+    <MenuSwitchRow
+      icon={<SourceIcon />}
+      label="Source mode"
+      description="Show the page's markdown"
+      checked={isSourceMode}
+      onToggle={handleToggle}
       disabled={!editorView}
-      ariaLabel="Toggle between source and preview mode"
     />
+  );
+}
+
+/**
+ * Shown in the top bar while the page is in source mode, so that is never
+ * missed: a click goes back to the live preview.
+ */
+export function SourceModeChip({ editorView, onSourceModeChange }: Omit<SourceModeToggleProps, 'isSourceMode'>) {
+  return (
+    <button
+      type="button"
+      className="lens-topbar-button lens-topbar-chip"
+      title="Back to the live preview"
+      onClick={() => {
+        if (!editorView) return;
+        onSourceModeChange(false);
+        toggleSourceMode(editorView, false);
+      }}
+    >
+      <SourceIcon />
+      <span>Source</span>
+      <svg className="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+        <path d="m3 3 6 6M9 3 3 9" />
+      </svg>
+    </button>
   );
 }

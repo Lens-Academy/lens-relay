@@ -1,0 +1,14 @@
+{
+ "chart": {
+  "title": "Share of companies using artificial intelligence technology"
+ },
+ "columns": {
+  "pct_of_respondents": {
+   "shortName": "pct_of_respondents",
+   "titleShort": "Organizations reporting having adopted AI",
+   "shortUnit": "%",
+   "unit": "%",
+   "citationShort": "McKinsey & Company via AI Index Report – with major processing by Our World in Data"
+  }
+ }
+}

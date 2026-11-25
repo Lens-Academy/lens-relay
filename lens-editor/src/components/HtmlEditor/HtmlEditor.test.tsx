@@ -231,12 +231,12 @@ describe('HtmlEditor', () => {
     await fromBridge({ type: 'anchor-captured', payload: { anchor, rect: { x: 0, y: 40, w: 80, h: 16 }, via: 'selection' } });
 
     expect(screen.getByText('brown fox')).toBeInTheDocument();
-    const box = screen.getByPlaceholderText('Add a comment...');
+    const box = screen.getByPlaceholderText('Add a comment…');
     await userEvent.type(box, 'Is this right?');
 
     // A collaborator edits the page while we type: the draft stays.
     await act(async () => { ytext.insert(0, '<h2>New heading</h2>'); });
-    expect(screen.getByPlaceholderText('Add a comment...')).toHaveValue('Is this right?');
+    expect(screen.getByPlaceholderText('Add a comment…')).toHaveValue('Is this right?');
 
     await userEvent.click(screen.getByRole('button', { name: 'Post' }));
     const threads = readThreads(doc);
@@ -253,12 +253,12 @@ describe('HtmlEditor', () => {
     const capture = () => fromBridge({ type: 'anchor-captured', payload: { anchor, rect: { x: 0, y: 40, w: 80, h: 16 }, via: 'click' } });
     await userEvent.click(screen.getByRole('button', { name: /^Comment$/ }));
     await capture();
-    await userEvent.type(screen.getByPlaceholderText('Add a comment...'), 'Half a thought');
+    await userEvent.type(screen.getByPlaceholderText('Add a comment…'), 'Half a thought');
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByPlaceholderText('Add a comment...')).toBeNull();
+    expect(screen.queryByPlaceholderText('Add a comment…')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: /^Comment$/ }));
     await capture();
-    expect(screen.getByPlaceholderText('Add a comment...')).toHaveValue('Half a thought');
+    expect(screen.getByPlaceholderText('Add a comment…')).toHaveValue('Half a thought');
   });
 
   it('toggles Comment mode when C is pressed inside the page', async () => {
@@ -314,7 +314,7 @@ describe('HtmlEditor', () => {
     const { doc, ytext, awareness } = createHtmlDoc();
     renderEditor(ytext, awareness);
     await fromBridge({ type: 'anchor-captured', payload: { anchor, rect: { x: 0, y: 0, w: 1, h: 1 }, via: 'click' } });
-    expect(screen.queryByPlaceholderText('Add a comment...')).toBeNull();
+    expect(screen.queryByPlaceholderText('Add a comment…')).toBeNull();
     expect(readThreads(doc)).toHaveLength(0);
   });
 
@@ -408,7 +408,7 @@ describe('HtmlEditor', () => {
     expect(threads).toHaveLength(1);
     expect(threads[0].anchor).toMatchObject({ quote: 'new spot' });
     expect(screen.queryByRole('status')).toBeNull();
-    expect(screen.queryByPlaceholderText('Add a comment...')).toBeNull();
+    expect(screen.queryByPlaceholderText('Add a comment…')).toBeNull();
   });
 
   it('resolves a thread, hides it, and shows it again on request', async () => {
@@ -436,12 +436,17 @@ describe('HtmlEditor', () => {
     createThread(doc, 'test', { id: 'mine', anchor, author: 'me@x', authorId: 'someone-else', body: 'Same name, other browser' });
     renderEditor(ytext, awareness);
     await placed('mine');
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
-    await userEvent.type(screen.getByRole('button', { name: 'Reply' }), '{enter}');
-    await userEvent.type(screen.getByPlaceholderText('Write a reply...'), 'My reply');
+    // Nothing to edit or delete, so no ••• menu
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
+    // Opening the card brings its reply bar
+    await userEvent.click(screen.getByText('Same name, other browser'));
+    await userEvent.type(screen.getByPlaceholderText('Reply…'), 'My reply');
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
     expect(readThreads(doc)[0].messages.map(m => m.body)).toEqual(['Same name, other browser', 'My reply']);
-    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
+    const menus = screen.getAllByRole('button', { name: 'More actions' });
+    expect(menus).toHaveLength(1);
+    await userEvent.click(menus[0]);
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument();
   });
 
   it('focuses the card when its highlight or badge is clicked in the page', async () => {

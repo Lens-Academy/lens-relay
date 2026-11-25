@@ -25,7 +25,7 @@ pub const MAX_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
 /// Above this the tool still uploads but warns in `note`.
 pub const SOFT_ATTACHMENT_BYTES: usize = 5 * 1024 * 1024;
 /// Extensions accepted in `file_path` (must match the sniffed type).
-pub const ALLOWED_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
+pub const ALLOWED_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const MAX_STEM_LEN: usize = 80;
 /// Fetch (≤30 s) + upload (≤60 s) on the editor side, with headroom.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(150);
@@ -567,7 +567,7 @@ mod tests {
         for bad in [
             "Lens Edu/fig.png",
             "Lens Edu/attachments/sub/fig.png",
-            "Lens Edu/attachments/fig.svg",
+            "Lens Edu/attachments/fig.bmp",
             "Lens Edu/attachments/fig",
             "Lens Edu/attachments/.png",
             "Lens Edu/attachments/fi\"g.png",

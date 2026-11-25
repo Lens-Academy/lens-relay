@@ -2,8 +2,22 @@ use crate::server::Server;
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Execute the `search` tool: full-text ranked search via Tantivy index.
+/// [`execute_scoped`] for an all-folders key (tests only).
+#[cfg(test)]
 pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+    execute_scoped(server, arguments, None).await
+}
+
+/// Execute the `search` tool: full-text ranked search via Tantivy index.
+///
+/// `folder` is the folder the key is limited to (`None` = all folders):
+/// only documents whose indexed folder name equals it are returned, and
+/// `limit` and the result count apply after that filter.
+pub async fn execute_scoped(
+    server: &Arc<Server>,
+    arguments: &Value,
+    folder: Option<&str>,
+) -> Result<String, String> {
     let query = arguments
         .get("query")
         .and_then(|v| v.as_str())
@@ -31,10 +45,13 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
     }
 
     // Run search in blocking context (tantivy is sync)
-    let results = tokio::task::spawn_blocking(move || search_index.search(&query, limit))
-        .await
-        .map_err(|e| format!("Search task failed: {}", e))?
-        .map_err(|e| format!("Search error: {}", e))?;
+    let folder = folder.map(str::to_string);
+    let results = tokio::task::spawn_blocking(move || {
+        search_index.search_in_folder(&query, limit, folder.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Search task failed: {}", e))?
+    .map_err(|e| format!("Search error: {}", e))?;
 
     if results.is_empty() {
         return Ok("No results found.".to_string());

@@ -75,7 +75,7 @@ export default defineConfig(() => {
       configureServer(server) {
         // Validate share token on /api/relay/ proxy requests
         server.middlewares.use('/api/relay', async (req, res, next) => {
-          const { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest } = await import('./server/relay-proxy-auth.ts');
+          const { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest, scopeRelayPath, relayBodyFor } = await import('./server/relay-proxy-auth.ts');
 
           const shareToken = req.headers['x-share-token'] as string | undefined;
           const auth = validateProxyToken(shareToken);
@@ -112,6 +112,13 @@ export default defineConfig(() => {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: access.reason || 'Access denied' }));
             return;
+          }
+
+          req.url = scopeRelayPath(req.method || 'GET', fullUrl, auth);
+
+          const forwardBody = (req as any).relayProxyBody as Buffer | undefined;
+          if (forwardBody) {
+            (req as any).relayProxyBody = relayBodyFor(req.method || 'GET', pathOnly, auth, parsedBody, forwardBody, allowedFolderName);
           }
 
           delete req.headers['x-share-token'];
@@ -247,6 +254,34 @@ export default defineConfig(() => {
     };
   }
 
+  // Jev for the check workbench. In dev the key may also come from ~/.typesafe.ai-apikey.txt.
+  function jevPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'jev-api',
+      path: '/api/jev',
+      loadApp: async () => {
+        const { createJevRoutes, loadJevConfig } = await import('./server/jev/routes.ts');
+        const { existsSync, readFileSync } = await import('node:fs');
+        const keyFile = path.join(process.env.HOME ?? '', '.typesafe.ai-apikey.txt');
+        const config = loadJevConfig();
+        if (!config.apiKey && existsSync(keyFile)) config.apiKey = readFileSync(keyFile, 'utf8').trim();
+        return createJevRoutes(config);
+      },
+    });
+  }
+
+  /** Dev /api/history endpoints: a file's past versions, from HISTORY_REPO_DIR (a lens-edu-staging clone). */
+  function historyPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'history-api',
+      path: '/api/history',
+      loadApp: async () => {
+        const { createHistoryRoutes } = await import('./server/history/routes.ts');
+        return createHistoryRoutes();
+      },
+    });
+  }
+
   /** Dev /api/tts endpoints (read-aloud's Speechify proxy). */
   function ttsPlugin(): Plugin {
     return honoDevPlugin({
@@ -347,7 +382,11 @@ export default defineConfig(() => {
             if (!resp.ok) { res.writeHead(502); res.end(`Upstream error: ${resp.status}`); return; }
             const contentType = resp.headers.get('content-type') ?? 'application/octet-stream';
             const body = Buffer.from(await resp.arrayBuffer());
-            res.writeHead(200, { 'Content-Type': contentType });
+            res.writeHead(200, {
+              'Content-Type': contentType,
+              'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+              'X-Content-Type-Options': 'nosniff',
+            });
             res.end(body);
           } catch (err) {
             res.writeHead(502);
@@ -438,7 +477,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), jevPlugin(), historyPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,
@@ -451,18 +490,16 @@ export default defineConfig(() => {
           rewrite: (path) => path.replace(/^\/api\/relay/, ''),
           secure: !useLocalRelay,
           configure: (proxy) => {
+            // One handler, headers before body: writing the body sends the headers, so a
+            // second handler's setHeader threw ERR_HTTP_HEADERS_SENT and killed the dev server.
             proxy.on('proxyReq', (proxyReq, req) => {
+              if (relayServerToken) proxyReq.setHeader('Authorization', `Bearer ${relayServerToken}`);
               const rawBody = (req as any).relayProxyBody as Buffer | undefined;
               if (rawBody) {
                 proxyReq.setHeader('Content-Length', String(rawBody.length));
                 proxyReq.write(rawBody);
               }
             });
-            if (relayServerToken) {
-              proxy.on('proxyReq', (proxyReq) => {
-                proxyReq.setHeader('Authorization', `Bearer ${relayServerToken}`);
-              });
-            }
           },
         },
         // Proxy WebSocket connections to relay-server

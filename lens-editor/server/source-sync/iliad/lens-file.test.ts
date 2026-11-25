@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { composeLens, readLensBody, type FoundCard, type LensFile } from "./lens-file";
+import { cardChoice, composeLens, readLensBody, type FoundCard, type LensFile } from "./lens-file";
 import { splitFrontmatter } from "./module-file";
 import type { Atom } from "./types";
 
@@ -378,5 +378,17 @@ field:: value
       lens({ atoms: [atom], cards: under("one", cards), transcripts: new Map([["v", "Lens Edu/video_transcripts/v.md"]]) }),
     );
     expect(splitFrontmatter(content).body).toBe(original);
+  });
+});
+
+describe("cardChoice", () => {
+  const lens = "Lens Edu/Lenses/Iliad/A.3 Practice/Iliad A.3.7 - AI control.md";
+  it("reads k and the files of a card list", () => {
+    expect(cardChoice(":::require_x_optional_lenses{x=2}\n::card[[../../a|A]]\n\n> A note.\n\n::card[[../../b|B]]\n:::", lens)).toEqual({ pick: 2, readings: ["Lens Edu/Lenses/a.md", "Lens Edu/Lenses/b.md"] });
+    expect(cardChoice(":::require_x_optional_lenses\n::card[[../../a]]\n::card[[../../b]]\n:::", lens)?.pick).toBe(1);
+  });
+
+  it("is null for cards that are not in a list", () => {
+    expect(cardChoice("::card[[../../a|A]]\n\n::card[[../../b|B]]", lens)).toBeNull();
   });
 });

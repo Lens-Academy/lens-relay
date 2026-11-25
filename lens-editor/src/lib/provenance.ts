@@ -37,6 +37,11 @@ export function humanActor(displayName: string): string {
 export const GENERIC_HUMAN_ACTOR = 'human:unknown';
 export const GENERIC_AI_ACTOR = 'ai:unknown';
 
+/** Written by a human, then machine-translated (Google Translate, DeepL, an
+ *  AI): the paste popover's "Human → translated". A `human:` actor, so the
+ *  MCP edit policy protects it like other human text. */
+export const TRANSLATED_HUMAN_ACTOR = 'human:unknown:translated';
+
 /** "<name>'s AI": an AI of unknown model writing on behalf of `displayName`. */
 export function aiOnBehalfActor(displayName: string): string {
   const trimmed = displayName.trim();
@@ -196,7 +201,7 @@ export function isPendingClassification(clientID: number): boolean {
   return pendingClassification.has(clientID);
 }
 
-export type PasteOrigin = 'self' | 'self-ai' | 'human' | 'ai';
+export type PasteOrigin = 'self' | 'self-ai' | 'human' | 'translated' | 'ai';
 
 export interface PasteOriginOption {
   origin: PasteOrigin;
@@ -208,14 +213,16 @@ export interface PasteOriginOption {
 
 /**
  * Answers for the paste popover: the writer's own name and "<name>'s AI"
- * ("Luc" / "Luc's AI"), then a generic "Human" and "AI" for someone else's
- * text or text of unknown origin. Without a display name only the generic
- * two remain, since the writer's own answer would be the generic human.
+ * ("Luc" / "Luc's AI"), then a generic "Human", "Human → translated" and
+ * "AI" for someone else's text, text of unknown origin, or human writing put
+ * through a translator. Without a display name only the generic three remain,
+ * since the writer's own answer would be the generic human.
  */
 export function pasteOriginOptions(displayName: string | null): PasteOriginOption[] {
   const name = displayName?.trim() || null;
   const generic: PasteOriginOption[] = [
     { origin: 'human', label: 'Human', kind: 'human' },
+    { origin: 'translated', label: 'Human → translated', kind: 'human' },
     { origin: 'ai', label: 'AI', kind: 'ai' },
   ];
   if (!name) return generic;
@@ -231,6 +238,7 @@ export function pasteOriginActor(origin: PasteOrigin, displayName: string | null
     case 'self': return humanActor(displayName ?? '');
     case 'self-ai': return aiOnBehalfActor(displayName ?? '');
     case 'human': return GENERIC_HUMAN_ACTOR;
+    case 'translated': return TRANSLATED_HUMAN_ACTOR;
     case 'ai': return GENERIC_AI_ACTOR;
   }
 }

@@ -24,6 +24,8 @@ export interface SyncMarker {
 const SOURCES: Record<string, { label: string; editable: boolean }> = {
   "google-doc": { label: "Google Docs", editable: true },
   iliad: { label: "iliad-intensive.org", editable: false },
+  // The Atlas course sync (server/source-sync/atlas/): its files carry their chapter's Doc link.
+  atlas: { label: "the AI Safety Atlas's Google Docs", editable: true },
 };
 
 /** Human name of a source kind ("Google Docs"), or the kind itself. */

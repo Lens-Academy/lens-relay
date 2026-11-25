@@ -6,6 +6,7 @@ import { render, fireEvent, screen } from '@testing-library/react';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { AuthorshipModeToggle } from './AuthorshipModeToggle';
+import { useAuthorshipSettings } from './useAuthorshipSettings';
 import { authorshipHoverField, authorshipModeField, loadAuthorshipMode } from '../Editor/extensions/authorship';
 
 function makeView() {
@@ -13,6 +14,11 @@ function makeView() {
     state: EditorState.create({ doc: '', extensions: [authorshipModeField, authorshipHoverField] }),
     parent: document.body,
   });
+}
+
+/** The menu section with its settings, as EditorArea holds them */
+function Authorship({ view }: { view: EditorView | null }) {
+  return <AuthorshipModeToggle settings={useAuthorshipSettings(view)} />;
 }
 
 const views: EditorView[] = [];
@@ -23,12 +29,24 @@ afterEach(() => {
 });
 
 describe('AuthorshipModeToggle', () => {
+  it('shows the current display, and opens its options under it', () => {
+    const view = makeView();
+    views.push(view);
+    render(<Authorship view={view} />);
+    const row = screen.getByRole('button', { name: /Authorship/ });
+    expect(row).toHaveTextContent('Gutter');
+    expect(row).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(row);
+    expect(row).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('menuitemradio', { name: /Gutter/ })).toHaveAttribute('aria-checked', 'true');
+  });
+
   it('applies the selected mode to the view', () => {
     const view = makeView();
     views.push(view);
-    render(<AuthorshipModeToggle view={view} />);
+    render(<Authorship view={view} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Authorship display/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Authorship/ }));
     fireEvent.click(screen.getByText('Inline'));
 
     expect(view.state.field(authorshipModeField)).toBe('inline');
@@ -37,9 +55,9 @@ describe('AuthorshipModeToggle', () => {
   it('re-applies the selected mode when the editor view is recreated', () => {
     const viewA = makeView();
     views.push(viewA);
-    const { rerender } = render(<AuthorshipModeToggle view={viewA} />);
+    const { rerender } = render(<Authorship view={viewA} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Authorship display/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Authorship/ }));
     fireEvent.click(screen.getByText('Inline'));
     expect(viewA.state.field(authorshipModeField)).toBe('inline');
 
@@ -48,7 +66,7 @@ describe('AuthorshipModeToggle', () => {
     // view must be brought in line with it.
     const viewB = makeView();
     views.push(viewB);
-    rerender(<AuthorshipModeToggle view={viewB} />);
+    rerender(<Authorship view={viewB} />);
 
     expect(viewB.state.field(authorshipModeField)).toBe('inline');
   });
@@ -56,9 +74,9 @@ describe('AuthorshipModeToggle', () => {
   it('remembers the selected mode for the next editor', () => {
     const view = makeView();
     views.push(view);
-    render(<AuthorshipModeToggle view={view} />);
+    render(<Authorship view={view} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Authorship display/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Authorship/ }));
     fireEvent.click(screen.getByText('Off'));
 
     expect(loadAuthorshipMode()).toBe('hidden');
@@ -71,10 +89,10 @@ describe('AuthorshipModeToggle', () => {
   it('keeps the hover box off until switched on, and persists the switch', () => {
     const view = makeView();
     views.push(view);
-    render(<AuthorshipModeToggle view={view} />);
+    render(<Authorship view={view} />);
     expect(view.state.field(authorshipHoverField)).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: /Authorship display/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Authorship/ }));
     fireEvent.click(screen.getByText('Show author on hover'));
     expect(view.state.field(authorshipHoverField)).toBe(true);
 

@@ -8,7 +8,7 @@ export function SyncedFileBanner() {
   if (!marker) return null;
   const source = syncSourceLabel(marker.source);
   return (
-    <div className="mx-auto max-w-[700px] w-full px-6">
+    <div className="mx-auto max-w-[760px] w-full px-6">
       <div role="note" className="px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-800">
         This file is synced from {source}. Any changes you make here will be overwritten the next
         time it syncs.{' '}

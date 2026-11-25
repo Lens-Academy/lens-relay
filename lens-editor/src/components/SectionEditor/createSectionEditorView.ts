@@ -116,7 +116,8 @@ export function createSectionEditorView(opts: {
     ? [
         criticMarkupExtension({ canAcceptReject: true, commentBadgeMap }),
         commentOffsetTranslator.of((localPos) => offsetBase + localPos),
-        ...(onCommentClick ? [commentClickCallback.of(onCommentClick)] : []),
+        // Badge clicks only: the course editor's comments don't highlight text
+        ...(onCommentClick ? [commentClickCallback.of((absFrom, opts) => { if (!opts?.fromText) onCommentClick(absFrom); })] : []),
         keymap.of(criticMarkupKeymap),
       ]
     : [];
@@ -140,7 +141,7 @@ export function createSectionEditorView(opts: {
           '&': { fontSize: '14px', outline: 'none' },
           '&.cm-focused': { outline: 'none' },
           '.cm-scroller': {
-            fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            fontFamily: 'var(--lens-font-sans)',
           },
           '.cm-content': { padding: '12px 16px' },
           '.cm-gutters': { display: 'none' },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { extractArticle } from "../extract";
-import { forumApiAnswerToHtml, forumCommentRef, forumGraphqlUrl, greaterWrongMirrorUrl } from "./forum-magnum";
+import { forumApiAnswerToHtml, forumAuthorName, forumCommentRef, forumGraphqlUrl, greaterWrongMirrorUrl } from "./forum-magnum";
 
 const mathjax = (tex: string) =>
   `<span class="math-tex"><span class="mjpage"><span class="mjx-chtml"><span class="mjx-math" aria-label="${tex}"><span class="mjx-mi">x</span></span></span></span></span>`;
@@ -242,5 +242,39 @@ describe("forum API answers", () => {
     expect(() => forumApiAnswerToHtml(JSON.stringify({ data: { tags: { results: [] } } }))).toThrow(/no article/);
     expect(() => forumApiAnswerToHtml(JSON.stringify({ errors: [{ message: "bad" }] }))).toThrow(/no article/);
     expect(() => forumApiAnswerToHtml("<!DOCTYPE html><html>playground</html>")).toThrow();
+  });
+});
+
+describe("forumAuthorName", () => {
+  it("uses the full name when the handle ends in that surname", () => {
+    expect(forumAuthorName({ displayName: "tom4everitt", fullName: "Tom Everitt" })).toBe("Tom Everitt");
+    expect(forumAuthorName({ displayName: "RyanCarey", fullName: "Ryan Carey" })).toBe("Ryan Carey");
+    expect(forumAuthorName({ displayName: "zac_kenton", fullName: "Zachary Kenton" })).toBe("Zachary Kenton");
+    expect(forumAuthorName({ displayName: "lewis smith", fullName: "Lewis Smith" })).toBe("Lewis Smith");
+    expect(forumAuthorName({ displayName: "sbenthall", fullName: "Sebastian Benthall" })).toBe("Sebastian Benthall");
+  });
+
+  // A public library must not be what joins a pseudonym to a person.
+  it.each([
+    ["a pen name", "Vika", "Victoria Krakovna"],
+    ["a name written out", "Scott Alexander", "Scott Siskind"],
+    ["an unrelated handle", "CuriousCat", "Jane Smith"],
+    ["a first name alone", "Alice", "Alice Smith"],
+    ["a handle that is only a first name", "beren", "Beren Millidge"],
+    ["a first name hiding in a word", "benevolent_ai", "Ben Jones"],
+    ["a first name opening a word", "dandelion", "Dan Smith"],
+    ["a surname alone", "Smith", "Jane Smith"],
+    ["a surname inside a word", "brownfox", "Amy Brown"],
+    ["a word that happens to end like the surname", "wordsmith", "Jane Smith"],
+    ["another such word", "lonewolf", "Sam Wolf"],
+    ["a one-word full name", "tomeveritt", "Everitt"],
+  ])("keeps %s", (_name, displayName, fullName) => {
+    expect(forumAuthorName({ displayName, fullName })).toBe(displayName);
+  });
+
+  it("falls back to the display name when there is no full name", () => {
+    expect(forumAuthorName({ displayName: "James Fox", fullName: null })).toBe("James Fox");
+    expect(forumAuthorName({ displayName: "plex" })).toBe("plex");
+    expect(forumAuthorName(null)).toBeUndefined();
   });
 });

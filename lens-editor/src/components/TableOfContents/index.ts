@@ -1,10 +1,10 @@
-export { TableOfContents } from './TableOfContents';
+export { TableOfContents, PageOutline } from './TableOfContents';
 export {
   useHeadings,
   extractHeadings,
   scrollToHeading,
   normalizeHeadingLevels,
-  useActiveHeading,
+  useHeadingInView,
   type Heading,
   type NormalizedHeading,
 } from './useHeadings';

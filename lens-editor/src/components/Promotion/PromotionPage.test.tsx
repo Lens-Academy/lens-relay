@@ -108,21 +108,70 @@ describe('PromotionPage', () => {
       prNumber: 42,
       prUrl: 'https://github.com/Lens-Academy/lens-relay/pull/42',
       mainSha: 'main-sha',
-      autoMergeEnabled: true,
+      merge: 'merged',
     });
     renderPromotionPage('/promote?path=%2FLens%20Edu%2FNotes.md');
 
-    await user.click(await screen.findByRole('button', { name: 'Create promotion PR' }));
+    await user.click(await screen.findByRole('button', { name: 'Promote to production' }));
 
     await waitFor(() => {
       expect(createPromotionPr).toHaveBeenCalledWith({ paths: ['Notes.md'] });
     });
     expect(Object.keys(vi.mocked(createPromotionPr).mock.calls[0][0])).toEqual(['paths']);
-    expect(await screen.findByText('Pull request created')).toBeInTheDocument();
+    expect(await screen.findByText('Merged to production')).toBeInTheDocument();
+    expect(screen.getByText('The change is in production now.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Pull request #42/ })).toHaveAttribute(
       'href',
       'https://github.com/Lens-Academy/lens-relay/pull/42'
     );
+  });
+
+  it('reloads the changes after a merge, so the merged file leaves the list', async () => {
+    const user = userEvent.setup();
+    vi.mocked(createPromotionPr).mockResolvedValue({
+      branch: 'promote/notes',
+      prNumber: 45,
+      prUrl: 'https://github.com/Lens-Academy/lens-relay/pull/45',
+      mainSha: 'main-sha',
+      merge: 'merged',
+    });
+    renderPromotionPage('/promote?path=%2FLens%20Edu%2FNotes.md');
+    const table = await screen.findByRole('table');
+    vi.mocked(getPromotionChanges).mockResolvedValue({
+      mainSha: 'merged-sha',
+      generatedAt: '2026-06-27T00:01:00Z',
+      files: files.filter(file => file.path !== 'Notes.md'),
+      curriculum: { courses: [], modules: [], memberships: {} },
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Promote to production' }));
+
+    expect(await screen.findByText('Merged to production')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(table).queryByRole('checkbox', { name: /Notes\.md/ })).not.toBeInTheDocument();
+    });
+    expect(within(table).getByRole('checkbox', { name: /Other\.md/ })).not.toBeChecked();
+    expect(getPromotionChanges).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Merged to production')).toBeInTheDocument();
+  });
+
+  it('says the merge worked when only the reload after it fails', async () => {
+    const user = userEvent.setup();
+    vi.mocked(createPromotionPr).mockResolvedValue({
+      branch: 'promote/notes',
+      prNumber: 46,
+      prUrl: 'https://github.com/Lens-Academy/lens-relay/pull/46',
+      mainSha: 'main-sha',
+      merge: 'merged',
+    });
+    renderPromotionPage('/promote?path=%2FLens%20Edu%2FNotes.md');
+    await screen.findByRole('table');
+    vi.mocked(getPromotionChanges).mockRejectedValue(new Error('Promotion request failed: 502'));
+
+    await user.click(screen.getByRole('button', { name: 'Promote to production' }));
+
+    expect(await screen.findByText('Merged to production')).toBeInTheDocument();
+    expect(await screen.findByText(/The merge worked, but the list of changes could not be reloaded/)).toBeInTheDocument();
   });
 
   it('loads and renders a diff after View diff', async () => {
@@ -369,21 +418,23 @@ describe('PromotionPage', () => {
     expect(screen.getByText(/0 selected in results/)).toBeInTheDocument();
   });
 
-  it('shows an auto-merge warning when PR result has autoMergeEnabled false', async () => {
+  it('says why a promotion PR is still open', async () => {
     const user = userEvent.setup();
     vi.mocked(createPromotionPr).mockResolvedValue({
       branch: 'promote/notes',
       prNumber: 43,
       prUrl: 'https://github.com/Lens-Academy/lens-relay/pull/43',
       mainSha: 'main-sha',
-      autoMergeEnabled: false,
-      warning: 'Auto-merge could not be enabled.',
+      merge: 'open',
+      warning: 'GitHub did not merge the pull request: it conflicts with production.',
     });
     renderPromotionPage('/promote?path=%2FLens%20Edu%2FNotes.md');
 
-    await user.click(await screen.findByRole('button', { name: 'Create promotion PR' }));
+    await user.click(await screen.findByRole('button', { name: 'Promote to production' }));
 
-    expect(await screen.findByText('Auto-merge could not be enabled.')).toBeInTheDocument();
+    expect(await screen.findByText('Not merged yet')).toBeInTheDocument();
+    expect(screen.getByText('GitHub did not merge the pull request: it conflicts with production.')).toBeInTheDocument();
+    expect(getPromotionChanges).toHaveBeenCalledTimes(1);
   });
 
   it('does not create the same promotion PR again after success', async () => {
@@ -393,13 +444,14 @@ describe('PromotionPage', () => {
       prNumber: 44,
       prUrl: 'https://github.com/Lens-Academy/lens-relay/pull/44',
       mainSha: 'main-sha',
-      autoMergeEnabled: true,
+      merge: 'auto-merge',
     });
     renderPromotionPage('/promote?path=%2FLens%20Edu%2FNotes.md');
 
-    const createButton = await screen.findByRole('button', { name: 'Create promotion PR' });
+    const createButton = await screen.findByRole('button', { name: 'Promote to production' });
     await user.click(createButton);
     expect(await screen.findByText('Pull request created')).toBeInTheDocument();
+    expect(screen.getByText(/Auto-merge is on/)).toBeInTheDocument();
     expect(createButton).toBeDisabled();
 
     await user.click(createButton);

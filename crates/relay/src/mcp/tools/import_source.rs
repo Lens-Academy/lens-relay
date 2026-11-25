@@ -10,14 +10,22 @@
 //!
 //! The lens-editor base URL comes from `LENS_EDITOR_URL` (default
 //! `http://lens-editor:3000`, the docker-compose service address).
+//!
+//! `link_from` asks the editor to replace a page's links to the sources with
+//! wikilinks once they are ready (docs/plans/2026-11-02-import-and-link-sources.md).
+//! The page is checked here, where the document is at hand, and the swap
+//! itself is the editor's call to `POST /doc/link-source`.
 
+use crate::server::Server;
 use serde_json::{json, Value};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use y_sweet_core::external_links::page_offers_source_links;
 use y_sweet_core::share_token::McpAccess;
+use yrs::{GetString, ReadTxn, Transact};
 
 const DEFAULT_EDITOR_URL: &str = "http://lens-editor:3000";
-const MAX_URLS: usize = 20;
+pub(super) const MAX_URLS: usize = 20;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const ARTICLE_IMPORT_MODES: [&str; 3] = ["stub", "article", "article-and-lens"];
 
@@ -39,13 +47,104 @@ pub(super) fn request_token(access: &McpAccess) -> Result<String, String> {
 }
 
 /// Execute the `import_source` tool (and its `import_article` alias).
-pub async fn execute(access: &McpAccess, arguments: &Value) -> Result<String, String> {
-    execute_with_editor_url(access, arguments, &editor_url_from_env()).await
+pub async fn execute(
+    server: &Arc<Server>,
+    session_id: &str,
+    access: &McpAccess,
+    arguments: &Value,
+) -> Result<String, String> {
+    let editor_url = editor_url_from_env();
+    execute_for_session(server, session_id, access, arguments, &editor_url).await
+}
+
+async fn execute_for_session(
+    server: &Arc<Server>,
+    session_id: &str,
+    access: &McpAccess,
+    arguments: &Value,
+    editor_url: &str,
+) -> Result<String, String> {
+    let link_back = link_back(server, session_id, arguments).await?;
+    import(access, arguments, link_back, editor_url).await
 }
 
 pub async fn execute_with_editor_url(
     access: &McpAccess,
     arguments: &Value,
+    editor_url: &str,
+) -> Result<String, String> {
+    import(access, arguments, None, editor_url).await
+}
+
+/// Why `path` cannot take `link_from`, given that the page rule refused it.
+fn link_from_refusal(path: &str) -> String {
+    let reason = if path.starts_with("Lens Edu/") {
+        "the platform leaves wikilinks to articles as literal text, so a swap would break the link for learners. Import without link_from instead, and don't paste the article's text into a lens"
+    } else if path.contains("/_trash/") {
+        "the page is in the trash"
+    } else if !path.to_lowercase().ends_with(".md") {
+        "only Markdown pages have their links replaced"
+    } else {
+        "it is an imported or synced file (its frontmatter has source_url or synced_from), so its text comes from its source"
+    };
+    format!("Error: Can't use link_from with {}: {}.", path, reason)
+}
+
+/// The `linkBack` for the importer when the call has `link_from`. Reads the
+/// page, since `create` leaves a new page unread and the rule needs no read.
+async fn link_back(
+    server: &Arc<Server>,
+    session_id: &str,
+    arguments: &Value,
+) -> Result<Option<Value>, String> {
+    let path = match arguments.get("link_from") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(path)) => path,
+        Some(_) => return Err("link_from must be a string".to_string()),
+    };
+    let doc_info = server
+        .doc_resolver()
+        .resolve_path(path)
+        .ok_or_else(|| format!("Error: link_from: document not found: {}", path))?;
+    // The path alone can refuse, and spares loading a file that is no page.
+    if !page_offers_source_links(path, "") {
+        return Err(link_from_refusal(path));
+    }
+    server
+        .ensure_doc_loaded(&doc_info.doc_id)
+        .await
+        .map_err(|e| format!("Error: Failed to load document {}: {}", path, e))?;
+    let awareness = server
+        .docs()
+        .get(&doc_info.doc_id)
+        .map(|doc_ref| doc_ref.awareness())
+        .ok_or_else(|| format!("Error: Document data not loaded: {}", path))?;
+    let text = {
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+        let txn = guard.doc.transact();
+        txn.get_text("contents")
+            .map(|t| t.get_string(&txn))
+            .unwrap_or_default()
+    };
+    if !page_offers_source_links(path, &text) {
+        return Err(link_from_refusal(path));
+    }
+    let session = server
+        .mcp_sessions
+        .get_session(session_id)
+        .ok_or_else(|| "Error: Session not found".to_string())?;
+    Ok(Some(json!({
+        "path": path,
+        "actor": session.ai_actor,
+        "author": session.author_name,
+        "protectHuman": true,
+    })))
+}
+
+async fn import(
+    access: &McpAccess,
+    arguments: &Value,
+    link_back: Option<Value>,
     editor_url: &str,
 ) -> Result<String, String> {
     let urls: Vec<String> = arguments
@@ -92,6 +191,9 @@ pub async fn execute_with_editor_url(
     // Only sent when asked for, so a plain import's payload stays unchanged.
     if replace_existing {
         body["replaceExisting"] = json!(true);
+    }
+    if let Some(link_back) = link_back {
+        body["linkBack"] = link_back;
     }
 
     proxy(
@@ -231,6 +333,7 @@ async fn proxy(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_helpers::{build_test_server, build_test_server_in};
     use super::*;
     use axum::extract::Request;
     use axum::routing::{get, post};
@@ -531,6 +634,183 @@ mod tests {
                 "got: {err}"
             );
         }
+    }
+
+    const PAGE_UUID: &str = "0d1a0000-0000-4000-8000-000000000001";
+
+    fn lens_session(server: &Arc<Server>) -> String {
+        server
+            .mcp_sessions
+            .create_session(access_with_token("tok"), Some("Luc"), Some("opus-5"))
+    }
+
+    fn linked_import(link_from: &str) -> Value {
+        json!({
+            "urls": ["https://example.com/a"],
+            "import_mode": "article",
+            "link_from": link_from
+        })
+    }
+
+    // Prevents: the editor swapping links under the wrong identity, or an
+    // agent's swap skipping the edit policy. The session never read the page:
+    // `create` doesn't mark a page read, and link_from must work right after it.
+    #[tokio::test]
+    async fn link_from_forwards_the_sessions_identity() {
+        let server =
+            build_test_server(&[("/Reading list.md", PAGE_UUID, "https://example.com/a")]).await;
+        let sid = lens_session(&server);
+        let (editor_url, mut rx) = mock_editor().await;
+
+        execute_for_session(
+            &server,
+            &sid,
+            &access_with_token("tok"),
+            &linked_import("Lens/Reading list.md"),
+            &editor_url,
+        )
+        .await
+        .expect("import should succeed");
+
+        let (_, body) = rx.recv().await.unwrap();
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            body["linkBack"],
+            json!({
+                "path": "Lens/Reading list.md",
+                "actor": "ai:opus-5:Luc",
+                "author": "Luc's AI",
+                "protectHuman": true
+            })
+        );
+    }
+
+    // Prevents: a plain import's payload changing
+    #[tokio::test]
+    async fn no_link_from_sends_no_link_back() {
+        let server = build_test_server(&[]).await;
+        let sid = lens_session(&server);
+        let (editor_url, mut rx) = mock_editor().await;
+        for arguments in [
+            json!({"urls": ["https://example.com/a"], "import_mode": "article"}),
+            json!({"urls": ["https://example.com/a"], "import_mode": "article", "link_from": null}),
+        ] {
+            execute_for_session(
+                &server,
+                &sid,
+                &access_with_token("tok"),
+                &arguments,
+                &editor_url,
+            )
+            .await
+            .expect("import should succeed");
+            let (_, body) = rx.recv().await.unwrap();
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert!(body.get("linkBack").is_none(), "{body}");
+        }
+    }
+
+    async fn refusal(server: &Arc<Server>, link_from: Value) -> String {
+        let sid = lens_session(server);
+        let arguments = json!({
+            "urls": ["https://example.com/a"],
+            "import_mode": "article",
+            "link_from": link_from
+        });
+        execute_for_session(
+            server,
+            &sid,
+            &access_with_token("tok"),
+            &arguments,
+            "http://127.0.0.1:1",
+        )
+        .await
+        .expect_err("link_from must be refused before contacting the editor")
+    }
+
+    // Prevents: a swap in a lens, which breaks a working link for learners
+    // because the platform leaves a wikilink to an article as literal text
+    #[tokio::test]
+    async fn link_from_refuses_lens_edu_and_says_what_to_do_instead() {
+        let server = build_test_server_in(
+            "Lens Edu",
+            &[("/Lenses/a.md", PAGE_UUID, "https://example.com/a")],
+        )
+        .await;
+        let err = refusal(&server, json!("Lens Edu/Lenses/a.md")).await;
+        assert!(err.contains("literal text"), "{err}");
+        assert!(err.contains("Import without link_from"), "{err}");
+        assert!(err.contains("don't paste"), "{err}");
+    }
+
+    // Prevents: an import queued for a swap that can only fail later
+    #[tokio::test]
+    async fn link_from_refuses_a_page_that_is_not_there_by_name() {
+        let server = build_test_server(&[]).await;
+        let err = refusal(&server, json!("Lens/Nothing.md")).await;
+        assert!(err.contains("not found"), "{err}");
+        assert!(err.contains("Lens/Nothing.md"), "{err}");
+    }
+
+    // Prevents: an agent reaching a page the offer refuses, and an unhelpful
+    // refusal: each one has to say why
+    #[tokio::test]
+    async fn link_from_refuses_pages_the_offer_leaves_alone() {
+        let server = build_test_server(&[
+            (
+                "/_trash/old.md",
+                "0d1a0000-0000-4000-8000-000000000002",
+                "x",
+            ),
+            ("/page.html", "0d1a0000-0000-4000-8000-000000000003", "x"),
+            (
+                "/imported.md",
+                "0d1a0000-0000-4000-8000-000000000004",
+                "---\nsource_url: https://example.com/a\n---\nBody",
+            ),
+            (
+                "/synced.md",
+                "0d1a0000-0000-4000-8000-000000000005",
+                "---\nsynced_from:\n  source: google-doc\n---\nBody",
+            ),
+        ])
+        .await;
+        for (path, why) in [
+            ("Lens/_trash/old.md", "trash"),
+            ("Lens/page.html", "Markdown"),
+            ("Lens/imported.md", "source_url"),
+            ("Lens/synced.md", "synced_from"),
+        ] {
+            let err = refusal(&server, json!(path)).await;
+            assert!(err.contains(why), "{path}: {err}");
+        }
+    }
+
+    // Prevents: a malformed link_from reading as no link_from, so the import
+    // runs and the agent believes the links will change
+    #[tokio::test]
+    async fn link_from_must_be_a_string() {
+        let server = build_test_server(&[]).await;
+        let err = refusal(&server, json!(["Lens/a.md"])).await;
+        assert!(err.contains("link_from must be a string"), "{err}");
+    }
+
+    // Prevents: a refused link_from that still reaches the editor, or a
+    // session without a token getting past the check to an opaque 401
+    #[tokio::test]
+    async fn link_from_still_needs_a_share_token() {
+        let server = build_test_server(&[("/a.md", PAGE_UUID, "x")]).await;
+        let sid = lens_session(&server);
+        let err = execute_for_session(
+            &server,
+            &sid,
+            &access_without_token(),
+            &linked_import("Lens/a.md"),
+            "http://127.0.0.1:1",
+        )
+        .await
+        .expect_err("no raw token");
+        assert!(err.contains("no share token"), "{err}");
     }
 
     #[test]

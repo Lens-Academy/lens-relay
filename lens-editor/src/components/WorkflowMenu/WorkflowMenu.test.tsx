@@ -29,6 +29,23 @@ function renderMenu(initialEntry = '/') {
 describe('WorkflowMenu', () => {
   afterEach(() => {
     cleanup();
+    localStorage.removeItem('lens-theme');
+    document.documentElement.removeAttribute('data-theme');
+  });
+
+  it('switches between Light, Dark and the system setting, and remembers it', async () => {
+    const user = userEvent.setup();
+    renderMenu();
+    await user.click(screen.getByRole('button', { name: /open workflows menu/i }));
+
+    await user.click(screen.getByRole('menuitemradio', { name: 'Dark' }));
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(localStorage.getItem('lens-theme')).toBe('dark');
+    expect(screen.getByRole('menuitemradio', { name: 'Dark' })).toHaveAttribute('aria-checked', 'true');
+
+    await user.click(screen.getByRole('menuitemradio', { name: 'Light' }));
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(screen.getByRole('menuitemradio', { name: 'Use system setting' })).toHaveAttribute('aria-checked', 'false');
   });
 
   it('opens workflow links from the top menu', async () => {
@@ -87,26 +104,26 @@ describe('WorkflowMenu', () => {
       </AuthProvider>
     );
     await user.click(screen.getByRole('button', { name: /open workflows menu/i }));
-    return screen.getAllByRole('menuitem').map(item => item.querySelector('.font-medium')?.textContent);
+    return screen.getAllByRole('menuitem').map(item => item.querySelector('.lens-menu-item-label')?.textContent);
   }
 
   it('offers view and suggest links only the pages they can use', async () => {
-    expect(await openMenuAs('view', null, true)).toEqual(['Recent Changes']);
+    expect(await openMenuAs('view', null, true)).toEqual(['Recent Changes', 'Concept Map']);
     cleanup();
-    expect(await openMenuAs('suggest', EDU_FOLDER_ID, false)).toEqual(['Recent Changes']);
+    expect(await openMenuAs('suggest', EDU_FOLDER_ID, false)).toEqual(['Recent Changes', 'Concept Map']);
   });
 
   it('offers Lens Edu workflows only to edit links that include Lens Edu', async () => {
     expect(await openMenuAs('edit', 'some-other-folder', false)).toEqual(['Review Suggestions', 'Recent Changes']);
     cleanup();
     expect(await openMenuAs('edit', EDU_FOLDER_ID, false)).toEqual([
-      'Review Suggestions', 'Recent Changes', 'Add Source',
+      'Review Suggestions', 'Recent Changes', 'Concept Map', 'Add Source',
     ]);
   });
 
   it('offers Promote to Production only to admin links that include Lens Edu', async () => {
     expect(await openMenuAs('admin', EDU_FOLDER_ID, false)).toEqual([
-      'Review Suggestions', 'Recent Changes', 'Add Source', 'Promote to Production',
+      'Review Suggestions', 'Recent Changes', 'Concept Map', 'Add Source', 'Promote to Production',
     ]);
     cleanup();
     expect(await openMenuAs('admin', 'some-other-folder', false)).toEqual(['Review Suggestions', 'Recent Changes']);

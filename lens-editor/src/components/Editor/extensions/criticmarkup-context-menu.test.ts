@@ -1,7 +1,8 @@
 // src/components/Editor/extensions/criticmarkup-context-menu.test.ts
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSelection } from '../../../test/codemirror-helpers';
 import { getContextMenuItems } from './criticmarkup-context-menu';
+import { acceptChangeAtCursor } from './criticmarkup-commands';
 
 describe('CriticMarkup Context Menu', () => {
   let cleanup: (() => void) | undefined;
@@ -148,14 +149,14 @@ describe('CriticMarkup Context Menu', () => {
       expect(getContextMenuItems(view, doc.indexOf('seen') + 1)).toEqual([]);
     });
 
-    it('nothing to accept or reject on a comment badge, at either edge or inside', () => {
+    it('nothing to accept or reject on a comment, at either edge or inside', () => {
       const doc = 'a {>>a note<<} b';
       const { view, cleanup: c } = createCriticMarkupEditor(doc, 0);
       cleanup = c;
 
-      expect(getContextMenuItems(view, 2)).toEqual([]);
-      expect(getContextMenuItems(view, 6)).toEqual([]);
-      expect(getContextMenuItems(view, doc.indexOf(' b'))).toEqual([]);
+      for (const pos of [2, 6, doc.indexOf(' b')]) {
+        expect(getContextMenuItems(view, pos).map((i) => i.label)).not.toContain('Accept Change');
+      }
     });
 
     it('nothing on a badge right after a suggestion, though the click lands in the suggestion', () => {
@@ -180,17 +181,26 @@ describe('CriticMarkup Context Menu', () => {
       expect(getContextMenuItems(view, doc.indexOf('{>>'), badge)).toEqual([]);
       expect(getContextMenuItems(view, 1).map((i) => i.label)).toEqual(['Accept 2 Changes', 'Reject 2 Changes']);
     });
+  });
+});
 
-    it('highlighted text keeps the items its own ✓ ✗ have', () => {
-      const doc = 'a {==seen==}{>>a note<<} b';
-      const { view, cleanup: c } = createCriticMarkupEditor(doc, 0);
-      cleanup = c;
+describe('Resolve Comment', () => {
+  const comment = '{>>{"author":"ann","timestamp":1}@@why?<<}';
+  const doc = `We {==ship it==}${comment} soon.`;
 
-      const items = getContextMenuItems(view, doc.indexOf('seen') + 1);
+  it('is offered on commented text, and removes the comment and the highlight', () => {
+    const { view, cleanup } = createCriticMarkupEditor(doc, doc.indexOf('ship') + 1);
+    const items = getContextMenuItems(view);
+    expect(items.map((i) => i.label)).toEqual(['Resolve Comment']);
+    items[0].action();
+    expect(view.state.doc.toString()).toBe('We ship it soon.');
+    cleanup();
+  });
 
-      expect(items.map((i) => i.label)).toEqual(['Accept Change', 'Reject Change']);
-      items[0].action();
-      expect(view.state.doc.toString()).toBe('a seen{>>a note<<} b');
-    });
+  it('accepting the highlight also removes its comment', () => {
+    const { view, cleanup } = createCriticMarkupEditor(doc, doc.indexOf('ship') + 1);
+    acceptChangeAtCursor(view);
+    expect(view.state.doc.toString()).toBe('We ship it soon.');
+    cleanup();
   });
 });

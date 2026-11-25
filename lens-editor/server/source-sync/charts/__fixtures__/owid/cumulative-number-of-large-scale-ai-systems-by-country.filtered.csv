@@ -1,0 +1,57 @@
+entity,code,year,cumulative_count
+Canada,CAN,2019,0
+Canada,CAN,2020,0
+Canada,CAN,2021,0
+Canada,CAN,2022,0
+Canada,CAN,2023,2
+Canada,CAN,2024,5
+Canada,CAN,2025,7
+China,CHN,2019,0
+China,CHN,2020,0
+China,CHN,2021,3
+China,CHN,2022,5
+China,CHN,2023,53
+China,CHN,2024,112
+China,CHN,2025,194
+Finland,FIN,2019,0
+Finland,FIN,2020,0
+Finland,FIN,2021,0
+Finland,FIN,2022,0
+Finland,FIN,2023,1
+Finland,FIN,2024,2
+Finland,FIN,2025,2
+France,FRA,2019,0
+France,FRA,2020,0
+France,FRA,2021,0
+France,FRA,2022,2
+France,FRA,2023,7
+France,FRA,2024,17
+France,FRA,2025,20
+Germany,DEU,2019,0
+Germany,DEU,2020,0
+Germany,DEU,2021,0
+Germany,DEU,2022,2
+Germany,DEU,2023,2
+Germany,DEU,2024,3
+Germany,DEU,2025,4
+Hong Kong,HKG,2019,0
+Hong Kong,HKG,2020,0
+Hong Kong,HKG,2021,0
+Hong Kong,HKG,2022,1
+Hong Kong,HKG,2023,3
+Hong Kong,HKG,2024,5
+Hong Kong,HKG,2025,7
+Israel,ISR,2019,0
+Israel,ISR,2020,0
+Israel,ISR,2021,1
+Israel,ISR,2022,1
+Israel,ISR,2023,3
+Israel,ISR,2024,4
+Israel,ISR,2025,4
+Multinational,,2019,0
+Multinational,,2020,0
+Multinational,,2021,0
+Multinational,,2022,0
+Multinational,,2023,1
+Multinational,,2024,1
+Multinational,,2025,1

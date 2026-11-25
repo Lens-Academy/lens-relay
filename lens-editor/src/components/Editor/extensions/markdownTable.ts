@@ -6,6 +6,11 @@ import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
 import { GFM, parser } from '@lezer/markdown';
 import { createLinkElement } from './linkElement';
+import { linkMarkup, pastedUrl } from './pasteLink';
+import { createWikilinkElement, getWikilinkContext, linksCreate, splitWikilink } from './wikilinkElement';
+import { WikilinkExtension } from './wikilinkParser';
+import { wikilinkMetadataChanged } from './wikilinkEffects';
+import { wikilinkEnd } from './wikilinkTable';
 
 type Align = 'left' | 'center' | 'right';
 
@@ -21,14 +26,29 @@ interface TableWidgetData {
   rows: CellInfo[][];
   nodeFrom: number;
   nodeTo: number;
+  /** linkEpochField when built: cells draw their wikilinks again when it changes */
+  linkEpoch: number;
 }
 
 // `|` and `\` are syntactically meaningful inside a GFM table cell. Escape
 // them with a backslash when writing user input to the doc; reverse the
 // escape when displaying. Without this, typing or pasting `|` would split
-// the row into a new column on the next reparse.
+// the row into a new column on the next reparse. A wikilink is left as it is:
+// our table parser keeps the `|` of [[note|alias]] in the cell, and the platform
+// reads that form but not Obsidian's [[note\|alias]] (which GitHub needs, and
+// which the editor and the relay's link index read too).
 function escapeForCell(s: string): string {
-  return s.replace(/[\\|]/g, c => '\\' + c);
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const linkEnd = wikilinkEnd(s, i);
+    if (linkEnd > -1) {
+      out += s.slice(i, linkEnd);
+      i = linkEnd - 1;
+    } else {
+      out += s[i] === '\\' || s[i] === '|' ? '\\' + s[i] : s[i];
+    }
+  }
+  return out;
 }
 
 function unescapeFromCell(s: string): string {
@@ -48,6 +68,7 @@ function unescapeFromCell(s: string): string {
 // with every block parser removed so that "# x" or "- x" stay one paragraph.
 const cellParser = parser.configure([
   GFM,
+  WikilinkExtension,
   {
     remove: [
       'SetextHeading', 'FencedCode', 'Blockquote', 'HorizontalRule', 'BulletList', 'OrderedList',
@@ -112,13 +133,30 @@ function renderInlineNode(target: Node, source: string, node: SyntaxNode): void 
       } else {
         label.appendChild(document.createTextNode(url));
       }
-      const link = createLinkElement(label, url);
+      const link = createLinkElement(label, url, node.name === 'Link');
       // Refused schemes come back as plain text, which should still edit the cell
       if (link.classList.contains('cm-link-widget')) {
         // Keep the press from focusing the cell, which would swap the rendered
         // cell for its Markdown source before the click reaches the link.
         link.addEventListener('mousedown', e => e.preventDefault());
       }
+      target.appendChild(link);
+      return;
+    }
+    case 'Wikilink': {
+      const contentNode = node.getChild('WikilinkContent');
+      if (!contentNode || raw.startsWith('!')) break; // ![[embed]] shows its source
+      // [[note|alias]] shows the alias; a blank alias falls back to the note
+      const { target: page, alias } = splitWikilink(source.slice(contentNode.from, contentNode.to));
+      const resolved = getWikilinkContext()?.isResolved(page) ?? true;
+      // Asked on the click: the cell is drawn before it is in the editor
+      const link = createWikilinkElement(page, alias.trim() ? alias : page, resolved, () => {
+        const editor = link.closest<HTMLElement>('.cm-editor');
+        const view = editor && EditorView.findFromDOM(editor);
+        return view ? linksCreate(view) : false;
+      });
+      // As for links: keep the press from swapping the cell for its source
+      link.addEventListener('mousedown', e => e.preventDefault());
       target.appendChild(link);
       return;
     }
@@ -164,6 +202,7 @@ class TableWidget extends WidgetType {
     return (
       this.data.nodeFrom === other.data.nodeFrom &&
       this.data.nodeTo === other.data.nodeTo &&
+      this.data.linkEpoch === other.data.linkEpoch &&
       this.data.headers.length === other.data.headers.length &&
       this.data.rows.length === other.data.rows.length &&
       this.data.headers.every((h, i) => h.content === other.data.headers[i]?.content) &&
@@ -287,12 +326,21 @@ class TableWidget extends WidgetType {
     // Plain-text paste only; newlines collapse to spaces so the paste
     // doesn't split the markdown row across multiple lines. Pipes and
     // backslashes are handled by the input handler's escapeForCell.
+    // A URL pasted over selected text links that text (a markdown link,
+    // even to a doc).
     el.addEventListener('paste', e => {
       e.preventDefault();
-      const text = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r?\n/g, ' ');
+      const pasted = e.clipboardData?.getData('text/plain') ?? '';
       const sel = window.getSelection();
       if (!sel?.rangeCount) return;
       const range = sel.getRangeAt(0);
+      let text = pasted.replace(/\r?\n/g, ' ');
+      const url = pastedUrl(pasted);
+      if (url && !range.collapsed) {
+        const [, lead, selected, trail] = range.toString().match(/^(\s*)([\s\S]*?)(\s*)$/)!;
+        const markup = linkMarkup(selected, url);
+        if (markup) text = lead + markup.before + selected + markup.after + trail;
+      }
       range.deleteContents();
       range.insertNode(document.createTextNode(text));
       sel.collapseToEnd();
@@ -540,7 +588,9 @@ function buildTableDecorations(state: EditorState): DecorationSet {
         from: firstLine.from,
         to: lastLine.to,
         deco: Decoration.replace({
-          widget: new TableWidget({ headers, rows, nodeFrom: node.from, nodeTo: node.to }),
+          widget: new TableWidget({
+            headers, rows, nodeFrom: node.from, nodeTo: node.to, linkEpoch: state.field(linkEpochField, false) ?? 0,
+          }),
           block: true,
         }),
       });
@@ -569,12 +619,27 @@ const userInteractedField = StateField.define<boolean>({
   },
 });
 
+// Counts wikilinkMetadataChanged effects. Which notes exist is not in the doc,
+// so without it a table drawn before the folder's file list arrived would keep
+// showing its links as missing notes.
+const linkEpochField = StateField.define<number>({
+  create: () => 0,
+  update: (value, tr) => (tr.effects.some(e => e.is(wikilinkMetadataChanged)) ? value + 1 : value),
+});
+
 const tableField = StateField.define<DecorationSet>({
   create(state) {
     return buildTableDecorations(state);
   },
   update(value, tr) {
-    if (tr.docChanged || tr.selection || tr.annotation(Transaction.userEvent) !== undefined) {
+    // The tree check catches background parsing: a long document is parsed
+    // past the viewport only after load, and tables in the newly parsed part
+    // must render then, not on the next click (which made the page jump).
+    if (
+      tr.docChanged || tr.selection || tr.annotation(Transaction.userEvent) !== undefined ||
+      syntaxTree(tr.startState) !== syntaxTree(tr.state) ||
+      tr.state.field(linkEpochField, false) !== tr.startState.field(linkEpochField, false)
+    ) {
       return buildTableDecorations(tr.state);
     }
     return value;
@@ -666,14 +731,15 @@ const tableTheme = EditorView.theme({
     minWidth: '100%',
     maxWidth: 'calc(100cqi - 32px)',
     overflowX: 'auto',
-    borderRadius: '6px',
-    border: '1px solid #e5e7eb',
+    // Notion's simple table: square corners, warm grey borders, 14px text on
+    // a 20px line, cells padded 7px 9px (colours are index.css tokens, for dark mode)
+    border: '1px solid var(--lens-table-border)',
   },
   '.cm-md-table': {
     borderCollapse: 'collapse',
     width: '100%',
     fontSize: '14px',
-    lineHeight: '1.5',
+    lineHeight: '20px',
   },
   // Each column is bounded on both sides:
   //  - minimum: 8em. The explicit minWidth is the only floor Chrome honors —
@@ -689,9 +755,9 @@ const tableTheme = EditorView.theme({
   // whiteSpace/overflowWrap are set explicitly because cells inherit
   // pre-wrap/anywhere from .cm-content and .cm-lineWrapping.
   '.cm-md-table th, .cm-md-table td': {
-    padding: '6px 12px',
-    borderRight: '1px solid #e5e7eb',
-    borderBottom: '1px solid #e5e7eb',
+    padding: '7px 9px',
+    borderRight: '1px solid var(--lens-table-border)',
+    borderBottom: '1px solid var(--lens-table-border)',
     whiteSpace: 'normal',
     overflowWrap: 'break-word',
     verticalAlign: 'top',
@@ -706,7 +772,7 @@ const tableTheme = EditorView.theme({
     content: '""',
     display: 'inline-block',
     width: '0',
-    height: '1.5em',
+    height: '20px',
     verticalAlign: 'middle',
   },
   '.cm-md-table th:last-child, .cm-md-table td:last-child': {
@@ -716,27 +782,27 @@ const tableTheme = EditorView.theme({
     borderBottom: 'none',
   },
   '.cm-md-table thead tr': {
-    borderBottom: '2px solid #e5e7eb',
+    borderBottom: '1px solid var(--lens-table-border)',
   },
   '.cm-md-table th': {
-    background: '#f9fafb',
-    fontWeight: '600',
-    color: '#374151',
+    background: 'var(--lens-table-header-bg)',
+    fontWeight: '500',
+    color: 'var(--lens-text)',
   },
   '.cm-md-table td': {
-    color: '#4b5563',
-    background: 'white',
+    color: 'var(--lens-text)',
+    background: 'var(--lens-page-bg)',
   },
   '.cm-md-table tbody tr:hover td': {
-    background: '#f9fafb',
+    background: 'var(--lens-table-row-hover)',
   },
   '.cm-md-table th:focus, .cm-md-table td:focus': {
-    background: '#eff6ff',
-    boxShadow: 'inset 0 0 0 2px #3b82f6',
+    background: 'var(--lens-bg-blue)',
+    boxShadow: 'inset 0 0 0 2px var(--lens-blue)',
     borderRadius: '2px',
   },
 });
 
 export function markdownTableExtension(): Extension {
-  return [userInteractedField, tableField, Prec.highest(keymap.of(tableEscapeKeymap)), tableTheme];
+  return [userInteractedField, linkEpochField, tableField, Prec.highest(keymap.of(tableEscapeKeymap)), tableTheme];
 }

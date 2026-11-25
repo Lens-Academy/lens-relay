@@ -1,31 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { convertDocumentTab, escapeInline } from "./to-markdown";
-import type { DocumentTab, ParagraphElement, StructuralElement, TextStyle } from "./docs-types";
+import { convertDocumentTab, convertSlice, escapeInline, figureCharts, parseChapterTitle } from "./to-markdown";
+import type { DocumentTab, StructuralElement } from "./docs-types";
+import { heading, image, para, run, table, text } from "./__fixtures__/docs";
 
-// --- Docs JSON builders -----------------------------------------------------
-
-const run = (content: string, textStyle: TextStyle = {}): ParagraphElement => ({ textRun: { content, textStyle } });
-const para = (
-  elements: ParagraphElement[],
-  namedStyleType = "NORMAL_TEXT",
-  bullet?: { listId: string; nestingLevel?: number },
-): StructuralElement => ({ paragraph: { elements, paragraphStyle: { namedStyleType }, bullet } });
-const text = (s: string, style?: TextStyle) => para([run(`${s}\n`, style)]);
-const heading = (level: number | "TITLE" | "SUBTITLE", s: string) =>
-  para([run(`${s}\n`)], typeof level === "number" ? `HEADING_${level}` : level);
-const image = (id: string) => para([{ inlineObjectElement: { inlineObjectId: id } }, run("\n")]);
-const table = (rows: [string, StructuralElement[]][]): StructuralElement => ({
-  table: {
-    columns: 2,
-    tableRows: rows.map(([key, value]) => ({ tableCells: [{ content: [text(key)] }, { content: value }] })),
-  },
-});
+const imageUrl = (id: string) => (id.startsWith("missing") ? null : `https://img.test/${id}.png`);
 
 function convert(content: StructuralElement[], extra: Partial<DocumentTab> = {}) {
-  return convertDocumentTab(
-    { body: { content }, ...extra },
-    { imageUrl: (id) => (id.startsWith("missing") ? null : `https://img.test/${id}.png`) },
-  );
+  return convertDocumentTab({ body: { content }, ...extra }, { imageUrl });
 }
 
 // --- Plain Docs structure ---------------------------------------------------
@@ -167,6 +148,57 @@ describe("Atlas components", () => {
     );
   });
 
+  describe("interactive figures that draw a chart", () => {
+    const OWID = "https://ourworldindata.org/grapher/annual-industrial-robots-installed?tab=chart";
+    const iframe = (src: string, still = "kix.s") => table([["type", [text("iframe")]], ["source", [text(src)]], ["still_image", [image(still)]], ["caption", [text("Robots.")]]]);
+    const slice = (content: StructuralElement[], chart?: (id: string) => boolean) => convertSlice({}, content, { imageUrl, chapterNumber: 2, counters: new Map(), chart });
+
+    it("name the chart on the still image only when it has a file; other embeds stay as they are", () => {
+      const content = [iframe(OWID), iframe("https://ourworldindata.org/grapher/retired-chart", "kix.r"), iframe("https://www.metaculus.com/questions/embed/1", "kix.m")];
+      const out = slice(content, (id) => id === "owid-annual-industrial-robots-installed");
+      expect(out.body).toBe(
+        `![Interactive figure 2.1](https://img.test/kix.s.png "chart:owid-annual-industrial-robots-installed")\n\n*Interactive figure 2.1: Robots.* ([Open the interactive version](${OWID}))\n\n` +
+          "![Interactive figure 2.2](https://img.test/kix.r.png)\n\n*Interactive figure 2.2: Robots.* ([Open the interactive version](https://ourworldindata.org/grapher/retired-chart))\n\n" +
+          "![Interactive figure 2.3](https://img.test/kix.m.png)\n\n*Interactive figure 2.3: Robots.* ([Open the interactive version](https://www.metaculus.com/questions/embed/1))\n",
+      );
+      expect(out.warnings).toEqual([]);
+      // Without the option (the single-Doc sync), no figure names a chart.
+      expect(slice(content).body).toBe(slice(content, () => false).body);
+      expect(slice(content).body).not.toContain("chart:");
+    });
+
+    it("render a chart table like an iframe, linking the data's own page", () => {
+      const chart = table([
+        ["type", [text("chart")]],
+        ["source", [text("https://epoch.ai/data/notable_ai_models.csv")]],
+        ["x", [text("Publication date")]],
+        ["y", [text("Training compute (FLOP)")]],
+        ["id", [text("compute")]],
+        ["still_image", [image("kix.c")]],
+        ["caption", [text("Compute.")]],
+      ]);
+      expect(slice([chart], () => true).body).toBe(
+        '![Interactive figure 2.1](https://img.test/kix.c.png "chart:compute")\n\n*Interactive figure 2.1: Compute.* ([Open the interactive version](https://epoch.ai/data/notable-ai-models))\n',
+      );
+      const broken = table([["type", [text("chart")]], ["source", [text("https://example.org/data.csv")]], ["still_image", [image("kix.c")]], ["caption", [text("Compute.")]]]);
+      const out = slice([broken], () => true);
+      expect(out.body).toBe("![Interactive figure 2.1](https://img.test/kix.c.png)\n\n*Interactive figure 2.1: Compute.* ([Open the interactive version](https://example.org/data.csv))\n");
+      expect(out.warnings).toEqual(["Interactive figure 2.1: its source https://example.org/data.csv is not an https link to ourworldindata.org or epoch.ai"]);
+    });
+
+    it("are found where the converter renders them: in the text and in boxes, not in plain tables", () => {
+      const box = table([["type", [text("notebox")]], ["content", [iframe("https://ourworldindata.org/grapher/in-a-box")]]]);
+      const plain = { table: { columns: 1, tableRows: [{ tableCells: [{ content: [iframe("https://ourworldindata.org/grapher/in-a-cell")] }] }] } };
+      expect(figureCharts([iframe(OWID), box, plain, iframe("https://www.metaculus.com/questions/embed/1")]).map((c) => c.id)).toEqual(["owid-annual-industrial-robots-installed", "owid-in-a-box"]);
+    });
+
+    it("are no chart without a still image, which the chart's name sits on", () => {
+      const imageless = table([["type", [text("iframe")]], ["source", [text(OWID)]], ["still_image", []], ["caption", [text("Robots.")]]]);
+      expect(figureCharts([imageless])).toEqual([]);
+      expect(slice([imageless], () => true).body).toBe(`*Interactive figure 2.1: Robots.* ([Open the interactive version](${OWID}))\n`);
+    });
+  });
+
   it("renders a quote with its attribution", () => {
     const out = convert([
       table([
@@ -190,7 +222,7 @@ describe("Atlas components", () => {
     expect(out.body).toBe("**Definition: AGI** — General AI. (Morris, 2024)\n");
   });
 
-  it("turns note boxes and callouts into callouts, growing the fence around nested ones", () => {
+  it("turns note boxes and callouts into callouts (a callout untitled, as in the Doc), growing the fence around nested ones", () => {
     const out = convert([
       table([
         ["type", [text("noteBox")]],
@@ -204,7 +236,7 @@ describe("Atlas components", () => {
     ]);
     expect(out.body).toBe(
       `::::callout{title="The 'bitter' lesson 1" tone="neutral" collapse="closed"}\n\nOuter text.\n\n` +
-        `:::callout{title="Warning" tone="amber"}\n\nCareful.\n\n:::\n\n::::\n\n` +
+        `:::callout{tone="amber"}\n\nCareful.\n\n:::\n\n::::\n\n` +
         `:::callout{title="Open box" tone="neutral"}\n\nShown.\n\n:::\n`,
     );
   });
@@ -385,5 +417,89 @@ describe("lists and other structure", () => {
       inlineObjects: { "kix.a": { inlineObjectProperties: { embeddedObject: { description: "Line one\n\nLine two" } } } },
     });
     expect(out.body).toBe("![Line one Line two](https://img.test/kix.a.png)\n");
+  });
+});
+
+// --- Parts of a tab (Atlas sections) ------------------------------------------
+
+describe("convertSlice", () => {
+  const figure = (id: string) => table([["type", [text("figure")]], ["content", [image(id)]]]);
+  const definition = (term: string) => table([["type", [text("definition")]], ["term", [text(term)]], ["content", [text("Meaning.")]]]);
+
+  it("numbers on from the counters it is given, per label, counting components nested in boxes", () => {
+    const counters = new Map<string, number>();
+    const tab: DocumentTab = {};
+    const slice = (content: StructuralElement[]) =>
+      convertSlice(tab, content, { imageUrl, chapterNumber: 4, counters, numberDefinitions: true }).body;
+    expect(slice([figure("a"), definition("AGI")])).toBe(
+      "![Figure 4.1](https://img.test/a.png)\n\n*Figure 4.1*\n\n**Definition 4.1: AGI** — Meaning.\n",
+    );
+    const box = table([["type", [text("noteBox")]], ["title", [text("Box")]], ["content", [figure("b"), definition("ASI")]]]);
+    expect(slice([box, figure("c")])).toBe(
+      `:::callout{title="Box" tone="neutral" collapse="closed"}\n\n![Figure 4.2](https://img.test/b.png)\n\n*Figure 4.2*\n\n` +
+        "**Definition 4.2: ASI** — Meaning.\n\n:::\n\n![Figure 4.3](https://img.test/c.png)\n\n*Figure 4.3*\n",
+    );
+    expect(counters).toEqual(new Map([["Figure", 3], ["Definition", 2]]));
+  });
+
+  it("leaves definitions unnumbered unless asked, as the single-Doc sync writes them", () => {
+    expect(convert([heading("TITLE", "Chapter 2 - Risks"), definition("AGI")]).body).toBe("**Definition: AGI** — Meaning.\n");
+    expect(convertDocumentTab({ body: { content: [heading("TITLE", "Chapter 2 - Risks"), definition("AGI")] } }, { imageUrl, numberDefinitions: true }).body).toBe(
+      "**Definition 2.1: AGI** — Meaning.\n",
+    );
+  });
+
+  it("lists only the footnotes the slice references, with the Doc's numbers, and keeps TITLE text as text", () => {
+    const tab: DocumentTab = { footnotes: { f1: { content: [text("One.")] }, f2: { content: [text("Two.")] } } };
+    const ref = (id: string, n: string) => para([run("Claim"), { footnoteReference: { footnoteId: id, footnoteNumber: n } }, run("\n")]);
+    const out = convertSlice(tab, [heading("TITLE", "Not a title here"), ref("f2", "2")], { imageUrl, chapterNumber: 1, counters: new Map() });
+    expect(out.body).toBe("Not a title here\n\nClaim[^note-2]\n\n[^note-2]: Two.\n");
+  });
+
+  it("keeps the words on either side of a manual line break apart", () => {
+    const soft = (style: string) => para([run("one\u000btwo\n")], style);
+    const out = convertSlice({}, [soft("HEADING_2"), soft("NORMAL_TEXT"), table([["type", [text("video")]], ["source", [text("https://v.test")]], ["caption", [para([run("cap\u000btion\n")])]]])], {
+      imageUrl,
+      chapterNumber: 1,
+      counters: new Map(),
+    });
+    expect(out.body).toBe("## one two\n\none\ntwo\n\n*Video 1.1: cap\ntion* ([Watch the video](https://v.test))\n");
+  });
+});
+
+describe("an image beside a figure", () => {
+  const figure = (id: string) => table([["type", [text("figure")]], ["content", [image(id)]], ["caption", [text("Caption.")]]]);
+  // Hosting is by content: two copies of one picture get one URL.
+  const sameUrl = { imageUrl: (id: string) => `https://img.test/${id.replace(/-copy$/, "")}.png` };
+
+  it("leaves out a loose copy of the picture of the figure next to it, and says so", () => {
+    const out = convertDocumentTab({ body: { content: [text("Before."), image("kix.a-copy"), text(""), figure("kix.a"), text("After.")] } }, sameUrl);
+    expect(out.body).toBe("Before.\n\n![Figure 1](https://img.test/kix.a.png)\n\n*Figure 1: Caption.*\n\nAfter.\n");
+    expect(out.warnings).toEqual(["an image outside any figure, the same picture as the figure beside it, was left out"]);
+  });
+
+  it("keeps a loose image that is another picture, is not next to the figure, or shares its paragraph with text", () => {
+    const content = [
+      image("kix.b"),
+      figure("kix.a"),
+      text("Between."),
+      image("kix.a-copy"),
+      para([run("See "), { inlineObjectElement: { inlineObjectId: "kix.a-copy" } }, run("\n")]),
+    ];
+    const out = convertDocumentTab({ body: { content } }, sameUrl);
+    expect(out.body.match(/!\[\]/g)).toHaveLength(3);
+    expect(out.warnings).toEqual([]);
+  });
+});
+
+describe("parseChapterTitle", () => {
+  it.each([
+    ["Chapter 1 - Capabilities", { number: 1, title: "Capabilities" }],
+    ["  Chapter 12 - Weak-to-Strong (W2S) ", { number: 12, title: "Weak-to-Strong (W2S)" }],
+    ["Chapitre 7 – Généralisation", { number: 7, title: "Généralisation" }],
+    ["Chapter 3 -", { number: 3, title: "" }],
+    ["Capabilities", null],
+  ])("%s", (input, expected) => {
+    expect(parseChapterTitle(input)).toEqual(expected);
   });
 });

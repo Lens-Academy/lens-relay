@@ -13,6 +13,7 @@ import {
   detectGutter,
   ocrSuspectWords,
   derivePdfMeta,
+  isJunkInfoAuthor,
 } from "./pdf";
 import type { PdfPageImage } from "./pdf-images";
 
@@ -318,6 +319,32 @@ describe("ocrSuspectWords", () => {
   it("returns empty when texts agree", () => {
     const t = "identical wording across both extraction paths here.";
     expect(ocrSuspectWords(t, t)).toEqual([]);
+  });
+});
+
+describe("isJunkInfoAuthor / derivePdfMeta junk authors", () => {
+  const titlePage = "A Study\n\nJames Connell and Anne Kubisch\n\nAbstract\nText.";
+
+  it("does not credit the login that made the file", () => {
+    expect(isJunkInfoAuthor("mtang")).toBe(true);
+    expect(isJunkInfoAuthor("j.smith2")).toBe(true);
+    expect(isJunkInfoAuthor("Administrator")).toBe(true);
+    expect(isJunkInfoAuthor("someone@example.org")).toBe(true);
+    expect(derivePdfMeta({ Author: "mtang" }, titlePage, "https://x.org/a.pdf").author).toEqual([
+      "James Connell",
+      "Anne Kubisch",
+    ]);
+  });
+
+  it("keeps a real Info author, and drops only the junk beside it", () => {
+    expect(isJunkInfoAuthor("Mary De Silva")).toBe(false);
+    expect(isJunkInfoAuthor("OECD")).toBe(false);
+    expect(derivePdfMeta({ Author: "Mary De Silva" }, titlePage, "https://x.org/a.pdf").author).toEqual([
+      "Mary De Silva",
+    ]);
+    expect(derivePdfMeta({ Author: "Mary De Silva; mtang" }, titlePage, "https://x.org/a.pdf").author).toEqual([
+      "Mary De Silva",
+    ]);
   });
 });
 

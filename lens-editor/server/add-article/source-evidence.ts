@@ -21,6 +21,7 @@ import {
   resolveFetchUrls,
 } from "./adapters";
 import { extractPdfSmart } from "./pdf";
+import { inlineLinkedTables, type LinkedTableCache } from "./linked-tables";
 
 const REVIEW_HTML_MAX_LINE_CHARS = 8_000;
 /** `ExtractResult.via` of the fallbacks used when no adapter took the page. */
@@ -34,6 +35,9 @@ export interface SourceEvidenceManifest {
   media_type: "html" | "pdf";
   extraction_via: string;
   candidate_chars: number;
+  /** Tables fetched from their own pages into the source, and any that failed
+   *  (see linked-tables.ts). Absent when the page has none. */
+  linked_tables?: { inlined: string[]; failed: string[] };
 }
 
 export interface SourceEvidence {
@@ -180,6 +184,18 @@ export async function buildSourceEvidence(
 
   const htmlCandidates: NonNullable<SourceEvidence["htmlCandidates"]> = {};
 
+  const linkedTableCache: LinkedTableCache = new Map();
+  const linkedTables = { inlined: new Set<string>(), failed: new Set<string>() };
+  const withLinkedTables = async (html: string, url: string): Promise<string> => {
+    const result = await inlineLinkedTables(html, url, { fetchDirect: fetchRawHtml, fetchRendered: fetchRenderedHtml }, {
+      signal,
+      cache: linkedTableCache,
+    });
+    result.inlined.forEach((table) => linkedTables.inlined.add(table));
+    result.failed.forEach((table) => linkedTables.failed.add(table));
+    return result.html;
+  };
+
   // Preserve both interpretations. The reviewer chooses the editing base after
   // seeing both Markdown candidates; neither fetch path is globally superior.
   if (mediaType !== "pdf") {
@@ -187,6 +203,7 @@ export async function buildSourceEvidence(
       htmlCandidates.unrendered = structuredExtraction;
     } else if (rawHtml !== undefined) {
       try {
+        rawHtml = await withLinkedTables(rawHtml, fetchedUrl);
         htmlCandidates.unrendered = await extractArticle(rawHtml, fetchedUrl, {
           sourceUrl,
           fetchText: fetchAuxiliaryText,
@@ -199,6 +216,7 @@ export async function buildSourceEvidence(
     if (!structured) {
       try {
         renderedHtml = await fetchRenderedHtml(rawHtml !== undefined ? fetchedUrl : sourceUrl, signal);
+        renderedHtml = await withLinkedTables(renderedHtml, rawHtml !== undefined ? fetchedUrl : sourceUrl);
         htmlCandidates.rendered = await extractArticle(renderedHtml, fetchedUrl, {
           sourceUrl,
           fetchText: fetchAuxiliaryText,
@@ -244,6 +262,9 @@ export async function buildSourceEvidence(
       media_type: mediaType,
       extraction_via: extraction.via,
       candidate_chars: extraction.body.length,
+      ...(linkedTables.inlined.size + linkedTables.failed.size > 0
+        ? { linked_tables: { inlined: [...linkedTables.inlined], failed: [...linkedTables.failed] } }
+        : {}),
     },
   };
 }

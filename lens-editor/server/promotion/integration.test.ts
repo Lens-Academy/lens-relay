@@ -115,13 +115,16 @@ async function readRequestBody(req: http.IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : null;
 }
 
-async function startFakeGitHub(): Promise<{
+/** A GitHub that answers like an unprotected branch: a new PR can merge at once. `onMerge` gets the PR's head branch. */
+async function startFakeGitHub(onMerge: (branch: string) => Promise<void>): Promise<{
   apiBaseUrl: string;
   graphqlUrl: string;
   pulls: RecordedRequest[];
+  merges: RecordedRequest[];
   graphql: RecordedRequest[];
 }> {
   const pulls: RecordedRequest[] = [];
+  const merges: RecordedRequest[] = [];
   const graphql: RecordedRequest[] = [];
 
   const server = http.createServer(async (req, res) => {
@@ -129,7 +132,7 @@ async function startFakeGitHub(): Promise<{
       const corsHeaders = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'accept, authorization, content-type, x-github-api-version',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
       };
       if (req.method === 'OPTIONS') {
         res.writeHead(204, corsHeaders);
@@ -145,6 +148,20 @@ async function startFakeGitHub(): Promise<{
           html_url: 'https://github.com/Lens-Academy/lens-edu-production/pull/123',
           node_id: 'PR_kwDOIntegration123',
         }));
+        return;
+      }
+
+      if (req.method === 'GET' && req.url === '/repos/Lens-Academy/lens-edu-production/pulls/123') {
+        res.writeHead(200, { ...corsHeaders, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ mergeable: true, mergeable_state: 'clean' }));
+        return;
+      }
+
+      if (req.method === 'PUT' && req.url === '/repos/Lens-Academy/lens-edu-production/pulls/123/merge') {
+        merges.push({ path: req.url, body: await readRequestBody(req) });
+        await onMerge(String((pulls[0].body as { head: string }).head));
+        res.writeHead(200, { ...corsHeaders, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ merged: true }));
         return;
       }
 
@@ -176,6 +193,7 @@ async function startFakeGitHub(): Promise<{
     apiBaseUrl: `http://127.0.0.1:${port}`,
     graphqlUrl: `http://127.0.0.1:${port}/graphql`,
     pulls,
+    merges,
     graphql,
   };
 }
@@ -202,13 +220,18 @@ describe('promotion route service integration', () => {
     await Promise.all(fixtureRoots.splice(0).map(root => fs.rm(root, { recursive: true, force: true })));
   });
 
-  it('promotes selected files through real Git and fake GitHub network I/O', async () => {
+  it('promotes selected files through real Git and fake GitHub network I/O, and merges them', async () => {
     const fixture = await createFixture();
-    const fakeGitHub = await startFakeGitHub();
     const gitPromotion = createGitPromotionService(fixture.config);
+    const fakeGitHub = await startFakeGitHub(async branch => {
+      // An open tab polls while GitHub merges: it caches production as it was before the merge.
+      await gitPromotion.getChanges();
+      await runGit(fixture.remoteDir, ['update-ref', 'refs/heads/production', `refs/heads/${branch}`]);
+    });
     const githubPromotion = createGitHubPromotionService(fixture.config, {
       apiBaseUrl: fakeGitHub.apiBaseUrl,
       graphqlUrl: fakeGitHub.graphqlUrl,
+      sleep: async () => {},
     });
     const routeService = createPromotionRouteService(gitPromotion, githubPromotion);
 
@@ -221,7 +244,7 @@ describe('promotion route service integration', () => {
       branch: expect.stringMatching(/^promote\/integration\//),
       prNumber: 123,
       prUrl: 'https://github.com/Lens-Academy/lens-edu-production/pull/123',
-      autoMergeEnabled: true,
+      merge: 'merged',
     });
     expect(result).not.toHaveProperty('sourceStagingSha');
     await expect(branchDiffNames(fixture, result.branch)).resolves.toEqual(['selected.md']);
@@ -236,13 +259,15 @@ describe('promotion route service integration', () => {
       body: expect.stringContaining(`Source staging commit: ${fixture.stagingSha}`),
     });
     expect(String((fakeGitHub.pulls[0].body as { body: string }).body)).toContain('- `selected.md`');
-
-    expect(fakeGitHub.graphql).toHaveLength(1);
-    expect(fakeGitHub.graphql[0].body).toMatchObject({
-      variables: {
-        pullRequestId: 'PR_kwDOIntegration123',
-        mergeMethod: 'SQUASH',
-      },
+    expect(fakeGitHub.merges).toHaveLength(1);
+    expect(fakeGitHub.merges[0].body).toEqual({
+      merge_method: 'squash',
+      sha: await runGit(fixture.inspectDir, ['rev-parse', `origin/${result.branch}`]),
     });
+    expect(fakeGitHub.graphql).toHaveLength(0);
+
+    // The next read sees the merge at once, not after the 30-second fetch throttle.
+    const after = await routeService.getChanges();
+    expect(after.files.map(file => file.path)).toEqual(['unselected.md']);
   });
 });

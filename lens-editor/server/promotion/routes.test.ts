@@ -29,7 +29,7 @@ function createMockService(): PromotionRouteService {
       prNumber: 42,
       prUrl: 'https://github.test/pull/42',
       mainSha: '1111111111111111111111111111111111111111',
-      autoMergeEnabled: true,
+      merge: 'merged',
     })),
   } as PromotionRouteService;
 }
@@ -229,7 +229,7 @@ describe('promotion route service delegation', () => {
       prNumber: 42,
       prUrl: 'https://github.test/pull/42',
       mainSha: '1111111111111111111111111111111111111111',
-      autoMergeEnabled: true,
+      merge: 'merged',
     });
   });
 

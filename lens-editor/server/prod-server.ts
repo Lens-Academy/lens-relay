@@ -2,10 +2,10 @@ import http from 'node:http';
 import { Readable } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { getRequestListener } from '@hono/node-server';
-import { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest } from './relay-proxy-auth.ts';
+import { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest, scopeRelayPath, relayBodyFor } from './relay-proxy-auth.ts';
 import { initDiscordGateway } from './discord/routes.ts';
 import { createApp } from './app.ts';
-import { startIliadSyncFromEnv, startSourceSyncFromEnv } from './source-sync/index.ts';
+import { startAtlasSyncFromEnv, startIliadSyncFromEnv, startSourceSyncFromEnv } from './source-sync/index.ts';
 
 const relayUrl = process.env.RELAY_URL || 'http://relay-server:8080';
 const relayServerToken = process.env.RELAY_SERVER_TOKEN;
@@ -84,7 +84,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    req.url = relayPath;
+    req.url = scopeRelayPath(req.method || 'GET', relayPath, auth);
+    if (rawBody) {
+      rawBody = relayBodyFor(req.method || 'GET', pathOnly, auth, parsedBody, rawBody, allowedFolderName);
+      req.headers['content-length'] = String(rawBody.length);
+      delete req.headers['transfer-encoding'];
+    }
     if (relayServerToken) {
       req.headers['authorization'] = `Bearer ${relayServerToken}`;
     }
@@ -117,4 +122,5 @@ server.listen(port, () => {
   // Keep Relay copies of externally edited sources current (off unless configured)
   startSourceSyncFromEnv();
   startIliadSyncFromEnv();
+  startAtlasSyncFromEnv();
 });

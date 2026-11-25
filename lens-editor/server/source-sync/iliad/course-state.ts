@@ -10,6 +10,10 @@
  * reading is someone else's file, of which the sync needs only the address
  * of the article it shows: when one cannot be read the run carries on with
  * the address unknown, and says so.
+ *
+ * Every file is read as Lens publishes it, with each pending suggestion
+ * rejected: that is what learners see, and a suggestion may be half of an
+ * edit (a heading changed, its block not yet).
  */
 
 import { extractVideoInput } from "../../add-video/video-url";
@@ -17,7 +21,7 @@ import { uniqueAnchors } from "./anchor";
 import { readSyncMarker, SYNC_MARKER_KEY } from "../../../shared/source-sync";
 import { LAYOUT, linkTarget, sourceLink, type Layout } from "./layout";
 import { ILIAD_SOURCE, readLensBody, type Card } from "./lens-file";
-import { blockFile, field, parseBlocks, splitFrontmatter, type Block, type MarkdownFile } from "./module-file";
+import { blockFile, field, parseBlocks, splitFrontmatter, withoutSuggestions, type Block, type MarkdownFile } from "./module-file";
 import type { CourseFiles } from "./types";
 
 /** A lens the sync owns: its page on iliad-intensive.org is where its text comes from. */
@@ -25,6 +29,8 @@ export interface LensState {
   path: string;
   /** The file as it is now. */
   content: string;
+  /** The file as Lens publishes it, pending suggestions rejected: what everything below is read from. */
+  published: string;
   id: string;
   title: string;
   tldr: string | null;
@@ -74,6 +80,8 @@ export interface ModuleBlock extends Block {
 export interface ModuleState {
   path: string;
   content: string;
+  /** As Lens publishes it, pending suggestions rejected: what `blocks` are read from. */
+  published: string;
   head: string;
   title: string;
   blocks: ModuleBlock[];
@@ -87,10 +95,14 @@ export interface CourseBlock extends Block {
 export interface CourseState {
   path: string;
   content: string;
+  /** As Lens publishes it, pending suggestions rejected: what `blocks` are read from. */
+  published: string;
   head: string;
   blocks: CourseBlock[];
   /** `upstream_commit` of the course file: the source commit of the last run that finished. */
   commit: string | null;
+  /** `sync_rules` of the course file: the version of the sync's rules that run had (course-files.ts SYNC_RULES). */
+  rules: string | null;
   /** In course order. */
   modules: ModuleState[];
   /** Every Iliad lens the modules list, in course order. */
@@ -146,7 +158,7 @@ export async function readCourseState(files: CourseFiles, layout: Layout = LAYOU
   const shown = async (lensPath: string, link: string | null, key: string): Promise<string | null> => {
     const content = link ? await read(linkTarget(lensPath, link)) : null;
     try {
-      return content === null ? null : field(splitFrontmatter(content).data, key);
+      return content === null ? null : field(splitFrontmatter(withoutSuggestions(content)).data, key);
     } catch {
       return null;
     }
@@ -171,9 +183,10 @@ export async function readCourseState(files: CourseFiles, layout: Layout = LAYOU
 
     const content = await read(path);
     if (content === null) return { reading: { ...unknown("does not exist", "To do: correct the link in the module, or delete the entry.").reading, missing: true } };
+    const published = withoutSuggestions(content);
     let file: MarkdownFile;
     try {
-      file = splitFrontmatter(content);
+      file = splitFrontmatter(published);
     } catch (err) {
       const problem = `has frontmatter that is not valid YAML (${(err as Error).message.split("\n")[0]})`;
       if (!looksOwn(content)) return unknown(problem, "Nothing to do for the sync; correct the lines between the two --- if Lens shows the file wrongly.");
@@ -199,6 +212,7 @@ export async function readCourseState(files: CourseFiles, layout: Layout = LAYOU
     const lens: LensState = {
       path,
       content,
+      published,
       id,
       title: field(file.data, "title") ?? "",
       tldr: field(file.data, "tldr"),
@@ -218,28 +232,29 @@ export async function readCourseState(files: CourseFiles, layout: Layout = LAYOU
   };
 
   /** A course or module file: the sync cannot work without it. */
-  const readOwn = async (path: string, problemIfMissing: string): Promise<{ content: string; file: MarkdownFile }> => {
+  const readOwn = async (path: string, problemIfMissing: string): Promise<{ content: string; published: string; file: MarkdownFile }> => {
     const content = await read(path);
     if (content === null) throw new Error(`${problemIfMissing} The sync stopped and changed nothing.`);
+    const published = withoutSuggestions(content);
     try {
-      return { content, file: splitFrontmatter(content) };
+      return { content, published, file: splitFrontmatter(published) };
     } catch (err) {
       throw new Error(`"${path}" has frontmatter that is not valid YAML (${(err as Error).message.split("\n")[0]}). The sync stopped and changed nothing. To do: open the file and correct the lines between the two ---.`);
     }
   };
 
   const readModule = async (path: string): Promise<ModuleState> => {
-    const { content, file } = await readOwn(path, `The course file "${layout.course}" lists the module "${path}", which does not exist. To do: correct the "# Module:" link in the course file, or restore the module from the folder's trash (_trash/).`);
+    const { content, published, file } = await readOwn(path, `The course file "${layout.course}" lists the module "${path}", which does not exist. To do: correct the "# Module:" link in the course file, or restore the module from the folder's trash (_trash/).`);
     const blocks = await mapLimit(parseBlocks(file.body), 6, async (block): Promise<ModuleBlock> => {
       const file = blockFile(block, path);
       if (!file) return block;
       if (!lensFiles.has(file)) lensFiles.set(file, readLens(file, path, block.title));
       return { ...block, ...(await lensFiles.get(file)!) };
     });
-    return { path, content, head: file.head, title: field(file.data, "title") ?? "", blocks };
+    return { path, content, published, head: file.head, title: field(file.data, "title") ?? "", blocks };
   };
 
-  const { content, file: course } = await readOwn(layout.course, `The course file "${layout.course}" does not exist. To do: check the path the sync was started with.`);
+  const { content, published, file: course } = await readOwn(layout.course, `The course file "${layout.course}" does not exist. To do: check the path the sync was started with.`);
   const blocks: CourseBlock[] = parseBlocks(course.body);
   const modulePaths = [...new Set(blocks.flatMap((block) => blockFile(block, layout.course) ?? []))];
   const modules: ModuleState[] = [];
@@ -272,5 +287,5 @@ export async function readCourseState(files: CourseFiles, layout: Layout = LAYOU
     }
   }
 
-  return { path: layout.course, content, head: course.head, blocks, commit: field(course.data, "upstream_commit"), modules, lenses, transcripts, warnings };
+  return { path: layout.course, content, published, head: course.head, blocks, commit: field(course.data, "upstream_commit"), rules: field(course.data, "sync_rules"), modules, lenses, transcripts, warnings };
 }

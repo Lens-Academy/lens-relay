@@ -30,6 +30,9 @@ export class PcmPlayer {
   private progressAt = 0;
   private draining = false;
 
+  /** Called on each progress report of the worklet (every 0.1 s while playing). */
+  onProgress: (() => void) | null = null;
+
   /** Called once the queue has drained after `drain()`. */
   onEmpty: (() => void) | null = null;
 
@@ -154,6 +157,7 @@ export class PcmPlayer {
         if (data.type === 'progress' || data.type === 'empty') {
           this.samplesPlayed = Number(data.samplesPlayed ?? 0);
           this.progressAt = ctx.currentTime;
+          if (data.type === 'progress') this.onProgress?.();
         }
         if (data.type === 'empty' && this.draining) this.onEmpty?.();
       };

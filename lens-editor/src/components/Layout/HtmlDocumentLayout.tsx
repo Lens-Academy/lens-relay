@@ -38,7 +38,7 @@ export function HtmlDocumentLayout({ docId, children }: { docId: string; childre
           />
           <div
             id="right-sidebar"
-            className="overflow-y-auto overflow-x-hidden flex-shrink-0 bg-[#f6f6f6]"
+            className="overflow-y-auto overflow-x-hidden flex-shrink-0 bg-[var(--lens-sidebar-bg)]"
             style={{ width: rightCollapsed ? 0 : manager.getWidth('right-sidebar') }}
           >
             <BacklinksPanel currentDocId={docId} />

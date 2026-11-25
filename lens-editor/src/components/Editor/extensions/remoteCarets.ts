@@ -159,7 +159,9 @@ class RemoteCaretsPluginValue {
     const decorations: Array<{ from: number; to: number; value: Decoration }> = [];
 
     awareness.getStates().forEach((state, clientId) => {
-      if (clientId === awareness.doc.clientID) return;
+      // Not awareness.doc.clientID: provenance rotates the doc's id (new day,
+      // new display name) while our cursor stays under the awareness's own.
+      if (clientId === awareness.clientID) return;
       const cursor: CursorJson | null | undefined = state.cursor;
       if (cursor == null || cursor.anchor == null || cursor.head == null) return;
       present.add(clientId);

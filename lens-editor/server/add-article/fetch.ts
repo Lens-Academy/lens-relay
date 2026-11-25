@@ -277,6 +277,7 @@ function decodeEntities(s: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#0?39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
     .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
       String.fromCodePoint(parseInt(hex, 16)),
     )
@@ -285,40 +286,23 @@ function decodeEntities(s: string): string {
 
 /** Find <meta property|name="key" content="..."> regardless of attribute order */
 function metaContent(html: string, key: string): string {
-  const patterns = [
-    new RegExp(
-      `<meta[^>]+(?:property|name)=["']${key}["'][^>]+content=["']([^"']*)["']`,
-      "i",
-    ),
-    new RegExp(
-      `<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${key}["']`,
-      "i",
-    ),
-  ];
-  for (const p of patterns) {
-    const m = html.match(p);
-    if (m?.[1]) return decodeEntities(m[1].trim());
-  }
-  return "";
+  return metaContentAll(html, key)[0] ?? "";
 }
 
 /** All values for a repeated meta tag (e.g. multiple citation_author tags),
  *  regardless of attribute order. */
 function metaContentAll(html: string, key: string): string[] {
+  // The value ends at its own kind of quote: an apostrophe is not the end of a
+  // double-quoted name ("Aoife O'Brien").
+  const value = `content=(?:"([^"]*)"|'([^']*)')`;
   const res = [
-    new RegExp(
-      `<meta[^>]+(?:property|name)=["']${key}["'][^>]+content=["']([^"']*)["']`,
-      "gi",
-    ),
-    new RegExp(
-      `<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${key}["']`,
-      "gi",
-    ),
+    new RegExp(`<meta[^>]+(?:property|name)=["']${key}["'][^>]+${value}`, "gi"),
+    new RegExp(`<meta[^>]+${value}[^>]+(?:property|name)=["']${key}["']`, "gi"),
   ];
   const out: string[] = [];
   for (const re of res) {
     for (const m of html.matchAll(re)) {
-      const v = decodeEntities((m[1] || "").trim());
+      const v = decodeEntities((m[1] ?? m[2] ?? "").trim());
       if (v) out.push(v);
     }
   }
@@ -353,13 +337,35 @@ export function isValidYmd(y: string, mo: string, d: string): boolean {
   );
 }
 
-/** Normalize a date string to YYYY-MM-DD (ISO, slashed, or parseable text). */
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+
+/** "2020/12", "2024 Mar", "September, 2020" or a bare or seasonal year ("2024",
+ *  "2024 Spring") at the precision it states: "2020-12", "2024-03", "2024". A
+ *  day or month the source never gave would be a made-up date. "" when `s` is
+ *  anything else. */
+function partialDate(s: string): string {
+  const numeric = s.match(/^(\d{4})(?:[-/](\d{1,2}))?(?:\s+(?:spring|summer|fall|autumn|winter))?$/i);
+  if (numeric && isValidYmd(numeric[1], numeric[2] || "1", "1")) {
+    return numeric[2] ? `${numeric[1]}-${numeric[2].padStart(2, "0")}` : numeric[1];
+  }
+  const named = s.match(/^(\d{4})\s+([a-z]{3,9})\.?$/i) ?? s.match(/^([a-z]{3,9})\.?[\s,]+(\d{4})$/i);
+  if (!named) return "";
+  const [year, word] = /^\d/.test(named[1]) ? [named[1], named[2]] : [named[2], named[1]];
+  const month = MONTHS.findIndex((m) => m.startsWith(word.toLowerCase())) + 1;
+  if (month === 0 || !isValidYmd(year, "1", "1")) return "";
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+/** Normalize a date string to YYYY-MM-DD (ISO, slashed, or parseable text), or
+ *  to YYYY-MM / YYYY when that is all the source states. */
 function normalizeDate(s: string): string {
   if (!s) return "";
   const m = s.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
   if (m && isValidYmd(m[1], m[2], m[3])) {
     return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
   }
+  const partial = partialDate(s.trim());
+  if (partial) return partial;
   // Textual dates ("January 1, 2024") via Date.parse — but only when the
   // string actually contains a 4-digit year (Date.parse("7") fabricates
   // 2001-06-30), and only if the result is a sane calendar date. Use LOCAL
@@ -427,6 +433,22 @@ function canonicalFromHtml(html: string): string {
   return "";
 }
 
+/**
+ * A paper's date from its citation tags. A journal's `citation_publication_date`
+ * is the ISSUE ("2014/12" for a paper online since 2014-07-05), so an earlier
+ * `citation_online_date` is the real one. Only an earlier one: on arXiv
+ * `citation_online_date` is the latest revision and `citation_date` the original.
+ */
+function citationDate(html: string): string {
+  const issue = normalizeDate(
+    metaContent(html, "citation_publication_date") || metaContent(html, "citation_date"),
+  );
+  const online = normalizeDate(metaContent(html, "citation_online_date"));
+  if (!online || !issue || issue.startsWith(online)) return issue;
+  // An issue dated by year or month alone contains the online date: take the fuller one.
+  return online < issue || online.startsWith(issue) ? online : issue;
+}
+
 export function extractHtmlMeta(html: string): HtmlMeta {
   const meta: HtmlMeta = {
     title: "",
@@ -469,8 +491,7 @@ export function extractHtmlMeta(html: string): HtmlMeta {
   const published =
     metaContent(html, "article:published_time") ||
     metaContent(html, "datePublished") ||
-    metaContent(html, "citation_publication_date") ||
-    metaContent(html, "citation_date") ||
+    citationDate(html) ||
     metaContent(html, "parsely-pub-date") ||
     metaContent(html, "sailthru.date") ||
     metaContent(html, "dc.date.issued") ||

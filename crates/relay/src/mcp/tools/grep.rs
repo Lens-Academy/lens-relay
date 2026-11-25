@@ -4,8 +4,20 @@ use serde_json::Value;
 use std::sync::Arc;
 use yrs::{GetString, ReadTxn, Transact};
 
-/// Execute the `grep` tool: regex content search across Y.Docs.
+/// [`execute_scoped`] for an all-folders key (tests only).
+#[cfg(test)]
 pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+    execute_scoped(server, arguments, None).await
+}
+
+/// Execute the `grep` tool: regex content search across Y.Docs.
+///
+/// `folder` is the folder the key is limited to (`None` = all folders).
+pub async fn execute_scoped(
+    server: &Arc<Server>,
+    arguments: &Value,
+    folder: Option<&str>,
+) -> Result<String, String> {
     let pattern = arguments
         .get("pattern")
         .and_then(|v| v.as_str())
@@ -60,6 +72,9 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
         };
         all_paths.retain(|p| p.starts_with(&prefix) || p == scope);
     }
+
+    // A folder-scoped key only ever sees its own folder, path or no path.
+    all_paths.retain(|p| super::in_folder(p, folder));
 
     // Uploaded images never match: their bytes live in the store (the doc has
     // a file hash), not in Y.Text, so read_doc_content loads each one as an

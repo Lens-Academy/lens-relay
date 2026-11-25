@@ -6,6 +6,9 @@ import { fetchBytesWithTimeout, bytesToText } from "../fetch-timeout";
 // (and, in add-article, wedges the serialized write lock for ALL later jobs).
 const RELAY_CHECK_TIMEOUT_MS = 30_000;
 const RELAY_WRITE_TIMEOUT_MS = 60_000; // upserts/attachments carry larger payloads
+// A folder scan touches every document (1,280 articles) and may load each one
+// from storage.
+const RELAY_SCAN_TIMEOUT_MS = 5 * 60_000;
 
 // The production relay's id (root AGENTS.md); the local relay uses a0000000-….
 const PRODUCTION_RELAY_ID = "cb696037-0f72-4e93-8717-4e433129d789";
@@ -20,6 +23,11 @@ export function getRelayConfig() {
 /** Relay folder video transcripts live in, e.g. "Lens Edu/video_transcripts". */
 export function relayTranscriptFolder(): string {
   return process.env.RELAY_TRANSCRIPT_FOLDER || "Lens Edu/video_transcripts";
+}
+
+/** Relay folder articles live in, e.g. "Lens Edu/articles". */
+export function relayArticleFolder(): string {
+  return process.env.RELAY_ARTICLE_FOLDER || "Lens Edu/articles";
 }
 
 /** Editor URL a relay document at this path opens under. */
@@ -95,16 +103,14 @@ export async function upsertRelayDocReturningId(
 }
 
 /**
- * Read a document's current markdown back out of the relay.
- *
- * Documents are Y.Docs, so this mints a doc-scoped token, pulls the encoded
- * state and reads the `contents` Y.Text -- the same round-trip the editor
- * does over websocket.
+ * A doc-scoped session on a relay document and its current state: mints a
+ * full-access doc token with the server token and pulls the encoded state, the
+ * same round-trip the editor does over websocket.
  */
-export async function readRelayDocText(
+async function loadRelayDoc(
   docId: string,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<{ doc: Y.Doc; baseUrl: string; token: string }> {
   const { url, token } = getRelayConfig();
 
   const authResp = await fetchBytesWithTimeout(`${url}/doc/${docId}/auth`, {
@@ -136,9 +142,52 @@ export async function readRelayDocText(
 
   const doc = new Y.Doc();
   Y.applyUpdate(doc, new Uint8Array(docResp.bytes));
+  return { doc, ...auth };
+}
+
+/** The markdown of a document (its `contents` Y.Text). */
+export async function readRelayDocText(
+  docId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { doc } = await loadRelayDoc(docId, signal);
   const text = doc.getText("contents").toString();
   doc.destroy();
   return text;
+}
+
+/**
+ * Change a document in place: `edit` changes the loaded Y.Doc, and only what it
+ * changed is sent back (POST <doc>/update), so text and authorship elsewhere in
+ * the document are untouched, as when the editor writes. `edit` returns false
+ * when it decided there is nothing to change, and nothing is sent. Returns
+ * whether it sent anything. A collaborator's write between the load and the send
+ * merges as any concurrent Yjs edit does.
+ */
+export async function editRelayDoc(
+  docId: string,
+  edit: (doc: Y.Doc) => boolean | void,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const { doc, baseUrl, token } = await loadRelayDoc(docId, signal);
+  try {
+    const before = Y.encodeStateVector(doc);
+    if (edit(doc) === false) return false;
+    const after = Y.encodeStateVector(doc);
+    if (after.length === before.length && after.every((b, i) => b === before[i])) return false;
+    const update = Y.encodeStateAsUpdate(doc, before);
+    const resp = await fetchBytesWithTimeout(`${baseUrl}/update`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+      body: update,
+      timeoutMs: RELAY_WRITE_TIMEOUT_MS,
+      signal,
+    });
+    if (!resp.ok) throw new Error(`Relay doc update failed: ${resp.status} ${bytesToText(resp.bytes)}`);
+    return true;
+  } finally {
+    doc.destroy();
+  }
 }
 
 /**
@@ -323,7 +372,7 @@ export async function checkRelayArticleUrls(
 
   const { url, token } = getRelayConfig();
 
-  const relayFolder = process.env.RELAY_ARTICLE_FOLDER || "Lens Edu/articles";
+  const relayFolder = relayArticleFolder();
   const slashIdx = relayFolder.indexOf("/");
   const folder = slashIdx !== -1 ? relayFolder.slice(0, slashIdx) : relayFolder;
   const subfolder =
@@ -351,6 +400,121 @@ export async function checkRelayArticleUrls(
     stubs?: Record<string, { path: string; content: string } | null>;
   };
   return { found: data.found, stubs: data.stubs ?? {} };
+}
+
+/** One document of a `POST /doc/frontmatters` scan. */
+export interface RelayDocFrontmatter {
+  /** Full path, e.g. "Lens Edu/articles/x.md". */
+  path: string;
+  /** The raw leading `---` block, or "" when it has none. */
+  frontmatter: string;
+}
+
+/** The frontmatter of every document under a relay folder ("Lens Edu/articles"). */
+export async function listRelayFrontmatters(
+  folderPath: string,
+  signal?: AbortSignal,
+): Promise<RelayDocFrontmatter[]> {
+  const { url, token } = getRelayConfig();
+  const slashIdx = folderPath.indexOf("/");
+  const folder = slashIdx !== -1 ? folderPath.slice(0, slashIdx) : folderPath;
+  const subfolder = slashIdx !== -1 ? folderPath.slice(slashIdx + 1) : undefined;
+
+  const resp = await fetchBytesWithTimeout(`${url}/doc/frontmatters`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ folder, subfolder }),
+    timeoutMs: RELAY_SCAN_TIMEOUT_MS,
+    signal,
+  });
+  if (!resp.ok) {
+    throw new Error(
+      `Relay frontmatter scan failed for ${folderPath}: ${resp.status} ${bytesToText(resp.bytes)}`,
+    );
+  }
+  return (JSON.parse(bytesToText(resp.bytes)) as { docs: RelayDocFrontmatter[] }).docs;
+}
+
+export interface LinkSourceRequest {
+  /** The page holding the links. */
+  docId: string;
+  /** Every spelling to replace. */
+  urls: string[];
+  /** Full relay path of the library copy, e.g. "Lens Edu/articles/x.md". */
+  target: string;
+  /** Label for a link that has none; the relay falls back to the file name. */
+  title?: string;
+  actor: string;
+  author: string;
+  /** Follow the human-text edit policy instead of changing the page directly. */
+  protectHuman: boolean;
+}
+
+/** How many links on the page each swap touched. */
+export interface LinkSourceResult {
+  linked: number;
+  suggested: number;
+  unswappable: number;
+}
+
+const LINK_REFUSALS = {
+  doc_not_found: "The page no longer exists",
+  target_missing: "The relay can't find the library copy",
+  page_not_eligible: "This page can't link to the library: it is in Lens Edu or _trash, or is itself an imported or synced file",
+};
+
+/** A swap the relay answered with one of its refusal codes. Anything else
+ *  (no answer, a 5xx, a relay without the route) is a plain Error. */
+export class RelayLinkError extends Error {
+  readonly code: keyof typeof LINK_REFUSALS;
+  constructor(code: keyof typeof LINK_REFUSALS) {
+    super(LINK_REFUSALS[code]);
+    this.name = "RelayLinkError";
+    this.code = code;
+  }
+}
+
+function linkRefusal(body: string): keyof typeof LINK_REFUSALS | null {
+  try {
+    const { error } = JSON.parse(body) as { error?: string };
+    return error && error in LINK_REFUSALS ? (error as keyof typeof LINK_REFUSALS) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Replace a page's links to a source with wikilinks to its library copy. */
+export async function linkRelaySource(
+  request: LinkSourceRequest,
+  signal?: AbortSignal,
+): Promise<LinkSourceResult> {
+  const { url, token } = getRelayConfig();
+  const resp = await fetchBytesWithTimeout(`${url}/doc/link-source`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      doc_id: request.docId,
+      urls: request.urls,
+      target: request.target,
+      title: request.title,
+      actor: request.actor,
+      author: request.author,
+      protect_human: request.protectHuman,
+    }),
+    timeoutMs: RELAY_WRITE_TIMEOUT_MS,
+    signal,
+  });
+  const text = bytesToText(resp.bytes);
+  if (resp.ok) return JSON.parse(text) as LinkSourceResult;
+  const refusal = linkRefusal(text);
+  if (refusal) throw new RelayLinkError(refusal);
+  throw new Error(`Relay link-source failed: ${resp.status} ${text}`);
 }
 
 /** Reply of the relay's `POST /doc/attachment`. */

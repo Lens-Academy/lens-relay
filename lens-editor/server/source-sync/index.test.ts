@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CONFIG } from "./atlas/__fixtures__/course";
+import { startAtlasSync } from "./atlas/sync";
 import { startCourseSync } from "./iliad/sync";
-import { isLocalRelay, startIliadSyncFromEnv, startSourceSyncFromEnv } from "./index";
+import { isLocalRelay, startAtlasSyncFromEnv, startIliadSyncFromEnv, startSourceSyncFromEnv } from "./index";
 
-// The real loop starts a run at once, which reads iliad-intensive.org.
+// The real loops start a run at once, which reads iliad-intensive.org or Google.
 vi.mock("./iliad/sync", () => ({ startCourseSync: vi.fn(() => () => {}) }));
+vi.mock("./atlas/sync", async (original) => ({ ...(await original<typeof import("./atlas/sync")>()), startAtlasSync: vi.fn(() => () => {}) }));
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -86,5 +89,40 @@ describe("startIliadSyncFromEnv", () => {
     const log = { log: vi.fn(), error: vi.fn() };
     expect(startIliadSyncFromEnv(log)).toBeNull();
     expect(log.error).toHaveBeenCalledWith(expect.stringMatching(/not started: ILIAD_SYNC_COURSE must be/));
+  });
+});
+
+describe("startAtlasSyncFromEnv", () => {
+  it("does nothing while ATLAS_SYNC_COURSES is unset", () => {
+    vi.stubEnv("ATLAS_SYNC_COURSES", "");
+    expect(startAtlasSyncFromEnv()).toBeNull();
+    expect(startAtlasSync).not.toHaveBeenCalled();
+  });
+
+  it("syncs the courses it is given, each into its course file's Relay folder, with the approval when set", () => {
+    vi.stubEnv("ATLAS_SYNC_COURSES", JSON.stringify([CONFIG]));
+    vi.stubEnv("ATLAS_SYNC_APPROVE_RETIREMENT", " 0123456789ab ");
+    vi.stubEnv("SOURCE_SYNC_INTERVAL_MINUTES", "15");
+    expect(startAtlasSyncFromEnv()).toBeTypeOf("function");
+    const [configs, interval, deps] = vi.mocked(startAtlasSync).mock.calls.at(-1)!;
+    expect(configs).toEqual([CONFIG]);
+    expect(interval).toBe(15 * 60_000);
+    expect(deps.approvedRetirement).toBe("0123456789ab");
+    expect(deps.files(CONFIG)).toHaveProperty("hostImage");
+  });
+
+  it("reports a bad configuration, line by line, and leaves only the Atlas sync off", () => {
+    vi.stubEnv("ATLAS_SYNC_COURSES", JSON.stringify([{ ...CONFIG, slug: "", chapters: [] }]));
+    vi.stubEnv("ILIAD_SYNC_COURSE", "Lens Edu/courses/user-facing/iliad-intensive.md");
+    const log = { log: vi.fn(), error: vi.fn() };
+    vi.mocked(startAtlasSync).mockClear();
+    expect(startAtlasSyncFromEnv(log)).toBeNull();
+    expect(startAtlasSync).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      "[atlas-sync] not started: ATLAS_SYNC_COURSES[0].slug must be a non-empty string",
+    );
+    // The Iliad sync reads its own variable and starts as before.
+    expect(startIliadSyncFromEnv(log)).toBeTypeOf("function");
+    expect(vi.mocked(startCourseSync).mock.calls.at(-1)![0].layout).toMatchObject({ course: "Lens Edu/courses/user-facing/iliad-intensive.md" });
   });
 });

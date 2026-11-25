@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type RefObject } from 'react';
+import { lazy, Suspense, useState, useCallback, useEffect, useRef, type RefObject } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useYDoc, useYjsProvider } from './lib/ydoc-provider';
 import { RelayProvider } from './providers/RelayProvider';
@@ -47,6 +47,7 @@ import { ImageDocumentView } from './components/ImageDocumentView';
 import { HtmlEditor } from './components/HtmlEditor';
 import { findPathByUuid } from './lib/uuid-to-path';
 import { QuickSwitcher } from './components/QuickSwitcher';
+import { isQuickSwitcherKey } from './lib/quick-switcher-key';
 import { useRecentFiles } from './hooks/useRecentFiles';
 import { RELAY_ID, FOLDERS, DEFAULT_DOC_UUID, EDU_FOLDER_ID } from './lib/constants';
 import { pickEditor } from './lib/editor-selector';
@@ -61,10 +62,14 @@ import { WorkflowMenu } from './components/WorkflowMenu';
 import { isDocRoute } from './lib/app-routes';
 import { useEdgeSwipe } from './hooks/useEdgeSwipe';
 
+// Loaded when the page is opened: its layouts need dagre, which the editor itself does not
+const ConceptMapPage = lazy(() => import('./components/ConceptMapPage').then((page) => ({ default: page.ConceptMapPage })));
+
 // Panel configuration — single source of truth for all panel behavior
 // All panels use CSS flexbox with pixel widths.
 export const PANEL_CONFIG: PanelConfig = {
-  'left-sidebar':   { group: 'app-outer',   minPx: 200, priority: 1 },
+  // Notion's sidebar is 240px wide where there is room
+  'left-sidebar':   { group: 'app-outer',   minPx: 200, maxPx: 240, priority: 1 },
   'comment-margin': { group: 'editor-area', minPx: 150, priority: 3 },
   'right-sidebar':  { group: 'editor-area', minPx: 200, priority: 2 },
   'discussion':     { group: 'editor-area', minPx: 250, priority: 4 },
@@ -494,7 +499,7 @@ function DefaultLanding() {
         ) : (
           <p className="text-gray-500">
             Choose a file from the sidebar, or press{' '}
-            <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">Ctrl+O</kbd>
+            <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">{/Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'}</kbd>
             {' '}to open the quick switcher.
           </p>
         )}
@@ -544,10 +549,10 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
     manager.autoResize(outerWidth);
   }, [outerWidth, manager.autoResize]);
 
-  // Ctrl+O keyboard shortcut to open quick switcher
+  // Ctrl/Cmd+K and Ctrl/Cmd+O open the quick switcher
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
+      if (isQuickSwitcherKey(e)) {
         e.preventDefault();
         setQuickSwitcherOpen(true);
       }
@@ -590,71 +595,34 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
         <SidebarContext.Provider value={{ manager, headerStage }}>
           <HeaderActionsProvider onCommentsControlChange={setHeaderCommentsControl}>
             <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef, openQuickSwitcher }}>
-          <div ref={outerRef as RefObject<HTMLDivElement>} className="h-dvh flex flex-col bg-gray-50 overflow-hidden">
-            {/* Full-width global header */}
-            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between gap-4 px-4 py-2 bg-[#f6f6f6] border-b border-gray-200 min-w-0 overflow-hidden">
-              <div className="flex items-center gap-6 min-w-0">
-                {!isMobile && <button
-                  onClick={() => manager.toggle('left-sidebar')}
-                  title="Toggle left sidebar"
-                  className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <path d="M9 3v18" />
-                    {!leftCollapsed && <rect x="3" y="3" width="6" height="18" rx="2" fill="currentColor" opacity="0.45" />}
-                  </svg>
-                </button>}
-                {(headerStage === 'full' || headerStage === 'compact-toggles') && (
-                  <h1 className="whitespace-nowrap text-lg font-semibold text-gray-900">Lens Relay Editor</h1>
-                )}
-                <div id="header-breadcrumb" className="flex min-w-0" />
-              </div>
-              <div className="flex items-center gap-4 flex-shrink-0">
-                <div id="header-controls" className="flex items-center gap-4" />
-                {/* On a document route EditorArea places the workflows menu
-                    among its own controls; the start page and the workflow
-                    pages get it here. Decided by route, not by whether
-                    EditorArea is mounted, so opening or switching documents
-                    never flashes a second menu */}
-                {!onDocRoute && <WorkflowMenu />}
-                {/* Comments and the right sidebar belong to a document route,
-                    or to a page that registers its own comments control
-                    (HtmlEditor on a desktop; on a phone the bottom bar has
-                    the comments button) */}
-                {((!isMobile && onDocRoute) || headerCommentsControl != null) && <button
-                  onClick={handleToggleComments}
-                  title={commentsTitle}
-                  className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                    {commentsOpen && <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor" opacity="0.45" />}
-                  </svg>
-                </button>}
-                {!isMobile && onDocRoute && <button
-                  onClick={() => manager.toggle('right-sidebar')}
-                  title="Toggle right sidebar"
-                  className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <path d="M15 3v18" />
-                    {!rightCollapsed && <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" opacity="0.45" />}
-                  </svg>
-                </button>}
-                <div id="header-discussion-toggle" className="flex" />
-              </div>
-            </header>
+          <div ref={outerRef as RefObject<HTMLDivElement>} className="h-dvh flex flex-col bg-[var(--lens-page-bg)] overflow-hidden">
             <div id="app-outer" className="flex-1 flex min-h-0">
               {!isMobile && (
                 <>
+                  {/* Notion's sidebar, full height: the workspace row (the
+                      app's name, and the button that closes the sidebar), then
+                      search and the folders */}
                   <div
                     id="sidebar"
-                    className="overflow-hidden flex-shrink-0"
+                    className="lens-sidebar overflow-hidden flex-shrink-0 flex flex-col"
                     style={{ width: leftCollapsed ? 0 : manager.getWidth('left-sidebar') }}
                   >
-                    <Sidebar />
+                    <div className="lens-workspace">
+                      <img src="/favicon.svg" alt="" className="lens-workspace-icon" />
+                      <span className="lens-workspace-name">Lens Relay Editor</span>
+                      <button
+                        onClick={() => manager.toggle('left-sidebar')}
+                        title="Close sidebar"
+                        className="lens-icon-button lens-sidebar-close"
+                      >
+                        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="m11 17-5-5 5-5M18 17l-5-5 5-5" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="flex-1 min-h-0">
+                      <Sidebar />
+                    </div>
                   </div>
                   <ResizeHandle
                     orientation="vertical"
@@ -666,31 +634,90 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                   />
                 </>
               )}
-              <div className="flex-1 min-w-0">
-                <Routes>
-                  <Route path="/review" element={
-                    canEdit
-                      ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
-                      : <DefaultLanding />
-                  } />
-                  <Route path="/recent" element={
-                    <RecentChangesPage folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} />
-                  } />
-                  <Route path="/add-source" element={
-                    canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID)
-                      ? <AddArticlePage shareToken={shareToken} />
-                      : <DefaultLanding />
-                  } />
-                  {/* The page's old address, kept for links and bookmarks */}
-                  <Route path="/add-article" element={<AddSourceRedirect />} />
-                  <Route path="/edu/:docUuid" element={<EduEditorView />} />
-                  <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
-                  <Route path="/promote" element={<PromotionRoute />} />
-                  {/* Also catches bare vault paths (/Lens/Some Doc.md); a top-level
-                      folder named like a route above can't be opened that way */}
-                  <Route path="/:docUuid/*" element={<DocumentView />} />
-                  <Route path="/" element={<DefaultLanding />} />
-                </Routes>
+              <div className="flex-1 min-w-0 flex flex-col">
+                {/* Notion's top bar, over the page only: the breadcrumb, and
+                    the page's controls */}
+                <header ref={headerRef as RefObject<HTMLElement>} className="lens-topbar flex items-center justify-between gap-4 min-w-0 overflow-hidden">
+                  <div className="flex items-center gap-1 min-w-0">
+                    {!isMobile && leftCollapsed && <button
+                      onClick={() => manager.toggle('left-sidebar')}
+                      title="Open sidebar"
+                      className="lens-icon-button"
+                    >
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                      </svg>
+                    </button>}
+                    <div id="header-breadcrumb" className="flex min-w-0" />
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <div id="header-controls" className="flex items-center gap-1" />
+                    {/* Comments and the right sidebar belong to a document route,
+                        or to a page that registers its own comments control
+                        (HtmlEditor on a desktop; on a phone the bottom bar has
+                        the comments button) */}
+                    {((!isMobile && onDocRoute) || headerCommentsControl != null) && <button
+                      onClick={handleToggleComments}
+                      title={commentsTitle}
+                      className="lens-icon-button"
+                    >
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                        {commentsOpen && <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor" opacity="0.45" />}
+                      </svg>
+                    </button>}
+                    {!isMobile && onDocRoute && <button
+                      onClick={() => manager.toggle('right-sidebar')}
+                      title="Toggle right sidebar"
+                      className="lens-icon-button"
+                    >
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <path d="M15 3v18" />
+                        {!rightCollapsed && <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" opacity="0.45" />}
+                      </svg>
+                    </button>}
+                    <div id="header-discussion-toggle" className="flex" />
+                    {/* Notion's page menu (•••), last: on a document route
+                        EditorArea places it here with the page's settings; the
+                        start page and the workflow pages get it here. Decided by
+                        route, not by whether EditorArea is mounted, so opening
+                        or switching documents never flashes a second menu */}
+                    <div id="header-menu" className="flex" />
+                    {!onDocRoute && <WorkflowMenu />}
+                  </div>
+                </header>
+                <div className="flex-1 min-h-0">
+                  <Routes>
+                    <Route path="/review" element={
+                      canEdit
+                        ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
+                        : <DefaultLanding />
+                    } />
+                    <Route path="/recent" element={
+                      <RecentChangesPage folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} />
+                    } />
+                    <Route path="/add-source" element={
+                      canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID)
+                        ? <AddArticlePage shareToken={shareToken} />
+                        : <DefaultLanding />
+                    } />
+                    <Route path="/concept-map" element={
+                      isAllFolders || folderUuid === EDU_FOLDER_ID
+                        ? <Suspense fallback={<p className="px-6 py-6 text-sm text-gray-500">Loading…</p>}><ConceptMapPage /></Suspense>
+                        : <DefaultLanding />
+                    } />
+                    {/* The page's old address, kept for links and bookmarks */}
+                    <Route path="/add-article" element={<AddSourceRedirect />} />
+                    <Route path="/edu/:docUuid" element={<EduEditorView />} />
+                    <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
+                    <Route path="/promote" element={<PromotionRoute />} />
+                    {/* Also catches bare vault paths (/Lens/Some Doc.md); a top-level
+                        folder named like a route above can't be opened that way */}
+                    <Route path="/:docUuid/*" element={<DocumentView />} />
+                    <Route path="/" element={<DefaultLanding />} />
+                  </Routes>
+                </div>
               </div>
             </div>
             {isMobile && <MobileNavBar onOpenQuickSwitcher={() => setQuickSwitcherOpen(true)} />}

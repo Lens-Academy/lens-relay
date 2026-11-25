@@ -9,6 +9,9 @@ export class DuplicateDocumentError extends Error {
   constructor(
     message: string,
     readonly docPath: string,
+    /** The stored source_url, when the match was by URL alone and the page
+     *  itself was never read, so it may be a neighbouring page. */
+    readonly storedUrl?: string,
   ) {
     super(message);
     this.name = "DuplicateDocumentError";

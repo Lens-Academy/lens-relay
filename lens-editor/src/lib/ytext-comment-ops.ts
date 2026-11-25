@@ -9,7 +9,7 @@
 
 import * as Y from 'yjs';
 import { getCurrentAuthor } from '../components/Editor/extensions/criticmarkup';
-import type { CriticMarkupRange } from './criticmarkup-parser';
+import { withLinkedComments, type CriticMarkupRange } from './criticmarkup-parser';
 
 /**
  * Encode user-supplied multi-line content for inline criticmarkup storage.
@@ -28,11 +28,25 @@ function buildCommentMarkup(content: string): string {
 }
 
 /**
- * Insert a new comment at `pos` in the Y.Text.
+ * Insert a new comment at `pos` in the Y.Text. With `highlightFrom`, the
+ * text from there to `pos` is what the comment is on: it is wrapped in a
+ * highlight the comment follows, {==text==}{>>comment<<}, as a CriticMarkup
+ * comment on a span is written. Returns where the comment starts (its
+ * thread's key).
  */
-export function insertCommentInYText(ytext: Y.Text, content: string, pos: number): void {
+export function insertCommentInYText(ytext: Y.Text, content: string, pos: number, highlightFrom?: number): number {
   const markup = buildCommentMarkup(content);
-  ytext.insert(pos, markup);
+  if (highlightFrom == null || highlightFrom >= pos) {
+    ytext.insert(pos, markup);
+    return pos;
+  }
+  const wrap = () => {
+    ytext.insert(pos, `==}${markup}`);
+    ytext.insert(highlightFrom, '{==');
+  };
+  if (ytext.doc) ytext.doc.transact(wrap);
+  else wrap();
+  return pos + 6;
 }
 
 /**
@@ -52,6 +66,51 @@ export function replyInYText(ytext: Y.Text, content: string, threadEndPos: numbe
 export function deleteRangeInYText(ytext: Y.Text, range: CriticMarkupRange): void {
   ytext.doc!.transact(() => {
     ytext.delete(range.from, range.to - range.from);
+  });
+}
+
+/**
+ * Remove a comment thread (its `comments`, ranges of `ranges`, the Y.Text's
+ * parse) and the highlight it is on, keeping the highlighted text: resolving
+ * a comment, or deleting its last message (withLinkedComments).
+ */
+export function removeThreadInYText(ytext: Y.Text, ranges: CriticMarkupRange[], comments: CriticMarkupRange[]): void {
+  const spans = withLinkedComments(ranges, comments).flatMap((r) =>
+    r.type === 'highlight'
+      ? [{ from: r.from, to: r.contentFrom }, { from: r.contentTo, to: r.to }]
+      : [{ from: r.from, to: r.to }]);
+  ytext.doc!.transact(() => {
+    // Last first, so the earlier offsets still hold
+    for (const span of spans.reverse()) ytext.delete(span.from, span.to - span.from);
+  });
+}
+
+/**
+ * Add `who`'s `emoji` reaction to a comment, or take it back if it is there.
+ * Reactions live in the comment's metadata, {"author":…,"reactions":[["👍","Ann"]]},
+ * which keeps one level of braces (the metadata pattern stops at the first `}`).
+ * A comment without metadata takes none.
+ */
+export function toggleReactionInYText(ytext: Y.Text, range: CriticMarkupRange, emoji: string, who: string): void {
+  const metaFrom = range.from + 3;
+  const metaTo = range.contentFrom - 2;
+  if (range.type !== 'comment' || metaTo <= metaFrom) return;
+  let meta: Record<string, unknown>;
+  try {
+    meta = JSON.parse(ytext.toString().slice(metaFrom, metaTo));
+  } catch {
+    return;
+  }
+  const name = who.replace(/[{}"\\]/g, '').trim() || 'anonymous';
+  const reactions = Array.isArray(meta.reactions) ? (meta.reactions as Array<[string, string]>) : [];
+  const at = reactions.findIndex(([e, n]) => e === emoji && n === name);
+  if (at >= 0) reactions.splice(at, 1);
+  else reactions.push([emoji, name]);
+  if (reactions.length > 0) meta.reactions = reactions;
+  else delete meta.reactions;
+  ytext.doc!.transact(() => {
+    ytext.delete(metaFrom, metaTo - metaFrom);
+    ytext.insert(metaFrom, JSON.stringify(meta));
   });
 }
 

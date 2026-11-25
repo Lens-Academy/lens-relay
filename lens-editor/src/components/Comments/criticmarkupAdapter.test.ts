@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import * as Y from 'yjs';
-import { useThreadsFromYText } from './criticmarkupAdapter';
+import { pinInsertKey, useThreadsFromYText } from './criticmarkupAdapter';
 import { insertCommentInYText, replyInYText } from '../../lib/ytext-comment-ops';
 
 // `getCurrentAuthor` (used by buildCommentMarkup) reads from window.__currentUser
@@ -104,5 +104,100 @@ describe('useThreadsFromYText', () => {
     // the new parse.
     expect(result.current.threads[0].replies).toHaveLength(1);
     expect(result.current.threads[0].replies[0].body).toBe('reply-body');
+  });
+
+  it("onReact adds and takes back the user's reaction, grouped by emoji", () => {
+    const { ytext } = makeDoc('A');
+    ytext.insert(1, `{>>${JSON.stringify({ author: 'bob', timestamp: 1716553200000, reactions: [['👍', 'bob']] })}@@hi<<}`);
+
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'alice'));
+    expect(result.current.threads[0].root.reactions).toEqual([{ emoji: '👍', names: ['bob'], mine: false }]);
+
+    act(() => { ytext.insert(0, 'PREFIX '); });
+    act(() => { result.current.callbacks.onReact(result.current.threads[0].root, '👍'); });
+    expect(result.current.threads[0].root.reactions).toEqual([{ emoji: '👍', names: ['bob', 'alice'], mine: true }]);
+
+    act(() => { result.current.callbacks.onReact(result.current.threads[0].root, '👍'); });
+    expect(result.current.threads[0].root.reactions).toEqual([{ emoji: '👍', names: ['bob'], mine: false }]);
+    expect(result.current.threads[0].root.body).toBe('hi');
+  });
+});
+
+describe('a new comment while others edit', () => {
+  it('lands where the form was opened, though text was typed above it meanwhile', () => {
+    const { ytext } = makeDoc('alpha beta gamma');
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', false));
+    const key = pinInsertKey(ytext, String('alpha beta'.length)); // cursor after "beta"
+    act(() => { ytext.insert(0, 'NEW LINE\n'); }); // a collaborator types above
+    act(() => { result.current.callbacks.onAddComment!(key, 'hi'); });
+    const text = ytext.toString();
+    expect(text.startsWith('NEW LINE\nalpha beta{>>')).toBe(true);
+    expect(text.endsWith('<<} gamma')).toBe(true);
+  });
+  it('highlights the text it is on, and returns the new thread key', () => {
+    const { ytext } = makeDoc('alpha beta gamma');
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', false));
+    const key = pinInsertKey(ytext, String('alpha beta'.length), 'alpha '.length); // "beta" selected
+    act(() => { ytext.insert(0, 'NEW '); }); // a collaborator types above
+    let created: string | void = undefined;
+    act(() => { created = result.current.callbacks.onAddComment!(key, 'hi'); });
+    expect(ytext.toString().startsWith('NEW alpha {==beta==}{>>')).toBe(true);
+    expect(created).toBe(String('NEW alpha {==beta==}'.length));
+  });
+  it('still accepts a plain offset key', () => {
+    const { ytext } = makeDoc('ab');
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', false));
+    act(() => { result.current.callbacks.onAddComment!('1', 'x'); });
+    expect(ytext.toString().startsWith('a{>>')).toBe(true);
+  });
+});
+
+describe('a comment and the text it highlights go together', () => {
+  function highlighted() {
+    const { ytext } = makeDoc('We ship it soon.');
+    // "ship it" highlighted, with a comment and a reply
+    ytext.insert('We ship it'.length, '==}');
+    ytext.insert('We '.length, '{==');
+    const end = 'We {==ship it==}'.length;
+    insertWithMetadata(ytext, end, 'ann', 1716553200000, 'why?');
+    insertWithMetadata(ytext, ytext.toString().indexOf(' soon'), 'bo', 1716553300000, 'because');
+    return ytext;
+  }
+
+  it('resolving removes the thread and the highlight, keeping the text', () => {
+    const ytext = highlighted();
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', true));
+    act(() => { result.current.callbacks.onResolve(result.current.threads[0]); });
+    expect(ytext.toString()).toBe('We ship it soon.');
+  });
+
+  it("deleting the thread's last comment removes the highlight; deleting a reply keeps it", () => {
+    const ytext = highlighted();
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', true));
+    act(() => { result.current.callbacks.onDelete(result.current.threads[0].replies[0]); });
+    expect(ytext.toString()).toContain('We {==ship it==}{>>');
+    expect(ytext.toString()).toContain('@@why?<<} soon.');
+    expect(ytext.toString()).not.toContain('because');
+    act(() => { result.current.callbacks.onDelete(result.current.threads[0].root); });
+    expect(ytext.toString()).toBe('We ship it soon.');
+  });
+});
+
+describe('exact copies of a comment (a pasted block repeats its metadata)', () => {
+  const same = '{>>{"author":"Mark","timestamp":1794321934844}@@NOT SMART<<}';
+
+  it('gives each copy its own id, so cards keyed by it never collide', () => {
+    const { ytext } = makeDoc(`${same}1. first\n\n${same}1. second\n`);
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'Mark'));
+    const ids = result.current.threads.map((t) => t.root.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('deleting the second copy removes the second one, not the first', () => {
+    const { ytext } = makeDoc(`${same}1. first\n\n${same}1. second\n`);
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'Mark'));
+    act(() => result.current.callbacks.onDelete(result.current.threads[1].root));
+    expect(ytext.toString()).toBe(`${same}1. first\n\n1. second\n`);
   });
 });

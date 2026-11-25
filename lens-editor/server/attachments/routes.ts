@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createHash } from "node:crypto";
+import { JSDOM } from "jsdom";
 import limits from "../../shared/attachment-limits.json";
 import {
   requireEduShareToken,
@@ -23,6 +24,7 @@ import {
   sniffImage,
   type ImageMime,
 } from "./image-types";
+import { sanitizeSvg } from "../../shared/sanitize-svg";
 
 /** Hard per-file cap (bytes); shared with the relay via
  *  `shared/attachment-limits.json`. */
@@ -54,7 +56,7 @@ export interface AttachmentImportResponse {
   doc_id: string;
   sha256: string;
   bytes: number;
-  mimetype: ImageMime;
+  mimetype: ImageMime | "image/svg+xml";
   created: boolean;
   overwritten: boolean;
   /** In-folder path of the pre-existing copy when nothing was uploaded. */
@@ -78,7 +80,7 @@ export function defaultAttachmentRouteDeps(): AttachmentRouteDeps {
   return {
     fetchBytes: (url, signal) =>
       fetchRawBytes(url, signal, {
-        accept: "image/png,image/jpeg,image/gif,image/webp,image/*;q=0.8,*/*;q=0.5",
+        accept: "image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/*;q=0.8,*/*;q=0.5",
         // Stream-abort at the hard cap + slack instead of buffering 32 MiB.
         maxBytes: MAX_ATTACHMENT_BYTES + 1024,
       }),
@@ -96,6 +98,13 @@ class RequestError extends Error {
     super(message);
     this.name = "RequestError";
   }
+}
+
+let jsdomWindow: Parameters<typeof sanitizeSvg>[1] | undefined;
+/** One jsdom window for sanitizing SVG, created on first use. */
+function svgWindow() {
+  jsdomWindow ??= new JSDOM("").window as unknown as Parameters<typeof sanitizeSvg>[1];
+  return jsdomWindow;
 }
 
 /** Strict base64 decode: whitespace tolerated, anything else rejected
@@ -244,7 +253,9 @@ export async function importAttachment(
   if (!isFolderAllowed(req.folder)) {
     throw new RequestError(403, `Access denied: this token cannot write to folder '${req.folder}'`);
   }
-  const { bytes, declaredType } = await obtainBytes(req, deps, signal);
+  const obtained = await obtainBytes(req, deps, signal);
+  const declaredType = obtained.declaredType;
+  let bytes = obtained.bytes;
   const warnings: string[] = [];
 
   if (bytes.byteLength === 0) {
@@ -256,14 +267,17 @@ export async function importAttachment(
       `Image is ${bytes.byteLength} bytes; the hard limit is ${MAX_ATTACHMENT_BYTES} bytes (${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MiB). Downscale it.`,
     );
   }
-  const sniffed = sniffImage(bytes);
+  let sniffed: { mime: ImageMime | "image/svg+xml"; ext: string } | null = sniffImage(bytes);
+  if (!sniffed && looksLikeSvg(bytes)) {
+    const clean = sanitizeSvg(bytes.toString("utf8"), svgWindow());
+    if (!clean) throw new RequestError(422, "The SVG has no <svg> element left after sanitizing");
+    bytes = Buffer.from(clean, "utf8");
+    sniffed = { mime: "image/svg+xml", ext: "svg" };
+  }
   if (!sniffed) {
-    const hint = looksLikeSvg(bytes)
-      ? "SVG is not accepted; rasterise it to PNG first"
-      : `content is not a recognised image (declared type: ${declaredType || "none"})`;
     throw new RequestError(
       415,
-      `Only ${ALLOWED_IMAGE_MIMES.join(", ")} are accepted: ${hint}`,
+      `Only ${ALLOWED_IMAGE_MIMES.join(", ")} and svg are accepted: content is not a recognised image (declared type: ${declaredType || "none"})`,
     );
   }
   const advisory = (req.mimetype ?? "").split(";")[0].trim().toLowerCase();

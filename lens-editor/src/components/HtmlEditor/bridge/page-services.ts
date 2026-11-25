@@ -31,6 +31,9 @@ export interface PageServices {
 export interface PageServicesHooks {
   onProblems(problems: PageProblem[]): void;
   onStorage(ops: StorageOp[]): void;
+  /** An in-page "#id" link was followed (by us or by the page's own handler):
+   *  the editor puts the fragment in its URL so the place can be linked to. */
+  onFragment?(hash: string): void;
 }
 
 type ServiceWindow = Window & typeof globalThis & {
@@ -317,7 +320,7 @@ export function installPageServices(win: Window & typeof globalThis, hooks: Page
   // Bubble phase: page handlers run first, and a page that handles its own
   // navigation (preventDefault, or an explicit target) is left alone.
   const linkListener = (event: MouseEvent): void => {
-    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.button !== 0) return;
     const target = event.target;
     if (!(target instanceof win.Element)) return;
     const anchor = target.closest('a[href]');
@@ -326,14 +329,21 @@ export function installPageServices(win: Window & typeof globalThis, hooks: Page
     // root-relative editor path (/<id>/Folder/Doc.md) opens that document.
     const href = anchor.getAttribute('href') ?? '';
     if (href.startsWith('#')) {
-      // "#x" resolves against the editor's URL, not about:srcdoc, so the
-      // default action would navigate the frame to the editor. Scroll instead.
-      event.preventDefault();
-      const id = decodeURIComponent(href.slice(1));
-      const dest = id ? doc.getElementById(id) ?? doc.getElementsByName(id)[0] : doc.documentElement;
-      dest?.scrollIntoView({ block: 'start' });
+      let id = '';
+      try { id = decodeURIComponent(href.slice(1)); } catch { id = ''; }
+      const dest = id ? doc.getElementById(id) ?? doc.getElementsByName(id)[0] : null;
+      // A page that follows its own #links keeps doing so; the editor still
+      // hears where it went.
+      if (!event.defaultPrevented) {
+        // "#x" resolves against the editor's URL, not about:srcdoc, so the
+        // default action would navigate the frame to the editor. Scroll instead.
+        event.preventDefault();
+        (id ? dest : doc.documentElement)?.scrollIntoView({ block: 'start' });
+      }
+      if (dest) hooks.onFragment?.(href);
       return;
     }
+    if (event.defaultPrevented) return;
     if (!/^(https?:|mailto:|tel:)/i.test(anchor.href)) return;
     anchor.target = '_blank';
     anchor.rel = 'noopener noreferrer';

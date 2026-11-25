@@ -86,7 +86,7 @@ describe('promotion-api', () => {
       prNumber: 12,
       prUrl: 'https://github.example/pr/12',
       mainSha: 'main-sha',
-      autoMergeEnabled: true,
+      merge: 'merged',
     };
     mockFetch.mockResolvedValueOnce(jsonResponse(response));
 
@@ -108,7 +108,7 @@ describe('promotion-api', () => {
       prNumber: 13,
       prUrl: 'https://github.example/pr/13',
       mainSha: 'main-sha',
-      autoMergeEnabled: false,
+      merge: 'open',
       warning: 'Auto-merge unavailable',
     };
     mockFetch.mockResolvedValueOnce(jsonResponse(response));
@@ -140,7 +140,7 @@ describe('promotion-api', () => {
       prNumber: 14,
       prUrl: 'https://github.example/pr/14',
       mainSha: 'main-sha',
-      autoMergeEnabled: true,
+      merge: 'merged',
     };
     const _typeCheck: HasNoSourceStagingSha = true;
 

@@ -1,0 +1,33 @@
+entity,year,yearly_count
+Academia,2018,4
+Academia,2019,12
+Academia,2020,9
+Academia,2021,9
+Academia,2022,17
+Academia,2023,18
+Academia,2024,3
+Academia,2025,2
+Academia and industry collaboration,2018,8
+Academia and industry collaboration,2019,21
+Academia and industry collaboration,2020,12
+Academia and industry collaboration,2021,20
+Academia and industry collaboration,2022,19
+Academia and industry collaboration,2023,29
+Academia and industry collaboration,2024,12
+Academia and industry collaboration,2025,5
+Industry,2018,23
+Industry,2019,30
+Industry,2020,25
+Industry,2021,46
+Industry,2022,50
+Industry,2023,69
+Industry,2024,81
+Industry,2025,97
+Other,2018,2
+Other,2019,5
+Other,2020,4
+Other,2021,4
+Other,2022,5
+Other,2023,3
+Other,2024,2
+Other,2025,1

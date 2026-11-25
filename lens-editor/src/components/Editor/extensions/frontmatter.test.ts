@@ -73,3 +73,19 @@ describe('revealFrontmatterPos', () => {
     expect(view.contentDOM.querySelector('.cm-frontmatter-header')).toBeNull();
   });
 });
+
+describe('expanded frontmatter YAML', () => {
+  let cleanup: (() => void) | null = null;
+  afterEach(() => { cleanup?.(); cleanup = null; });
+
+  it('is not styled as markdown: no bullets, no heading', () => {
+    // "  - ai" parses as a list item, and the last key over --- as a heading
+    const content = '---\ntags:\n  - ai\nsummary: one line\n---\n\n- A real bullet';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+    revealFrontmatterPos(view, content.indexOf('tags'));
+
+    expect(view.contentDOM.querySelectorAll('.cm-bullet')).toHaveLength(1);
+    expect(view.contentDOM.querySelector('.cm-frontmatter-line [class*="cm-heading"]')).toBeNull();
+  });
+});

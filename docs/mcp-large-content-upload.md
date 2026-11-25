@@ -70,8 +70,7 @@ extracted from a PDF) goes through `import_attachment`. Base64-encode it in
 the shell so the bytes never become model tokens:
 
 ```bash
-# png/jpeg/gif/webp only (sniffed from the bytes; SVG is rejected — rasterise
-# first). 5 MiB soft limit (warning), 20 MiB hard limit. The /mcp body limit
+# png/jpeg/gif/webp/svg (sniffed from the bytes; svg is sanitized on upload). 5 MiB soft limit (warning), 20 MiB hard limit. The /mcp body limit
 # is 30 MiB, enough for a 20 MiB image after base64 inflation.
 jq -n --arg sid <session_id> --arg stem "turner-power-fig1"   --rawfile b64 <(base64 < figure.png | tr -d '\n')   '{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"import_attachment",arguments:{session_id:$sid,stem:$stem,content_base64:$b64}}}'   | curl -sS -X POST "$MCP_URL" -H 'Content-Type: application/json' -d @-
 ```

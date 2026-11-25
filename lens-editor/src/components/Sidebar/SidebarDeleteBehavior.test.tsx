@@ -77,7 +77,8 @@ function mockTrashEndpoint(respond: (body: TrashCall) => Response) {
 }
 
 async function openDeleteDialog(user: ReturnType<typeof userEvent.setup>, name: string) {
-  const row = screen.getByText(name).closest('[class*="cursor-pointer"]') as HTMLElement;
+  // Rows show a page's title without .md; the dialog names the file
+  const row = screen.getByText(name.replace(/\.md$/, '')).closest('[class*="cursor-pointer"]') as HTMLElement;
   fireEvent.contextMenu(row);
   await user.click(await screen.findByText(name === 'Notes' ? 'Delete Folder' : 'Delete'));
   await screen.findByText(`Delete ${name}?`);
@@ -199,7 +200,7 @@ describe('Sidebar delete via relay trash', () => {
     const calls = mockTrashEndpoint(() => new Response('', { status: 403 }));
     renderSidebar('suggest');
 
-    const fileRow = screen.getByText('A.md').closest('[class*="cursor-pointer"]') as HTMLElement;
+    const fileRow = screen.getByText('A').closest('[class*="cursor-pointer"]') as HTMLElement;
     fireEvent.contextMenu(fileRow);
     expect(await screen.findByText('Rename')).toBeInTheDocument();
     expect(screen.queryByText('Delete')).not.toBeInTheDocument();

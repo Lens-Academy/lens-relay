@@ -457,6 +457,15 @@ export function isJunkInfoTitle(t: string): boolean {
   return false;
 }
 
+/** Info-dict authors that name who made the file rather than who wrote the
+ *  article: a login ("mtang"), an address, or a placeholder. A byline has a
+ *  capital letter; a login usually has none. */
+export function isJunkInfoAuthor(a: string): boolean {
+  if (a.length < 2 || a.includes("@")) return true;
+  if (/^[a-z0-9._-]+$/.test(a)) return true;
+  return /^(admin(istrator)?|user|owner|author|unknown|default|guest|windows user|microsoft( office)? user|licensed user|authorized user)\d*$/i.test(a);
+}
+
 export function derivePdfMeta(
   info: Record<string, unknown>,
   body: string,
@@ -479,9 +488,11 @@ export function derivePdfMeta(
     filenameTitle(sourceUrl);
 
   const infoAuthor = typeof info.Author === "string" ? info.Author.trim() : "";
-  const author = infoAuthor
-    ? infoAuthor.split(/,| and |;/).map((a) => a.trim()).filter(Boolean)
-    : authorsFromPdfText(body);
+  const infoAuthors = infoAuthor
+    .split(/,| and |;/)
+    .map((a) => a.trim())
+    .filter((a) => a && !isJunkInfoAuthor(a));
+  const author = infoAuthors.length > 0 ? infoAuthors : authorsFromPdfText(body);
 
   // A date in the canonical source URL is more trustworthy than the PDF's
   // ModDate (often just a re-save timestamp — e.g. a PyPDF2 reprocessing long

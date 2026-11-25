@@ -222,18 +222,20 @@ describe('attachProvenanceRegistration', () => {
 });
 
 describe('pasteOriginOptions', () => {
-  it('offers the writer, their AI, and a generic Human and AI', () => {
+  it('offers the writer, their AI, and a generic Human, translated Human and AI', () => {
     expect(pasteOriginOptions('  Luc ').map((o) => [o.origin, o.label, o.kind])).toEqual([
       ['self', 'Luc', 'human'],
       ['self-ai', "Luc's AI", 'ai'],
       ['human', 'Human', 'human'],
+      ['translated', 'Human → translated', 'human'],
       ['ai', 'AI', 'ai'],
     ]);
   });
 
-  it('offers only the generic two without a display name', () => {
-    expect(pasteOriginOptions(null).map((o) => o.label)).toEqual(['Human', 'AI']);
-    expect(pasteOriginOptions('   ').map((o) => o.label)).toEqual(['Human', 'AI']);
+  it('offers only the generic three without a display name', () => {
+    const generic = ['Human', 'Human → translated', 'AI'];
+    expect(pasteOriginOptions(null).map((o) => o.label)).toEqual(generic);
+    expect(pasteOriginOptions('   ').map((o) => o.label)).toEqual(generic);
   });
 });
 
@@ -242,6 +244,7 @@ describe('classifyPendingPaste', () => {
     ['self', 'human:Luc'],
     ['self-ai', 'ai:unknown:Luc'],
     ['human', 'human:unknown'],
+    ['translated', 'human:unknown:translated'],
     ['ai', 'ai:unknown'],
   ] as const)('records %s as %s', (origin, actor) => {
     const doc = new Y.Doc();

@@ -158,3 +158,20 @@ describe("logOutcome", () => {
     expect(log.error).toHaveBeenCalledWith("[source-sync] A/c.md: failed -- boom");
   });
 });
+
+describe("publishedOf", () => {
+  it("keeps a date as precise as the file states", () => {
+    const file = (date: string) => `---\ntitle: "T"\npublished: ${date}\n---\n\nBody\n`;
+    expect(publishedOf(file("2026-09-28"))).toBe("2026-09-28");
+    expect(publishedOf(file("2020-09"))).toBe("2020-09");
+    expect(publishedOf(file("1998"))).toBe("1998");
+    expect(publishedOf(file("sometime"))).toBeNull();
+  });
+
+  it("reads a timestamp's date, and nothing from a malformed date", () => {
+    const file = (date: string) => `---\ntitle: "T"\npublished: ${date}\n---\n\nBody\n`;
+    expect(publishedOf(file("2024-03-15T10:00:00Z"))).toBe("2024-03-15");
+    expect(publishedOf(file("2024-3-5"))).toBeNull();
+    expect(publishedOf(file("2024-03-1"))).toBeNull();
+  });
+});

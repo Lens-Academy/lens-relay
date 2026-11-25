@@ -1,0 +1,26 @@
+{
+ "slug": "exponential-growth-of-datapoints-used-to-train-notable-ai-systems",
+ "title": "Exponential growth of datapoints used to train notable AI systems",
+ "subtitle": "The number of unique data points used to train the model. Each domain has a specific data point unit; for example, for vision it is images, for language it is words, and for games it is timesteps. This means systems can only be compared directly within the same domain.",
+ "note": "The regression lines show a sharp rise in data used to train AI systems since 2010, driven by the success of deep learning methods that leverage neural networks and massive datasets.",
+ "chartTypes": [
+  "ScatterPlot"
+ ],
+ "selectedEntityNames": [
+  "1.3x/year between 1950–2010",
+  "Theseus",
+  "Perceptron Mark I",
+  "AlexNet",
+  "Transformer (2017)",
+  "GPT-4 (Mar 2023)",
+  "2.9x/year between 2010–2026"
+ ],
+ "xAxis": {
+  "label": "Publication date"
+ },
+ "yAxis": {
+  "label": "Training datapoints",
+  "scaleType": "log",
+  "canChangeScaleType": true
+ }
+}

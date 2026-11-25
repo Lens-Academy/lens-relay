@@ -50,9 +50,11 @@ export const commentOffsetTranslator = Facet.define<
  * Receives the absolute Y.Text offset (already passed through
  * commentOffsetTranslator). Unlike the other facets in this file, this one
  * defines no `combine` — the facet value is the array of all registrations
- * and each one is invoked.
+ * and each one is invoked. `fromText`: the click was on the text the comment
+ * is on (its highlight), which also places the cursor, so it opens the thread
+ * rather than toggling it.
  */
-export const commentClickCallback = Facet.define<(absFrom: number) => void>();
+export const commentClickCallback = Facet.define<(absFrom: number, opts?: { fromText?: boolean }) => void>();
 
 // Author context - can be set externally
 let currentAuthor = 'anonymous';
@@ -118,26 +120,31 @@ function toSuperscript(n: number): string {
 }
 
 /**
- * Widget that renders a numbered badge for comment threads.
+ * Widget that renders a numbered badge for comment threads. A comment on a
+ * point (no text highlighted) shows it in the margin just right of the text
+ * column, at its line, as Notion marks a block's comments (index.css); a
+ * comment on highlighted text has none, its highlight marks it.
  */
 class CommentBadgeWidget extends WidgetType {
   constructor(
     private number: number,
     private threadFrom: number,
+    private inMargin = false,
   ) {
     super();
   }
 
   toDOM(): HTMLElement {
     const span = document.createElement('span');
-    span.className = 'cm-comment-badge';
+    span.className = this.inMargin ? 'cm-comment-badge is-margin' : 'cm-comment-badge';
     span.textContent = String(this.number);
     span.dataset.commentFrom = String(this.threadFrom);
+    if (this.inMargin) span.title = 'Comment';
     return span;
   }
 
   eq(other: CommentBadgeWidget): boolean {
-    return this.number === other.number && this.threadFrom === other.threadFrom;
+    return this.number === other.number && this.threadFrom === other.threadFrom && this.inMargin === other.inMargin;
   }
 
   ignoreEvent(): boolean {
@@ -326,6 +333,119 @@ function runButton(view: EditorView, target: HTMLElement, savedSelection: { from
  * Decorations are rebuilt when the document changes, viewport changes, or selection changes.
  * Delimiters and metadata are always hidden; accept/reject buttons shown when cursor is inside.
  */
+interface CommentBadge {
+  badgeNumber: number;
+  isFirst: boolean;
+  threadFrom: number;
+}
+
+/**
+ * Which comments show a badge, and its number. Section editors can provide a
+ * badge map sliced from the full document, so an open field keeps the same
+ * comment numbers as the course comments sidebar. Threads on highlighted text
+ * ({==text==}{>>…<<}) get none: their highlight marks them, as Notion's
+ * comments (onHighlight, by each comment's from).
+ */
+function commentBadges(state: EditorState, ranges: readonly CriticMarkupRange[]) {
+  const threads = parseThreads([...ranges]);
+  const commentBadgeMap = new Map<number, CommentBadge>();
+  // Translator from local CM positions to absolute Y.Text offsets
+  const translateOffset = state.facet(commentOffsetTranslator);
+  const suppliedBadgeMap = state.field(commentBadgeMapField);
+  if (suppliedBadgeMap) {
+    for (const range of ranges) {
+      if (range.type !== 'comment') continue;
+      const supplied = suppliedBadgeMap.get(range.from);
+      if (!supplied) continue;
+      commentBadgeMap.set(range.from, {
+        badgeNumber: supplied.badgeNumber,
+        isFirst: supplied.isFirstInThread,
+        threadFrom: range.from,
+      });
+    }
+  } else {
+    for (let ti = 0; ti < threads.length; ti++) {
+      const thread = threads[ti];
+      for (let ci = 0; ci < thread.comments.length; ci++) {
+        commentBadgeMap.set(thread.comments[ci].from, {
+          badgeNumber: ti + 1,
+          isFirst: ci === 0,
+          threadFrom: thread.from,
+        });
+      }
+    }
+  }
+
+  const onHighlight = new Set<number>();
+  for (const thread of threads) {
+    const first = ranges.indexOf(thread.comments[0]);
+    const before = ranges[first - 1];
+    if (before?.type === 'highlight' && before.to === thread.from) {
+      for (const comment of thread.comments) onHighlight.add(comment.from);
+    }
+  }
+  return { commentBadgeMap, onHighlight, translateOffset };
+}
+
+/**
+ * Comments, hidden whole, with their badge if they show one; those over
+ * several lines with their line breaks, and one taking up whole lines with
+ * the line break before it too, so no empty line is left where it was.
+ *
+ * In a state field, not the decorations plugin: CodeMirror estimates the
+ * height of lines it has not drawn from their length, leaving out only text
+ * a state field hides. Hidden by the plugin, a comment's text and metadata
+ * counted, so a line with a long comment was guessed several rows tall and
+ * drawn one, and lines hidden over several rows were squashed to no height
+ * by CSS. CodeMirror kept re-measuring against its guesses ("Measure loop
+ * restarted", "Viewport failed to stabilize"), could draw the page shorter
+ * than it is, and scrolling and the outline's jumps went wrong. (Replacing
+ * line breaks needs a state field too.)
+ */
+function buildHiddenComments(state: EditorState): DecorationSet {
+  const ranges = state.field(criticMarkupField);
+  const { commentBadgeMap, onHighlight, translateOffset } = commentBadges(state, ranges);
+  const { doc } = state;
+  const builder = new RangeSetBuilder<Decoration>();
+  let last = -1;
+  for (const range of ranges) {
+    if (range.type !== 'comment') continue;
+    const start = doc.lineAt(range.from);
+    const end = doc.lineAt(range.to);
+    let from = range.from;
+    let to = range.to;
+    if (start.number !== end.number && range.from === start.from && range.to === end.to) {
+      if (from > 0) from -= 1;
+      else if (to < doc.length) to += 1;
+    }
+    if (from < last) from = last;
+    if (from >= to) continue;
+    const badge = onHighlight.has(range.from) ? undefined : commentBadgeMap.get(range.from);
+    builder.add(from, to, Decoration.replace({
+      widget: badge?.isFirst
+        ? new CommentBadgeWidget(badge.badgeNumber, translateOffset(badge.threadFrom), true)
+        : undefined,
+    }));
+    last = to;
+  }
+  return builder.finish();
+}
+
+const hiddenComments = StateField.define<DecorationSet>({
+  create: buildHiddenComments,
+  update(value, tr) {
+    if (
+      tr.docChanged ||
+      tr.effects.some((e) => e.is(setCommentBadgeMap)) ||
+      tr.startState.facet(commentOffsetTranslator) !== tr.state.facet(commentOffsetTranslator)
+    ) {
+      return buildHiddenComments(tr.state);
+    }
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
 export const criticMarkupPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
@@ -364,6 +484,14 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           if (!isNaN(absFrom)) {
             view.state.facet(commentClickCallback).forEach((cb) => cb(absFrom));
           }
+        } else {
+          // Text a comment is on opens its thread, as in Notion; the click
+          // still places the cursor
+          const commented = target.closest<HTMLElement>('.cm-comment-target');
+          const absFrom = parseInt(commented?.dataset.commentFrom ?? '', 10);
+          if (commented && !isNaN(absFrom) && view.state.selection.main.empty) {
+            view.state.facet(commentClickCallback).forEach((cb) => cb(absFrom, { fromText: true }));
+          }
         }
       });
     }
@@ -393,38 +521,8 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       // Line decorations are added separately (must not be mixed into mark sort)
       const lineDecos: Array<{ from: number; deco: Decoration }> = [];
 
-      // Build comment thread info for badge numbering. Section editors can
-      // provide a badge map sliced from the full document, so an open field
-      // keeps the same comment numbers as the course comments sidebar.
-      const threads = parseThreads(ranges);
-      // Map each comment range's `from` to its badge info
-      const commentBadgeMap = new Map<number, { badgeNumber: number; isFirst: boolean; threadFrom: number }>();
-      // Translator from local CM positions to absolute Y.Text offsets.
+      // Translator from local CM positions to absolute Y.Text offsets
       const translateOffset = view.state.facet(commentOffsetTranslator);
-      const suppliedBadgeMap = view.state.field(commentBadgeMapField);
-      if (suppliedBadgeMap) {
-        for (const range of ranges) {
-          if (range.type !== 'comment') continue;
-          const supplied = suppliedBadgeMap.get(range.from);
-          if (!supplied) continue;
-          commentBadgeMap.set(range.from, {
-            badgeNumber: supplied.badgeNumber,
-            isFirst: supplied.isFirstInThread,
-            threadFrom: range.from,
-          });
-        }
-      } else {
-        for (let ti = 0; ti < threads.length; ti++) {
-          const thread = threads[ti];
-          for (let ci = 0; ci < thread.comments.length; ci++) {
-            commentBadgeMap.set(thread.comments[ci].from, {
-              badgeNumber: ti + 1,
-              isFirst: ci === 0,
-              threadFrom: thread.from,
-            });
-          }
-        }
-      }
 
       // Detect bulk selection: if selection spans multiple markup ranges,
       // show a single bulk widget for the suggestions among them instead of
@@ -462,63 +560,9 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         const className = typeClass(range);
         const cursorInside = selectionIntersects(selection, range.from, range.to);
 
-        // Comments: hide all text, show badge widget for first in thread
-        if (range.type === 'comment') {
-          const badgeInfo = commentBadgeMap.get(range.from);
-          const spansLineBreak = view.state.doc.lineAt(range.from).number !== view.state.doc.lineAt(range.to).number;
-
-          if (spansLineBreak) {
-            // Multiline comments can't use Decoration.replace (CM6 plugin limitation).
-            // Hide all text with cm-hidden-syntax marks and place badge widget at start.
-            decorations.push({
-              from: range.from,
-              to: range.to,
-              deco: Decoration.mark({ class: 'cm-hidden-syntax' }),
-            });
-            if (badgeInfo?.isFirst) {
-              decorations.push({
-                from: range.from,
-                to: range.from,
-                deco: Decoration.widget({
-                  widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom)),
-                  side: -1,
-                }),
-              });
-            }
-
-            // Collapse intermediate ghost lines (lines entirely within hidden comment range)
-            const doc = view.state.doc;
-            const startLine = doc.lineAt(range.from).number;
-            const endLine = doc.lineAt(range.to).number;
-            for (let ln = startLine; ln <= endLine; ln++) {
-              const line = doc.line(ln);
-              const lineFullyHidden = line.from >= range.from && line.to <= range.to;
-              if (lineFullyHidden) {
-                lineDecos.push({
-                  from: line.from,
-                  deco: Decoration.line({ class: 'cm-comment-collapsed-line' }),
-                });
-              }
-            }
-          } else if (badgeInfo?.isFirst) {
-            // First comment in thread (single line): replace entire range with badge
-            decorations.push({
-              from: range.from,
-              to: range.to,
-              deco: Decoration.replace({
-                widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom)),
-              }),
-            });
-          } else {
-            // Non-first comment in thread (single line): hide entirely
-            decorations.push({
-              from: range.from,
-              to: range.to,
-              deco: Decoration.replace({}),
-            });
-          }
-          continue;
-        }
+        // Comments are hidden, with their badge, by hiddenComments (a state
+        // field, so CodeMirror's height estimates leave their text out)
+        if (range.type === 'comment') continue;
 
         // Non-comment ranges: standard three-decoration pattern
         // Always hide delimiters and metadata, only show colored content
@@ -529,11 +573,21 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           deco: Decoration.mark({ class: 'cm-hidden-syntax' }),
         });
 
-        // Content (between delimiters)
+        // Content (between delimiters). A highlight a comment follows,
+        // {==text==}{>>comment<<}, is the text the comment is on: Notion's
+        // comment marking, which opens and lights up with its thread (the
+        // comments layer sets data-comment-focused on data-comment-from)
+        const next = ranges[ri + 1];
+        const commentOn = range.type === 'highlight' && next?.type === 'comment' && next.from === range.to;
         decorations.push({
           from: range.contentFrom,
           to: range.contentTo,
-          deco: Decoration.mark({ class: className }),
+          deco: commentOn
+            ? Decoration.mark({
+              class: `${className} cm-comment-target`,
+              attributes: { 'data-comment-from': String(translateOffset(next.from)) },
+            })
+            : Decoration.mark({ class: className }),
         });
 
         // Closing delimiter
@@ -575,7 +629,9 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           const isPairStart = adjacentPairStart.has(ri);
           const isPairEnd = adjacentPairEnd.has(ri);
 
-          if (!isPairStart) {
+          if (commentOn) {
+            // The text a comment is on: its card resolves it, so no ✓ / ✗ here
+          } else if (!isPairStart) {
             // Normal range or pair-end addition: show button here
             const widgetFrom = isPairEnd ? ranges[ri - 1].from : range.from;
             decorations.push({
@@ -786,6 +842,12 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
       read: (view) => this.measure(view),
       write: (pos) => this.place(pos),
     });
+    /** The editor's wrapper in Editor.tsx, which also holds its floating labels. */
+    private wrapper: HTMLElement | null = null;
+    /** Re-places the buttons when a floating label (the word count) comes or goes. */
+    private readonly labels = new MutationObserver(() => {
+      if (this.active) this.schedule();
+    });
     /** Scrolling only matters while a change is selected. */
     private readonly onScroll = () => {
       if (this.active) this.schedule();
@@ -800,6 +862,10 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
       this.dom.addEventListener('click', (e) => this.click(e));
       view.dom.appendChild(this.dom);
       this.active = this.activeWidget(view);
+      // The word count is a sibling of the editor's container, drawn by React
+      // after the selection changed, so this measure may come before it.
+      this.wrapper = view.dom.parentElement?.parentElement ?? null;
+      if (this.wrapper) this.labels.observe(this.wrapper, { childList: true });
       window.addEventListener('scroll', this.onScroll, { capture: true, passive: true });
       window.addEventListener('resize', this.onScroll);
       window.visualViewport?.addEventListener('resize', this.onScroll);
@@ -814,6 +880,7 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
 
     destroy() {
       this.dom.remove();
+      this.labels.disconnect();
       window.removeEventListener('scroll', this.onScroll, { capture: true });
       window.removeEventListener('resize', this.onScroll);
       window.visualViewport?.removeEventListener('resize', this.onScroll);
@@ -900,6 +967,8 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
       let left = inMargin ? textRight + gap : Math.min(textRight, editor.right - gap) - width;
       left = Math.max(left, editor.left + gap);
       let top = this.uncoveredBottom(view, left + width / 2, vis) - height - gap;
+      top = this.aboveFloatingLabels(left, width, top, height, gap);
+      const covered = inMargin ? 0 : Math.max(height + 2 * gap, vis.bottom - top);
       if (!inMargin) {
         // Over the text: never cover the cursor.
         const head = view.coordsAtPos(view.state.selection.main.head);
@@ -911,8 +980,27 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
         widget: active.widget,
         left: left - editor.left,
         top: top - editor.top,
-        covered: inMargin ? 0 : height + 2 * gap,
+        covered,
       };
+    }
+
+    /**
+     * Move the buttons up above any label floating over the editor's bottom
+     * (the selected word count). Those labels let clicks through, so
+     * `uncoveredBottom`'s hit test cannot see them; they say so with
+     * `data-floats-over-editor` instead.
+     */
+    private aboveFloatingLabels(left: number, width: number, top: number, height: number, gap: number) {
+      if (!this.wrapper) return top;
+      const labels = Array.from(this.wrapper.querySelectorAll<HTMLElement>('[data-floats-over-editor]'))
+        .map((el) => el.getBoundingClientRect())
+        .filter((r) => r.width > 0 && r.height > 0)
+        .sort((a, b) => b.bottom - a.bottom);
+      for (const r of labels) {
+        const overlaps = r.left < left + width + gap && r.right > left - gap && r.top < top + height + gap && r.bottom > top - gap;
+        if (overlaps) top = r.top - height - gap;
+      }
+      return top;
     }
 
     private place(pos: StickyPlacement) {
@@ -1274,6 +1362,9 @@ interface CriticMarkupOptions {
   commentBadgeMap?: Map<number, CriticMarkupCommentBadgeInfo>;
 }
 
+/** CriticMarkup in live preview: the decorations plugin and the hidden comments */
+export const criticMarkupLivePreview = [criticMarkupPlugin, hiddenComments];
+
 export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
   const { canAcceptReject = true, commentBadgeMap = null } = options;
   return [
@@ -1282,7 +1373,7 @@ export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
     commentBadgeMapField.init(() => commentBadgeMap),
     suggestionModeField,
     suggestionModeFilter,
-    criticMarkupCompartment.of(criticMarkupPlugin),
+    criticMarkupCompartment.of(criticMarkupLivePreview),
     stickyButtonsPlugin,
     keymap.of(criticMarkupKeymap),
   ];

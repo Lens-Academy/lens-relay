@@ -58,7 +58,7 @@ export interface RowCardProps {
 type CardState = 'idle' | 'connecting' | 'live' | 'error';
 
 /** The panel sits inside the main editor, whose theme (`.ͼx .cm-content`:
- *  page padding, 700px column, scrolling) also matches these nested editors.
+ *  page padding, column width, scrolling) also matches these nested editors.
  *  Undo it here with selectors that outrank it. */
 const rowEditorTheme = EditorView.theme({
   '&.cm-editor .cm-content': { padding: '0', maxWidth: 'none', margin: '0' },

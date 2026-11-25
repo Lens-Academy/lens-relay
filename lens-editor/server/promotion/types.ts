@@ -46,13 +46,31 @@ export interface PromotionPrRequest {
   title?: string;
 }
 
+/**
+ * What happened to a promotion's PR: `merged` into production at once,
+ * `auto-merge` queued because the branch still requires a check, or still
+ * `open` for a person to merge (the response's `warning` says why).
+ */
+export type PromotionMerge = 'merged' | 'auto-merge' | 'open';
+
 export interface PromotionPrResponse {
   branch: string;
   prNumber: number;
   prUrl: string;
   mainSha: string;
-  autoMergeEnabled: boolean;
+  merge: PromotionMerge;
+  /** Why the PR is still open, or why GitHub would not take auto-merge. */
   warning?: string;
+}
+
+/** A branch the editor pushed to production's repository, ready for its pull request. */
+export interface PromotionBranch {
+  branch: string;
+  /** Production's head when the branch was made from it. */
+  mainSha: string;
+  sourceStagingSha: string;
+  /** The commit the editor pushed: the merge takes this commit and no other. */
+  headSha: string;
 }
 
 export interface PromotionConfig {

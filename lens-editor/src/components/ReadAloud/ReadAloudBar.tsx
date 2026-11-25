@@ -6,10 +6,11 @@
  * as on YouTube) work while focus is not in the editor or a field
  * (`lib/read-aloud/keys.ts`; an HTML preview forwards them from its frame).
  *
- * Shown at the bottom centre of its (relatively positioned) container.
+ * Shown at the bottom of its (relatively positioned) container, centred under
+ * the editor's text column when there is one.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useReadAloudSnapshot } from './useReadAloudSnapshot';
 import { Icon } from '../Icon';
 import type { ReadAloudEngine } from '../../lib/read-aloud/engine';
@@ -24,6 +25,7 @@ export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voicesError, setVoicesError] = useState<string | null>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
+  const regionRef = useRef<HTMLDivElement>(null);
   const open = snap?.open ?? false;
 
   useEffect(() => {
@@ -63,33 +65,60 @@ export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [open, engine]);
 
+
+  // Centred under the text column rather than the page area, which is wider
+  // on one side; measured again as the sidebars and window change its width
+  useLayoutEffect(() => {
+    const region = regionRef.current;
+    const area = region?.parentElement;
+    if (!open || !region || !area) return;
+    const centre = () => {
+      const column = area.querySelector('.cm-content');
+      if (!column) {
+        region.style.transform = '';
+        return;
+      }
+      const page = area.getBoundingClientRect();
+      const text = column.getBoundingClientRect();
+      region.style.transform = `translateX(${Math.round(text.left + text.width / 2 - (page.left + page.width / 2))}px)`;
+    };
+    centre();
+    const observer = new ResizeObserver(centre);
+    observer.observe(area);
+    const column = area.querySelector('.cm-content');
+    if (column) observer.observe(column);
+    return () => observer.disconnect();
+  }, [open]);
+
   if (!engine || !snap || !open) return null;
   const playing = snap.status === 'playing';
   const loading = snap.status === 'loading';
-  const iconBtn = 'rounded-md p-2 text-gray-700 hover:bg-gray-100 disabled:opacity-40 cursor-pointer';
+  const rate = snap.prefs.speakingRate;
+  const fill = ((rate - MIN_SPEAKING_RATE) / (MAX_SPEAKING_RATE - MIN_SPEAKING_RATE)) * 100;
 
   return (
     <div
+      ref={regionRef}
       role="region"
       aria-label="Read-aloud controls"
       data-read-aloud-bar
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center pb-[env(safe-area-inset-bottom)]"
+      className="lens-player-region"
     >
       {snap.autoScrollPaused && snap.status !== 'idle' && (
         <button
           type="button"
           onClick={() => engine.setAutoScrollPaused(false)}
           aria-label="Scroll back to current sentence and resume auto-scroll"
-          className="pointer-events-auto absolute -top-12 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-[#b87018] px-4 py-2 text-sm font-medium text-white shadow-lg transition hover:brightness-105 active:scale-95 cursor-pointer"
+          className="lens-player-back"
         >
           <Icon name="locate-fixed" className="h-3.5 w-3.5" />
           Back to current sentence
         </button>
       )}
 
-      <div className="pointer-events-auto relative m-3 inline-flex items-center gap-1.5 rounded-2xl border border-[#fde6c8] bg-white/95 px-2.5 py-2 shadow-lg backdrop-blur">
-        <button type="button" aria-label="Skip back to previous sentence" title="Previous sentence ([)" onClick={() => engine.skip(-1)} className={iconBtn} disabled={snap.unitCount === 0}>
-          <Icon name="skip-back" className="h-[18px] w-[18px]" />
+      <div className="lens-player">
+        <button type="button" aria-label="Skip back to previous sentence" title="Previous sentence ([)" onClick={() => engine.skip(-1)} className="lens-player-button" disabled={snap.unitCount === 0}>
+          <Icon name="skip-back" className="h-4 w-4" />
         </button>
         <button
           type="button"
@@ -97,32 +126,35 @@ export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
           title={playing || loading ? 'Pause (Space)' : 'Play (Space)'}
           onClick={() => engine.toggle()}
           disabled={snap.unitCount === 0}
-          className="rounded-full bg-[#b87018] p-3 text-white hover:brightness-105 disabled:opacity-50 cursor-pointer"
+          className="lens-player-play"
         >
           {loading ? (
-            <Icon name="loader" className="h-[18px] w-[18px] animate-spin" />
+            <Icon name="loader" className="h-4 w-4 animate-spin" />
           ) : (
-            <Icon name={playing ? 'pause' : 'play'} className="h-[18px] w-[18px]" />
+            <Icon name={playing ? 'pause' : 'play'} className="h-4 w-4" />
           )}
         </button>
-        <button type="button" aria-label="Skip ahead to next sentence" title="Next sentence (])" onClick={() => engine.skip(1)} className={iconBtn} disabled={snap.unitCount === 0}>
-          <Icon name="skip-forward" className="h-[18px] w-[18px]" />
+        <button type="button" aria-label="Skip ahead to next sentence" title="Next sentence (])" onClick={() => engine.skip(1)} className="lens-player-button" disabled={snap.unitCount === 0}>
+          <Icon name="skip-forward" className="h-4 w-4" />
         </button>
 
-        <label className="ml-2 flex items-center gap-2 rounded-md px-1.5 py-1" title="Speed (< slower, > faster)">
+        <span className="lens-player-divider" aria-hidden="true" />
+        <label className="lens-player-speed" title="Speed (< slower, > faster)">
           <input
             type="range"
             min={MIN_SPEAKING_RATE}
             max={MAX_SPEAKING_RATE}
             step={SPEAKING_RATE_STEP}
-            value={snap.prefs.speakingRate}
+            value={rate}
             onChange={e => engine.setPrefs({ speakingRate: Number(e.target.value) })}
             aria-label="Playback speed"
-            aria-valuetext={`${snap.prefs.speakingRate}×`}
-            className="w-24 accent-[#b87018] cursor-pointer"
+            aria-valuetext={`${rate}×`}
+            className="lens-player-slider"
+            style={{ '--fill': `${fill}%` } as CSSProperties}
           />
-          <span className="w-9 text-right text-sm font-medium tabular-nums text-gray-700">{snap.prefs.speakingRate}×</span>
+          <span className="lens-player-rate">{rate}×</span>
         </label>
+        <span className="lens-player-divider" aria-hidden="true" />
 
         <div ref={settingsRef} className="relative">
           <button
@@ -131,43 +163,35 @@ export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
             aria-expanded={settingsOpen}
             aria-haspopup="dialog"
             onClick={() => setSettingsOpen(o => !o)}
-            className={`rounded-md p-2 text-gray-700 transition cursor-pointer ${settingsOpen ? 'bg-gray-100' : 'hover:bg-gray-100'}`}
+            className={`lens-player-button${settingsOpen ? ' is-on' : ''}`}
           >
-            <Icon name="settings" className="h-[18px] w-[18px]" />
+            <Icon name="settings" className="h-4 w-4" />
           </button>
           {settingsOpen && (
-            <div
-              role="dialog"
-              aria-label="Reading settings"
-              className="absolute bottom-full right-0 z-50 mb-2 w-72 rounded-xl border border-gray-200 bg-white p-3 shadow-xl"
-            >
+            <div role="dialog" aria-label="Reading settings" className="lens-popover lens-player-settings">
               <div className="mb-3">
-                <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Highlight</div>
-                <div className="flex gap-1 rounded-lg bg-gray-100 p-0.5">
-                  {(['sentence', 'word'] as const).map(mode => {
-                    const active = snap.prefs.highlightMode === mode;
-                    return (
-                      <button
-                        key={mode}
-                        type="button"
-                        aria-pressed={active}
-                        onClick={() => engine.setPrefs({ highlightMode: mode })}
-                        className={`flex-1 rounded-md px-2 py-1 text-sm font-medium transition cursor-pointer ${active ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-                      >
-                        {mode === 'sentence' ? 'Sentence' : 'Word'}
-                      </button>
-                    );
-                  })}
+                <div className="lens-player-label">Highlight</div>
+                <div className="lens-segmented">
+                  {(['sentence', 'word'] as const).map(mode => (
+                    <button
+                      key={mode}
+                      type="button"
+                      aria-pressed={snap.prefs.highlightMode === mode}
+                      onClick={() => engine.setPrefs({ highlightMode: mode })}
+                    >
+                      {mode === 'sentence' ? 'Sentence' : 'Word'}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               <div>
-                <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Voice</div>
+                <div className="lens-player-label">Voice</div>
                 <select
                   value={snap.prefs.voiceId}
                   onChange={e => engine.setPrefs({ voiceId: e.target.value })}
                   disabled={voices.length === 0}
-                  className="w-full rounded-md border border-gray-200 bg-white px-2 py-1.5 text-sm"
+                  className="lens-input w-full"
                 >
                   {voices.length === 0 ? (
                     <option value={snap.prefs.voiceId}>{snap.prefs.voiceId}</option>
@@ -181,8 +205,8 @@ export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
           )}
         </div>
 
-        <button type="button" aria-label="Close read-aloud" title="Close" onClick={() => { setSettingsOpen(false); engine.close(); }} className={iconBtn}>
-          <Icon name="x" className="h-[18px] w-[18px]" />
+        <button type="button" aria-label="Close read-aloud" title="Close" onClick={() => { setSettingsOpen(false); engine.close(); }} className="lens-player-button">
+          <Icon name="x" className="h-4 w-4" />
         </button>
 
         {snap.error && (

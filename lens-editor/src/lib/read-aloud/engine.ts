@@ -39,9 +39,19 @@ export interface ReadAloudSnapshot {
   open: boolean;
   /** The listener scrolled away, so the page no longer follows the sentence. */
   autoScrollPaused: boolean;
+  /**
+   * What is being read: PAGE_SOURCE for the page, or another reading started
+   * with playOther (a comment thread, `comment:<thread key>`).
+   */
+  source: string;
 }
 
+/** The source of the page's own units (setUnits). */
+export const PAGE_SOURCE = 'page';
+
 export interface ReadAloudHighlight {
+  /** Whose unit it is (ReadAloudSnapshot.source). */
+  source: string;
   unit: number;
   /** The heard word within the unit's text; null in sentence mode or between words. */
   word: CharRange | null;
@@ -73,6 +83,13 @@ interface Placed {
 }
 
 const BASE_PREFETCH = 2;
+/**
+ * Seconds of audio queued ahead of what is heard. Speechify synthesizes far
+ * faster than it is heard, so without this bound the whole page would be
+ * fetched (and paid for) at once, and again from the new place after every
+ * jump, restart or speed change.
+ */
+export const LOOKAHEAD_SECONDS = 15;
 const RESTART_DEBOUNCE_MS = 250;
 
 /** Sentences fetched ahead: more at high speed, where each covers less time. */
@@ -80,8 +97,26 @@ export function prefetchDepthFor(rate: number): number {
   return rate <= 1.5 ? BASE_PREFETCH : BASE_PREFETCH + Math.ceil((rate - 1.5) / 0.75);
 }
 
+/**
+ * Where unit `i` of `old` is in `units` after an edit: the same text near
+ * `hint` (the caller's mapping) or near `i`, else the position clamped.
+ */
+function findMoved(old: ReadingUnit[], units: ReadingUnit[], i: number, hint?: number | null): number {
+  const text = old[i]?.text;
+  for (const base of hint != null ? [hint, i] : [i]) {
+    for (let d = 0; d <= 8; d = d > 0 ? -d : 1 - d) {
+      if (units[base + d]?.text === text) return base + d;
+    }
+  }
+  return Math.max(0, Math.min(hint ?? i, units.length - 1));
+}
+
 export class ReadAloudEngine {
   private units: ReadingUnit[] = [];
+  /** The page's units, kept while another source is read. */
+  private pageUnits: ReadingUnit[] = [];
+  /** The page unit to go on from after another source was read. */
+  private resumeAt: number | null = null;
   private entries = new Map<number, Entry>();
   /** Units fed into the player since the last reset, in order. */
   private timeline: Placed[] = [];
@@ -89,6 +124,8 @@ export class ReadAloudEngine {
   private queued = 0;
   /** The unit whose audio is going into the player now; null when all is queued. */
   private feeding: number | null = null;
+  /** `feeding` waits off the timeline until the listener is within LOOKAHEAD_SECONDS of it. */
+  private held = false;
   private paused = false;
   private active = false;
   private raf = 0;
@@ -104,8 +141,11 @@ export class ReadAloudEngine {
   ) {
     this.snapshot = {
       status: 'idle', current: null, unitCount: 0, prefs: loadPrefs(), error: null, open: false, autoScrollPaused: false,
+      source: PAGE_SOURCE,
     };
     this.player.onEmpty = () => this.finish();
+    // Progress reports keep coming in a background tab, where frames stop.
+    this.player.onProgress = () => this.release();
   }
 
   // -- store interface (useSyncExternalStore) --
@@ -147,6 +187,14 @@ export class ReadAloudEngine {
    * kept for every unit whose text is unchanged.
    */
   setUnits(units: ReadingUnit[], current?: number | null) {
+    const oldPage = this.pageUnits;
+    this.pageUnits = units;
+    // Another source is being read: the page's units wait until it is back,
+    // and the sentence to resume at follows the edit by its text.
+    if (this.snapshot.source !== PAGE_SOURCE) {
+      if (this.resumeAt != null) this.resumeAt = findMoved(oldPage, units, this.resumeAt, current);
+      return;
+    }
     const old = this.units;
     this.units = units;
     this.update({ unitCount: units.length });
@@ -169,14 +217,23 @@ export class ReadAloudEngine {
     this.entries = entries;
     for (const placed of this.timeline) placed.unit = remap(placed.unit);
     if (this.feeding != null) {
-      const j = remap(this.feeding);
+      // The held sentence is not queued yet: it is whatever follows the last one queued.
+      const last = this.timeline[this.timeline.length - 1]?.unit ?? -1;
+      const j = this.held && last >= 0 ? last + 1 : remap(this.feeding);
       if (j < 0) {
         // The sentence being fed was edited away: carry on from where the
         // caller says the listener is.
         this.startAt(Math.min(current ?? 0, units.length - 1));
         return;
       }
-      this.feeding = j;
+      if (j < units.length) {
+        this.feeding = j;
+      } else {
+        // The page now ends with what is queued.
+        this.feeding = null;
+        this.held = false;
+        this.player.drain();
+      }
     }
     const heard = this.heardPlacement();
     this.update({ current: heard?.unit ?? this.feeding ?? null });
@@ -185,6 +242,35 @@ export class ReadAloudEngine {
   }
 
   // -- controls --
+
+  /** Read the page (setUnits) from unit `from`, also when another source is being read. Call from a user gesture. */
+  playPage(from: number) {
+    this.useSource(PAGE_SOURCE, this.pageUnits);
+    this.resumeAt = null;
+    this.play(from);
+  }
+
+  /**
+   * Read other text than the page (a comment) from unit `from`. When it ends
+   * or is stopped the engine is back on the page, and Play goes on from the
+   * page sentence that was being heard. Call from a user gesture.
+   */
+  playOther(source: string, units: ReadingUnit[], from = 0) {
+    if (source === PAGE_SOURCE) throw new Error('playOther: use playPage for the page');
+    if (this.snapshot.source === PAGE_SOURCE) this.resumeAt = this.snapshot.current;
+    this.useSource(source, units);
+    this.play(from);
+  }
+
+  private useSource(source: string, units: ReadingUnit[]) {
+    if (source === this.snapshot.source && units === this.units) return;
+    this.units = units;
+    // Unit numbers now point into other text: no fetched audio carries over.
+    for (const entry of this.entries.values()) entry.abort.abort();
+    this.entries.clear();
+    this.lastHighlight = null;
+    this.update({ source, unitCount: units.length, current: null });
+  }
 
   /** Show the player bar. */
   open() {
@@ -210,7 +296,12 @@ export class ReadAloudEngine {
       this.update({ status: this.statusNow() });
       return;
     }
-    const start = from ?? this.snapshot.current ?? 0;
+    let start = from ?? this.snapshot.current;
+    if (start == null && this.snapshot.source === PAGE_SOURCE) {
+      start = this.resumeAt;
+      this.resumeAt = null;
+    }
+    start ??= 0;
     if (start < 0 || start >= this.units.length) return;
     this.paused = false;
     this.update({ open: true, autoScrollPaused: false });
@@ -249,10 +340,17 @@ export class ReadAloudEngine {
     this.timeline = [];
     this.queued = 0;
     this.feeding = null;
+    this.held = false;
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.emitHighlight(null);
     this.update({ status: 'idle', current: null });
+    // Back on the page once another source ends or is stopped.
+    if (this.snapshot.source !== PAGE_SOURCE) {
+      const resumeAt = this.resumeAt;
+      this.useSource(PAGE_SOURCE, this.pageUnits);
+      this.resumeAt = resumeAt;
+    }
   }
 
   setPrefs(patch: Partial<ReadAloudPrefs>) {
@@ -273,6 +371,7 @@ export class ReadAloudEngine {
       this.timeline = [];
       this.queued = 0;
       this.feeding = null;
+      this.held = false;
       this.update({ status: this.paused ? 'paused' : 'loading' });
       this.restartTimer = setTimeout(() => {
         this.restartTimer = null;
@@ -310,6 +409,7 @@ export class ReadAloudEngine {
       }
     }
     this.feeding = index;
+    this.held = false;
     this.update({ current: index, status: this.paused ? 'paused' : 'loading' });
     this.lastHighlight = null;
     this.feed();
@@ -338,7 +438,7 @@ export class ReadAloudEngine {
         if (event.type === 'audio') {
           entry.chunks.push(event.pcm);
           entry.bytes += event.pcm.byteLength;
-          if (this.feedingEntry() === entry) {
+          if (this.feedingEntry() === entry && !this.held) {
             this.player.push(event.pcm);
             this.queued += event.pcm.byteLength / 2 / PCM_SAMPLE_RATE;
           }
@@ -358,7 +458,7 @@ export class ReadAloudEngine {
       }
       console.warn('[read-aloud] sentence skipped:', err);
     }
-    if (this.feedingEntry() === entry) this.advance();
+    if (this.feedingEntry() === entry && !this.held) this.advance();
   }
 
   private addTimings(entry: Entry, msg: Extract<StreamEvent, { type: 'timestamps' }>) {
@@ -404,6 +504,15 @@ export class ReadAloudEngine {
       return;
     }
     this.feeding = next;
+    this.held = this.queued - this.player.playbackTime > LOOKAHEAD_SECONDS;
+    if (!this.held) this.feed();
+    this.prefetch();
+  }
+
+  /** Feed the held unit once the listener has come close enough to it. */
+  private release() {
+    if (!this.held || this.queued - this.player.playbackTime > LOOKAHEAD_SECONDS) return;
+    this.held = false;
     this.feed();
     this.prefetch();
   }
@@ -432,6 +541,7 @@ export class ReadAloudEngine {
   private tick = () => {
     this.raf = 0;
     if (!this.active) return;
+    this.release();
     const placed = this.heardPlacement();
     if (placed && placed.unit >= 0) {
       const t = this.player.playbackTime - placed.start;
@@ -441,7 +551,7 @@ export class ReadAloudEngine {
         while (k >= 0 && !placed.entry.ranges[k]) k--;
         word = k >= 0 ? placed.entry.ranges[k] : null;
       }
-      this.emitHighlight({ unit: placed.unit, word });
+      this.emitHighlight({ source: this.snapshot.source, unit: placed.unit, word });
       this.update({ current: placed.unit, status: this.statusNow() });
     } else {
       this.update({ status: this.statusNow() });
@@ -452,7 +562,7 @@ export class ReadAloudEngine {
   private emitHighlight(h: ReadAloudHighlight | null) {
     const prev = this.lastHighlight;
     if (prev === h) return;
-    if (prev && h && prev.unit === h.unit && prev.word?.start === h.word?.start && prev.word?.end === h.word?.end) return;
+    if (prev && h && prev.source === h.source && prev.unit === h.unit && prev.word?.start === h.word?.start && prev.word?.end === h.word?.end) return;
     this.lastHighlight = h;
     for (const fn of this.highlightListeners) fn(h);
   }

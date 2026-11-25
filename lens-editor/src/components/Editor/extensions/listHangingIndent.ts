@@ -114,15 +114,14 @@ const listHangingIndentPlugin = ViewPlugin.fromClass(
           const prefixLen = listPrefixLength(view.state, line);
           if (prefixLen === null) continue;
 
+          // Every list line is one, for its spacing (index.css), measured or not
           const hang = this.hang.get(line.from);
-          if (hang !== undefined) {
-            ranges.push(
-              Decoration.line({
-                class: 'cm-list-line',
-                attributes: { style: `--list-hang: ${hang}px` },
-              }).range(line.from),
-            );
-          }
+          ranges.push(
+            Decoration.line({
+              class: 'cm-list-line',
+              attributes: hang === undefined ? undefined : { style: `--list-hang: ${hang}px` },
+            }).range(line.from),
+          );
 
           const indentLen = LIST_PREFIX_RE.exec(line.text)![1].length;
           if (indentLen > 0) {
@@ -152,7 +151,9 @@ const listHangingIndentPlugin = ViewPlugin.fromClass(
             if (prefixLen === null) continue;
 
             const start = view.coordsAtPos(line.from, 1);
-            const end = view.coordsAtPos(line.from + prefixLen, 1);
+            // The prefix's own end (side -1): the text after it may start with
+            // hidden syntax (`**`, `#####`) of no size, whose box isn't on the row
+            const end = view.coordsAtPos(line.from + prefixLen, -1);
             if (!start || !end) continue;
             // Prefix wrapped onto a second row, or nonsensical: no hang.
             if (end.top >= start.bottom) continue;

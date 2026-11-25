@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { memoryFiles } from "./__fixtures__/files/course";
 import type { Layout } from "./layout";
+import { SYNC_RULES } from "./course-files";
 import { startCourseSync, syncCourse } from "./sync";
 import type { Snapshot, Worksheet } from "./types";
 
@@ -68,6 +69,27 @@ describe("syncCourse", () => {
     expect(again.snapshot).not.toHaveBeenCalled();
     expect(read.mock.calls).toEqual([[LAYOUT.course]]);
     expect(files.calls).toEqual([]);
+  });
+
+  it("plans again at the commit it recorded when its rules are newer than those the course file records", async () => {
+    const files = memoryFiles(course());
+    await syncCourse({ files, layout: LAYOUT, source: source("c1") });
+    files.files.set(LAYOUT.course, files.files.get(LAYOUT.course)!.replace(/^sync_rules: .*\n/m, ""));
+    const again = source("c1");
+
+    expect(await syncCourse({ files, layout: LAYOUT, source: again })).toMatchObject({ changed: true, written: [LAYOUT.course] });
+    expect(again.snapshot).toHaveBeenCalled();
+    expect(files.files.get(LAYOUT.course)).toContain(`sync_rules: '${SYNC_RULES}'`);
+  });
+
+  it("reads the course file as Lens shows it: a pending suggestion in its frontmatter changes nothing", async () => {
+    const files = memoryFiles(course());
+    await syncCourse({ files, layout: LAYOUT, source: source("c1") });
+    const done = files.files.get(LAYOUT.course)!;
+    files.files.set(LAYOUT.course, done.replace("upstream_commit: 'c1'\n", '{--{"author":"Someone"}@@upstream_commit: \'c1\'\n--}{++{"author":"Someone"}@@note: "x"\n++}'));
+    const again = source("c1");
+    expect(await syncCourse({ files, layout: LAYOUT, source: again })).toMatchObject({ changed: false });
+    expect(again.snapshot).not.toHaveBeenCalled();
   });
 
   it("writes only the commit when a new source commit changes nothing of the course", async () => {

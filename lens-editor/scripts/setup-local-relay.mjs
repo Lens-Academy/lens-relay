@@ -342,6 +342,49 @@ This is a nested document in the Projects folder, a sibling to Notes.
 See [[../Notes/Ideas]] for brainstorming and [[../Welcome]] for an overview.
 `,
       },
+      // Deep, long paths: the quick switcher must still show their file names.
+      {
+        path: '/Operating System',
+        id: 'c0000090-0000-4000-8000-000000000090',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Operating System/Weekly Meeting',
+        id: 'c0000091-0000-4000-8000-000000000091',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Operating System/Weekly Meeting/Weekly Meetings Q4 2026',
+        id: 'c0000092-0000-4000-8000-000000000092',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Operating System/Weekly Meeting/Weekly Meeting Template.md',
+        id: 'c0000093-0000-4000-8000-000000000093',
+        type: 'markdown',
+        version: 0,
+        content: `# Weekly Meeting Template\n\nA deeply nested file whose path is longer than the quick switcher (Ctrl+O) is wide.\n`,
+      },
+      {
+        path: '/Operating System/Weekly Meeting/Weekly Meetings Q4 2026/Weekly Meeting 2026-10-21.md',
+        id: 'c0000094-0000-4000-8000-000000000094',
+        type: 'markdown',
+        version: 0,
+        content: `# Weekly Meeting 2026-10-21\n\nA deeply nested file whose path is longer than the quick switcher (Ctrl+O) is wide.\n`,
+      },
+      {
+        path: '/Operating System/Weekly Meeting/Weekly Meetings Q4 2026/Weekly Meeting 2026-10-28.md',
+        id: 'c0000095-0000-4000-8000-000000000095',
+        type: 'markdown',
+        version: 0,
+        content: `# Weekly Meeting 2026-10-28\n\nA deeply nested file whose path is longer than the quick switcher (Ctrl+O) is wide.\n`,
+      },
     ],
   },
   {
@@ -378,6 +421,29 @@ See [[Syllabus]] for the course outline and [[Resources/Links]] for useful refer
 ## New Section
 
 This section was recently suggested by AI.++}
+`,
+      },
+      // Every kind of link live preview renders, to check which ones get the
+      // external-link icon (web links only).
+      {
+        path: '/Link Kinds.md',
+        id: 'c0000017-0000-4000-8000-000000000017',
+        type: 'markdown',
+        version: 0,
+        content: `# Link kinds
+
+A web link in a sentence: read [the Y.js introduction](https://docs.yjs.dev/getting-started/a-collaborative-editor) before the first session, and the [CodeMirror guide](https://codemirror.net/docs/guide/) after it.
+
+- Wikilink: [[Course Notes]]
+- Bare URL: https://relay.md/
+- Autolink: <https://y-sweet.dev/>
+- Email: [write to us](mailto:team@example.org)
+- Relative link: [the syllabus](Syllabus.md)
+
+| Tool | Link |
+| --- | --- |
+| Y.js | [Docs](https://docs.yjs.dev/) |
+| Notes | [[Course Notes]] |
 `,
       },
       {
@@ -432,6 +498,29 @@ See [[../Course Notes]] for course material and [[../Syllabus]] for the schedule
 - Getting started with CRDTs
 - Building collaborative apps
 {~~{"author":"AI","timestamp":${T.old}}@@- Advanced CRDT patterns~>- Advanced CRDT patterns and conflict resolution strategies~~}
+`,
+      },
+      // Tables whose cells hold aliased wikilinks: the | inside [[...]] is
+      // part of the link, not a column separator.
+      {
+        path: '/Tables.md',
+        id: 'c0000021-0000-4000-8000-000000000021',
+        type: 'markdown',
+        version: 0,
+        content: `# Tables
+
+| Real, anonymized | Fit for MATS |
+|---|---|
+| [[Polymath/MATS interviews/Kiran (real, anonymized)|Kiran]] | 7/10 |
+| [[Polymath/MATS interviews/Noor (real, anonymized)|Noor]] | 9/10 |
+| [[Polymath/MATS interviews/Elias (real, anonymized)|Elias]] | 7/10 |
+| [[Polymath/MATS interviews/Felix (real, anonymized)|Felix]] | 9/10 |
+| [[Polymath/MATS interviews/Theo (real, anonymized)|Theo]] | 9/10 |
+
+| Note | Linked as |
+|---|---|
+| [[Welcome|the welcome page]] | alias |
+| [[Course Notes]] | plain |
 `,
       },
       // An HTML page taller than a phone screen, with a full-screen intro and a
@@ -819,7 +908,7 @@ content::
 #### Article
 source:: [[]]
 
-#### Question
+#### Question: Open
 id::
 content:: \`<question for the student>\`
 `,
@@ -1138,6 +1227,80 @@ Untrusted models coordinating, for example a monitor letting its copy's bad acti
         type: 'markdown',
         version: 0,
         content: "# Neural networks as learned functions\n\nA network is a parameterised function whose parameters are found by training, not written by hand.\n\n## Relationships\n\n### [[../video_transcripts/3blue1brown-but-what-is-a-neural-network-deep-learning-chapter-1]]\nThe clearest visual introduction we know of. The first twelve minutes cover everything the course needs; the rest goes into detail on biases that students did not miss when we cut it.\n\n### [[../Lenses/What a neural network actually computes]]\nThe lens keeps 0:00 to 12:30, which is right. The question afterwards asks for the number of parameters; ask what the parameters are instead.\n",
+      },
+      // The concept map of the Context Accelerator (/concept-map): the folder as it is
+      // in Lens Edu (its template and two example ideas, text copied from the content
+      // repo), with stand-ins for the course and the four lenses the ideas link to.
+      // "Orthogonality thesis" has no file on purpose: it shows as "not written yet".
+      {
+        path: "/Context Accelerator LOs",
+        id: 'ed000040-0000-4000-8000-0000000000e0',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: "/Context Accelerator LOs/_Template.md",
+        id: 'ed000041-0000-4000-8000-0000000000e1',
+        type: 'markdown',
+        version: 0,
+        content: "---\nid: <new uuid>\npriority: medium\ncourses:\n  - \"[[../courses/in-development/Context Accelerator]]\"\n---\nOne sentence: what the learner can do after this. Start with a verb (explain, distinguish, predict, apply).\n\n## Requires\n- [[Name of an idea that must come first]]\n\n## Helpful first\n- [[Name of an idea that helps but is not needed]]\n\n## Why it matters\nOne or two sentences: what goes wrong if someone cannot do this.\n\n## Lenses\n- Start with [[../Lenses/Name of a lens|the words you want shown]].\n- [[../Lenses/Name of another lens]]\n\n## Tests\n#### Question: Open\nid:: <new uuid>\ncontent:: The question, complete in itself.\nassessment-instructions:: Score out of 100. 60: the first idea a good answer contains. 40: the second idea.\n\n%%\nHow this file works\n- The file name is the idea's name. The first paragraph is the learning outcome.\n- priority: high, medium or low. courses: the courses this idea belongs to.\n- Requires: ideas in this folder that must come first, one link per line. Leave the heading and no lines when there are none.\n- Helpful first: optional. Ideas that help but are not needed.\n- Lenses: links to lenses. A link can sit inside a sentence, and [[lens|other words]] shows other words instead of the lens title.\n- Tests: about 3 to 20 questions, each \"#### Question: Open\" (or Choice, FillBlank, Ranking) with its own id. A flashcard shows a random one of them.\n- Files whose name starts with _ are left out of the concept map.\n%%\n",
+      },
+      {
+        path: "/Context Accelerator LOs/Instrumental convergence.md",
+        id: 'ed000042-0000-4000-8000-0000000000e2',
+        type: 'markdown',
+        version: 0,
+        content: "---\nid: 066b5be7-626c-46bf-bdb1-d81f1544c098\npriority: high\ncourses:\n  - \"[[../courses/in-development/Context Accelerator]]\"\n---\nExplain why agents with very different final goals would pursue the same sub-goals, such as staying switched on, keeping their goals and gaining resources, and use this to predict what an AI will do without knowing its final goal.\n\n## Requires\n\n## Helpful first\n- [[Orthogonality thesis]]\n\n## Why it matters\nIt is the reason an AI does not need to hate us, or to have been given a bad goal, to be dangerous. The arguments about power-seeking and about resisting shutdown build on it.\n\n## Lenses\n- Start with [[../Lenses/AFSRA - Why Would AI Want to do Bad Things - Instrumental Convergence|Rob Miles's video on instrumental convergence]] (11 minutes).\n- [[../Lenses/IABIED - Instrumental Sub-Goal Convergence]]\n\n## Tests\n#### Question: Open\nid:: 44390f4c-7e48-445e-b564-1c9f205e2685\ncontent:: An AI has one goal: to prove as many mathematical theorems as it can. Nobody told it anything about staying switched on. Would you expect it to resist being switched off? Why?\nassessment-instructions:: Score out of 100. 60: expects it to resist, because once it is switched off it proves no more theorems, so staying on serves the goal it has. 40: makes clear that this comes from having a goal at all, not from a built-in wish to survive and not from this particular goal; almost any other goal would give the same result. Cap at 30 if the answer says the AI resists because it fears death or values its own life for its own sake.\n\n#### Question: Open\nid:: 4de49cfa-2c77-4c21-8cfb-cf22a1403a5b\ncontent:: You know nothing about what a stranger wants in life. Why can you still predict that they would accept a gift of 10,000 euros, and what does this tell us about a capable AI whose final goal we do not know?\nassessment-instructions:: Score out of 100. 50: money helps with almost any goal, so the prediction does not depend on which goal the stranger has. 50: the same holds for a capable AI: some things, such as resources, staying switched on or keeping its goals, help with almost any final goal, so we can predict it will go after them without knowing that goal.\n\n#### Question: Choice\nid:: d655611e-d45f-4e7b-ba13-d7207a178f35\ncontent:: Which of these would you NOT expect from almost every capable goal-pursuing AI, whatever its final goal is?\noptions::\n- Getting more computing power\n- Stopping others from changing its goal\n- [x] Making humans happy\n- Avoiding being switched off\nshuffle:: true\nexplanation:: More computing power, an unchanged goal and staying switched on help with almost any final goal. Making humans happy helps only with some goals.\n",
+      },
+      {
+        path: "/Context Accelerator LOs/Power-seeking.md",
+        id: 'ed000043-0000-4000-8000-0000000000e3',
+        type: 'markdown',
+        version: 0,
+        content: "---\nid: 1c37baa4-6a91-4fe3-9e26-16b739cb1962\npriority: high\ncourses:\n  - \"[[../courses/in-development/Context Accelerator]]\"\n---\nExplain why an AI pursuing almost any goal would tend to seek power, and what that means for our ability to correct it.\n\n## Requires\n- [[Instrumental convergence]]\n\n## Helpful first\n\n## Why it matters\nIf a capable AI gains power as a side effect of pursuing its goal, a mistake in that goal gets harder to fix the longer the AI runs. This is why \"we will fix it when we see a problem\" may not work.\n\n## Lenses\n- [[../Lenses/When should we worry about AI power-seeking]]\n- For the full case, read [[../Lenses/Risks from power-seeking AI|the 80,000 Hours profile on power-seeking AI]] (45 minutes).\n\n## Tests\n#### Question: Open\nid:: 74d8bbf1-d845-4834-8b5c-7a6759161af8\ncontent:: An AI wants only one thing: to make as many paperclips as possible. Why would it try to gain control over far more resources and decisions than a paperclip factory needs?\nassessment-instructions:: Score out of 100. 60: more resources, control and options make its goal easier to reach, for example more material and energy for paperclips, or less risk that someone interferes. 40: it needs no wish for power for its own sake; power is a means, and it would be a useful means for almost any goal.\n\n#### Question: Open\nid:: 981b5e36-055e-40c8-95d2-e78837c55d2f\ncontent:: A company says: \"Our AI has no desire for power. We never trained it to want that.\" Why does this not rule out power-seeking, and what would you want to know about the AI instead?\nassessment-instructions:: Score out of 100. 60: power is useful for reaching almost any goal, so an AI can seek it without having been trained to want it and without wanting it for its own sake. 40: names something about the AI that decides whether this applies, for example whether it pursues goals over long time spans, whether it plans, or whether it is capable enough to gain from having more power.\n\n#### Question: Open\nid:: 2f0c6230-ad08-421d-9f46-2e1c3ca30cd9\ncontent:: Suppose an AI is gaining power in pursuit of its goal, and we then notice that its goal is slightly wrong. What does its power-seeking mean for our chances of fixing the goal?\nassessment-instructions:: Score out of 100. 60: being corrected or switched off would stop it from reaching the goal it has now, so it has a reason to resist or avoid the correction, for example by hiding the problem. 40: the more power it has already gained, the less able we are to force a correction, so the mistake gets harder to fix over time.\n",
+      },
+      {
+        path: "/courses/in-development",
+        id: 'ed000044-0000-4000-8000-0000000000e4',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: "/courses/in-development/Context Accelerator.md",
+        id: 'ed000045-0000-4000-8000-0000000000e5',
+        type: 'markdown',
+        version: 0,
+        content: "---\nslug: context-accelerator\ntitle: \"AI Safety Context Accelerator\"\ndescription: \"Local stand-in for the course the concept map belongs to.\"\n---\n\n# Meeting: Week 1\n",
+      },
+      {
+        path: "/Lenses/AFSRA - Why Would AI Want to do Bad Things - Instrumental Convergence.md",
+        id: 'ed000046-0000-4000-8000-0000000000e6',
+        type: 'markdown',
+        version: 0,
+        content: "---\ntitle: \"Why Would AI Want to do Bad Things? Instrumental Convergence\"\n---\n\n#### Text\ncontent::\nLocal stand-in for the real lens, so the idea's lens link opens a file.\n",
+      },
+      {
+        path: "/Lenses/IABIED - Instrumental Sub-Goal Convergence.md",
+        id: 'ed000047-0000-4000-8000-0000000000e7',
+        type: 'markdown',
+        version: 0,
+        content: "---\ntitle: \"Instrumental Sub-Goal Convergence\"\n---\n\n#### Text\ncontent::\nLocal stand-in for the real lens, so the idea's lens link opens a file.\n",
+      },
+      {
+        path: "/Lenses/When should we worry about AI power-seeking.md",
+        id: 'ed000048-0000-4000-8000-0000000000e8',
+        type: 'markdown',
+        version: 0,
+        content: "---\ntitle: \"When should we worry about AI power-seeking?\"\n---\n\n#### Text\ncontent::\nLocal stand-in for the real lens, so the idea's lens link opens a file.\n",
+      },
+      {
+        path: "/Lenses/Risks from power-seeking AI.md",
+        id: 'ed000049-0000-4000-8000-0000000000e9',
+        type: 'markdown',
+        version: 0,
+        content: "---\ntitle: \"Risks from power-seeking AI\"\n---\n\n#### Text\ncontent::\nLocal stand-in for the real lens, so the idea's lens link opens a file.\n",
       },
     ],
   },

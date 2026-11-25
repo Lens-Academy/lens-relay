@@ -4,8 +4,12 @@
  * is logged and leaves the sync off; it never stops the server starting.
  */
 
+import { ATLAS_APPROVE_RETIREMENT_ENV, parseAtlasCourses } from "./atlas/config";
+import { googleAtlasDocs } from "./atlas/snapshot";
+import { prefixed, startAtlasSync } from "./atlas/sync";
 import { intervalMs, parseBindings } from "./bindings";
 import { googleDocAdapter } from "./google-docs/adapter";
+import { GoogleDocsClient, loadServiceAccount } from "./google-docs/client";
 import { APPROVE_RETIREMENT_ENV } from "./iliad/course-files";
 import { layoutFor } from "./iliad/layout";
 import { relayCourseFiles } from "./iliad/relay-course-files";
@@ -82,6 +86,35 @@ export function startIliadSyncFromEnv(log: SyncLog = console): (() => void) | nu
     );
   } catch (err) {
     log.error(`[iliad-sync] not started: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * Start the AI Safety Atlas course sync (atlas/sync.ts) for the courses in
+ * ATLAS_SYNC_COURSES, a JSON list of AtlasCourseConfig (atlas/types.ts); do
+ * nothing when it is unset. It runs at the article sync's interval and reads
+ * the Docs with GOOGLE_SERVICE_ACCOUNT_JSON.
+ * ATLAS_SYNC_APPROVE_RETIREMENT=<the value the log names> lets the sync
+ * retire the lenses it names, more than a run otherwise may. A bad
+ * configuration is logged and leaves only this sync off.
+ */
+export function startAtlasSyncFromEnv(log: SyncLog = console): (() => void) | null {
+  try {
+    const courses = parseAtlasCourses();
+    if (!courses.length) return null;
+    return startAtlasSync(
+      courses,
+      intervalMs(),
+      {
+        files: (course) => relayCourseFiles({ folder: course.course.slice(0, course.course.indexOf("/")) }),
+        docs: () => googleAtlasDocs(new GoogleDocsClient(loadServiceAccount())),
+        approvedRetirement: process.env[ATLAS_APPROVE_RETIREMENT_ENV]?.trim() || undefined,
+      },
+      log,
+    );
+  } catch (err) {
+    log.error(prefixed(`not started: ${(err as Error).message}`, "[atlas-sync] "));
     return null;
   }
 }

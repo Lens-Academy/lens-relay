@@ -200,6 +200,27 @@ describe("fetchRenderedHtml", () => {
   });
 });
 
+describe("meta tag values", () => {
+  // Prevents: a value ending at the first apostrophe ("Aoife O"), which a page
+  // served through a renderer or the HTML serializer shows on every such name.
+  it("ends a value at its own kind of quote", () => {
+    const html = `<meta name="citation_author" content="O'Brien, Aoife">
+      <meta name="citation_author" content="Priya D'Souza">
+      <meta property="og:description" content="This post isn't short.">
+      <meta content="It's a title" property="og:title">
+      <meta name="author" content='Said "hello"'>`;
+    const meta = extractHtmlMeta(html);
+    expect(meta.author).toEqual(["Aoife O'Brien", "Priya D'Souza"]);
+    expect(meta.description).toBe("This post isn't short.");
+    expect(meta.title).toBe("It's a title");
+    expect(extractHtmlMeta(`<meta name="author" content='Said "hello"'>`).author).toEqual(['Said "hello"']);
+  });
+
+  it("reads a non-breaking space in a value as a space", () => {
+    expect(extractHtmlMeta(`<meta property="og:description" content="one&nbsp;two">`).description).toBe("one two");
+  });
+});
+
 describe("normalizeDate hardening", () => {
   // Prevents: junk meta values fabricating plausible dates ("7" → 2001-06-30).
   it("rejects values without an explicit 4-digit year", () => {
@@ -216,6 +237,56 @@ describe("normalizeDate hardening", () => {
 
   // Prevents: JSON-LD dateModified reintroducing the wrong-year bug the
   // meta-tag chain already guards against.
+  // Prevents: a Springer paper online since 2014-07-05 importing as 2014-12-01,
+  // its journal issue with a made-up day.
+  it("prefers an earlier online date over the journal issue date", () => {
+    const html = `<meta name="citation_publication_date" content="2014/12">
+      <meta name="citation_online_date" content="2014/07/05">`;
+    expect(extractHtmlMeta(html).published).toBe("2014-07-05");
+    expect(
+      extractHtmlMeta(`<meta name="citation_publication_date" content="2014">
+        <meta name="citation_online_date" content="2014/07/05">`).published,
+    ).toBe("2014-07-05");
+  });
+
+  // arXiv's citation_online_date is the latest revision, years after the paper.
+  it("keeps the original date when the online date is a later revision", () => {
+    const html = `<meta name="citation_date" content="2017/06/12">
+      <meta name="citation_online_date" content="2023/02/01">`;
+    expect(extractHtmlMeta(html).published).toBe("2017-06-12");
+  });
+
+  it("does not use an online date alone, since it may be a revision", () => {
+    expect(extractHtmlMeta('<meta name="citation_online_date" content="2019/03/04">').published).toBe("");
+  });
+
+  it("keeps the fuller date when both name the same month", () => {
+    const html = `<meta name="citation_publication_date" content="2014/12/15">
+      <meta name="citation_online_date" content="2014/12">`;
+    expect(extractHtmlMeta(html).published).toBe("2014-12-15");
+  });
+
+  // Prevents: "2024 Spring" falling to the import date and "2020/12" gaining a
+  // day the source never stated.
+  it("keeps a partial date at the precision the source states", () => {
+    const published = (content: string) =>
+      extractHtmlMeta(`<meta name="citation_publication_date" content="${content}">`).published;
+    expect(published("2020/12")).toBe("2020-12");
+    expect(published("2020-3")).toBe("2020-03");
+    expect(published("1998")).toBe("1998");
+    expect(published("2024 Spring")).toBe("2024");
+    expect(published("2024 Mar")).toBe("2024-03");
+    expect(published("September, 2020")).toBe("2020-09");
+    expect(published("March 2021")).toBe("2021-03");
+  });
+
+  it("does not read a partial date out of nonsense", () => {
+    const published = (content: string) =>
+      extractHtmlMeta(`<meta name="citation_publication_date" content="${content}">`).published;
+    expect(published("2020/13")).toBe("");
+    expect(published("1066")).toBe("");
+  });
+
   it("ignores JSON-LD dateModified as a published date", () => {
     const ld = `<script type="application/ld+json">{"@type":"BlogPosting","dateModified":"2023-05-31"}</script>`;
     expect(extractHtmlMeta(ld).published).toBe("");

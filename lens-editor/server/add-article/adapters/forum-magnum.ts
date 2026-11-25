@@ -156,7 +156,7 @@ export function forumGraphqlUrl(url: string): string {
   if (comment) {
     const query =
       `{ comment(selector: {_id: "${comment.commentId}"}) { result { postedAt ` +
-      "user { displayName } contents { html } post { title } } } }";
+      "user { displayName fullName } contents { html } post { title } } } }";
     return `${endpoint}?query=${encodeURIComponent(query)}`;
   }
   // Ids and slugs are [A-Za-z0-9_-]; anything else is not a page we know,
@@ -167,7 +167,7 @@ export function forumGraphqlUrl(url: string): string {
   if (post) {
     query =
       `{ post(selector: {_id: "${post[1]}"}) { result { title postedAt ` +
-      "user { displayName } coauthors { displayName } contents { html } } } }";
+      "user { displayName fullName } coauthors { displayName fullName } contents { html } } } }";
   } else if (wiki) {
     query =
       `{ tags(selector: {tagBySlug: {slug: "${wiki[1]}"}}, limit: 1) ` +
@@ -197,22 +197,48 @@ interface ForumApiAnswer {
     comment?: { result?: ForumApiComment | null } | null;
   };
 }
+interface ForumApiUser {
+  displayName?: string;
+  fullName?: string | null;
+}
 interface ForumApiComment {
   postedAt?: string;
-  user?: { displayName?: string } | null;
+  user?: ForumApiUser | null;
   contents?: { html?: string } | null;
   post?: { title?: string } | null;
 }
 interface ForumApiPost {
   title?: string;
   postedAt?: string;
-  user?: { displayName?: string } | null;
-  coauthors?: { displayName?: string }[] | null;
+  user?: ForumApiUser | null;
+  coauthors?: ForumApiUser[] | null;
   contents?: { html?: string } | null;
 }
 interface ForumApiTag {
   name?: string;
   description?: { html?: string } | null;
+}
+
+/**
+ * The name to credit a forum account with. Display names are often handles
+ * ("tom4everitt"), and the account's full name is the byline a reader expects,
+ * but this is a public library and a full name can be private. It is used only
+ * when the handle spells that name out, surname last, with the given name or
+ * its start before it ("zac_kenton" for Zachary Kenton, "sbenthall"). A first
+ * name alone ("beren"), or a handle that only happens to end alike ("wordsmith"
+ * for Jane Smith), keeps the display name.
+ */
+export function forumAuthorName(user: ForumApiUser | null | undefined): string | undefined {
+  const display = user?.displayName;
+  const full = user?.fullName?.trim();
+  if (!display || !full) return display;
+  if (/\s/.test(display) && display !== display.toLowerCase()) return display;
+  const handle = display.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const names = full.toLowerCase().split(/\s+/);
+  const surname = names[names.length - 1];
+  if (surname.length < 3 || names.length < 2 || !handle.endsWith(surname)) return display;
+  const before = handle.slice(0, -surname.length).replace(/\d/g, "");
+  return before && names[0].startsWith(before) ? full : display;
 }
 
 /**
@@ -243,9 +269,9 @@ export function forumApiAnswerToHtml(json: string, canonicalUrl = ""): string {
   if (!title || !body.trim()) throw new Error("forum API answer holds no article");
   const authors = (
     comment
-      ? [comment.user?.displayName]
+      ? [forumAuthorName(comment.user)]
       : post
-        ? [post.user?.displayName, ...(post.coauthors ?? []).map((c) => c.displayName)]
+        ? [forumAuthorName(post.user), ...(post.coauthors ?? []).map(forumAuthorName)]
         : []
   ).filter((name): name is string => !!name);
   const postedAt = comment?.postedAt ?? post?.postedAt;

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { JSDOM } from "jsdom";
-import { normalizeArticleDom } from "./normalize-dom";
+import { CELL_BREAK_ATTR, CELL_PIPE_ATTR, normalizeArticleDom } from "./normalize-dom";
 
 const BASE = "https://www.lesswrong.com/posts/abc/the-post";
 
@@ -538,5 +538,89 @@ describe("normalizeArticleDom — LaTeXML natbib citations (arXiv)", () => {
     expect(body.textContent).toBe(
       "(Bowman et al., 2022) Goodfellow (2019) Section 2, (2023) (12)",
     );
+  });
+});
+
+describe("normalizeArticleDom — nested emphasis", () => {
+  it("unwraps emphasis inside emphasis of the same kind only", () => {
+    const body = normalize(`<b id="t">Table 1 <b>Terms</b></b> <strong>a <em>b</em></strong> <em>c <i>d</i></em>`);
+    expect(body.innerHTML).toBe(`<b id="t">Table 1 Terms</b> <strong>a <em>b</em></strong> <em>c d</em>`);
+  });
+});
+
+describe("normalizeArticleDom — table cells", () => {
+  const cell = (html: string) => normalize(`<table><tr><td>${html}</td></tr></table>`).querySelector("td")!.innerHTML;
+  const MARK = `<span ${CELL_BREAK_ATTR}="">&lt;br&gt;</span>`;
+
+  it("marks block boundaries and line breaks, once each, and never at an edge", () => {
+    expect(cell("<p>a</p><p>b</p>")).toBe(`a${MARK}b`);
+    expect(cell("a<br>b")).toBe(`a${MARK}b`);
+    expect(cell("<p>a</p><p><br>&nbsp;</p><p>b</p>")).toBe(`a${MARK}b`);
+    expect(cell("<br><p>a</p><br>")).toBe("a");
+    expect(cell("<ul><li>a</li><li>b</li></ul>")).toBe(`a${MARK}b`);
+  });
+
+  it("treats every block element as a boundary, and a rule as a break", () => {
+    expect(cell("<center>a</center><figure>b</figure>")).toBe(`a${MARK}b`);
+    expect(cell("a<hr>b")).toBe(`a${MARK}b`);
+    expect(cell("a<br><hr>")).toBe("a");
+  });
+
+  it("leaves one break where blocks nest, inside a link too", () => {
+    expect(cell('<a href="https://e.org/">a<ul><li>b</li></ul></a>')).toBe(`<a href="https://e.org/">a${MARK}b</a>`);
+  });
+
+  it("reads a line break nested in inline markup", () => {
+    expect(cell("<span>a<br>b</span>")).toBe(`<span>a${MARK}b</span>`);
+  });
+
+  it("turns LaTeXML's line wrap into a space, not a new item", () => {
+    expect(cell('High <br class="ltx_break">concentration')).toBe("High  concentration");
+  });
+
+  it("leaves code alone", () => {
+    expect(cell("<code>a<br>b</code>")).toBe("<code>a<br>b</code>");
+  });
+
+  it("moves a break out of a link or emphasis that wrapped a block", () => {
+    expect(cell('<a href="https://e.org/"><div>x</div></a>')).toBe('<a href="https://e.org/">x</a>');
+    expect(cell('<a href="https://e.org/1"><div>one</div></a><a href="https://e.org/2"><div>two</div></a>')).toBe(
+      `<a href="https://e.org/1">one</a>${MARK}<a href="https://e.org/2">two</a>`,
+    );
+    expect(cell("<span>one<br></span><span>two</span>")).toBe(`<span>one</span>${MARK}<span>two</span>`);
+    expect(cell("<small><span><br>one</span></small>")).toBe("<small><span>one</span></small>");
+  });
+
+  // Prevents: "55 mph" becoming "55mph", and the code `[ ]` becoming `[]`. A
+  // space held in its own element is text, wherever it sits.
+  it("keeps spaces in inline elements", () => {
+    const nbsp = '55<span typeof="mw:Entity">&nbsp;</span>mph';
+    expect(cell(nbsp)).toBe(nbsp);
+    expect(cell("<code>[<span> </span>]</code>")).toBe("<code>[<span> </span>]</code>");
+    expect(cell("perpendicular<span> lines</span>")).toBe("perpendicular<span> lines</span>");
+    expect(cell("before<em> <strong>inner</strong></em> after")).toBe("before<em> <strong>inner</strong></em> after");
+    expect(cell('<b>A</b><span id="x"> </span><b>B</b>')).toBe('<b>A</b><span id="x"> </span><b>B</b>');
+  });
+
+  it("marks a pipe in text, not in code or formulas", () => {
+    expect(cell("a|b")).toBe(`a<span ${CELL_PIPE_ATTR}="">|</span>b`);
+    expect(cell("<code>a|b</code>")).toBe("<code>a|b</code>");
+    expect(cell("$a|b$")).toBe("$a|b$");
+  });
+
+  it("clears a pipe out of a link or image", () => {
+    expect(cell('<a href="https://e.org/a|b" title="c|d">l</a>')).toBe('<a href="https://e.org/a%7Cb">l</a>');
+    expect(cell('<img src="https://e.org/i.png" alt="a | b">')).toBe('<img src="https://e.org/i.png" alt="a / b">');
+  });
+
+  it("leaves inline content alone", () => {
+    expect(cell('plain <strong>bold</strong> <a href="https://e.org/">l</a>')).toBe('plain <strong>bold</strong> <a href="https://e.org/">l</a>');
+  });
+
+  it("leaves a cell with a nested table or preformatted text, and display equations", () => {
+    expect(cell("<p>a</p><table><tbody><tr><td>b</td></tr></tbody></table>")).toContain("<p>a</p>");
+    expect(cell("<p>a</p><pre>b</pre>")).toContain("<p>a</p>");
+    const equation = normalize('<table class="ltx_equation"><tr><td><p>a</p><p>b</p></td></tr></table>');
+    expect(equation.querySelector("td")!.innerHTML).toBe("<p>a</p><p>b</p>");
   });
 });

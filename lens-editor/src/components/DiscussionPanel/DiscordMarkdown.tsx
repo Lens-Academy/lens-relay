@@ -44,7 +44,7 @@ function renderNode(node: ASTNode | string, key: number): ReactNode {
       return (
         <code
           key={key}
-          className="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm font-mono"
+          className="bg-gray-100 px-1 py-0.5 rounded text-sm font-mono"
         >
           {node.content as string}
         </code>
@@ -54,7 +54,7 @@ function renderNode(node: ASTNode | string, key: number): ReactNode {
       return (
         <pre
           key={key}
-          className="bg-gray-100 dark:bg-gray-800 p-2 rounded text-sm font-mono overflow-x-auto my-1"
+          className="bg-gray-100 p-2 rounded text-sm font-mono overflow-x-auto my-1"
         >
           <code>{node.content as string}</code>
         </pre>

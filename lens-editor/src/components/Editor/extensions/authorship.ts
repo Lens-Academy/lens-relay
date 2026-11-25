@@ -34,7 +34,7 @@ import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import type * as Y from 'yjs';
 import { getAuthorshipRuns } from '../../../lib/authorship-runs';
 import type { AuthorshipRun } from '../../../lib/authorship-runs';
-import { GENERIC_HUMAN_ACTOR, getClientActorMap, getRegisteredAt } from '../../../lib/provenance';
+import { GENERIC_HUMAN_ACTOR, TRANSLATED_HUMAN_ACTOR, getClientActorMap, getRegisteredAt } from '../../../lib/provenance';
 import {
   ACTIVITY_MAP,
   eventCoversItems,
@@ -47,7 +47,7 @@ import type { DocActivityEvent } from '../../../lib/activity';
 const AUTHORSHIP_MODES = ['hidden', 'gutter', 'expanded', 'inline'] as const;
 export type AuthorshipMode = (typeof AUTHORSHIP_MODES)[number];
 
-const refreshAuthorship = StateEffect.define<null>();
+const refreshAuthorship = StateEffect.define<boolean>(); // true: the reader caused it, so pin their scroll
 /** Recent-overlay-only refresh (window expiry tick): recomputes but never
  *  pins scroll, since it changes at most a few marks. */
 const refreshRecent = StateEffect.define<null>();
@@ -78,6 +78,9 @@ const recentEnabledPref = persistedFlag('lens-recent-enabled', false);
 export const { load: loadRecentEnabled, save: saveRecentEnabled, set: setRecentEnabled, field: recentEnabledField } = recentEnabledPref;
 
 /** Struck-through ghost of text an AI removed (recent-changes overlay). */
+// What a reader does to scroll on purpose; any of them ends a scroll pin.
+const USER_SCROLL_EVENTS = ['wheel', 'touchmove', 'keydown', 'mousedown'] as const;
+
 class GhostWidget extends WidgetType {
   /** Minute bucket of the event's age, so the "N min ago" title refreshes. */
   private readonly ageBucket: number;
@@ -154,6 +157,7 @@ export function actorDisplayName(actor: string | undefined): string {
   // human:unknown: a human whose name we don't know (the paste popover's
   // "Human", or a writer without a display name)
   if (actor === GENERIC_HUMAN_ACTOR) return 'Human';
+  if (actor === TRANSLATED_HUMAN_ACTOR) return 'Human → translated';
   if (actor.startsWith('human:')) return actor.slice('human:'.length) || 'Unknown';
   if (actor.startsWith('ai:')) {
     const [, model, behalf] = actor.split(':');
@@ -213,7 +217,9 @@ class AuthorshipPlugin {
   decorations: DecorationSet = Decoration.none;
   private runs: AuthorshipRun[] = [];
   private actorByClient = new Map<number, string>();
-  private refreshScheduled = false;
+  private refreshFrame: number | null = null;
+  private refreshRequestedAt = 0;
+  private refreshQueued = false;
   private readonly usersObserver: () => void;
   private readonly users: Y.Map<unknown>;
 
@@ -262,7 +268,8 @@ class AuthorshipPlugin {
 
     // Mapping changes (someone registered / claimed text) recolor existing
     // text without any CM transaction — nudge the view with an effect.
-    this.usersObserver = () => this.scheduleRefresh();
+    // Background refreshes (every remote keystroke) never pin the scroll position.
+    this.usersObserver = () => this.scheduleRefresh(false);
     this.users.observeDeep(this.usersObserver);
 
     // Recent overlay: new events arrive through sync; the window is relative
@@ -270,7 +277,7 @@ class AuthorshipPlugin {
     this.activity = doc.getMap(ACTIVITY_MAP);
     this.activityObserver = () => {
       this.recentCache = null;
-      if (view.state.field(recentEnabledField)) this.scheduleRefresh();
+      if (view.state.field(recentEnabledField)) this.scheduleRefresh(false);
     };
     this.activity.observeDeep(this.activityObserver);
 
@@ -329,17 +336,42 @@ class AuthorshipPlugin {
     if (this.hoverExpanded === next) return;
     this.hoverExpanded = next;
     // Recompute via the normal update cycle so CM picks up the decorations.
-    this.scheduleRefresh();
+    this.scheduleRefresh(true);
   }
 
-  private scheduleRefresh() {
-    if (this.refreshScheduled) return;
-    this.refreshScheduled = true;
+  /** `pin`: the refresh follows the reader's own action (hover), so hold their scroll
+   *  position through it. Background refreshes must not: they fire on every remote
+   *  keystroke and would drag the view back across legitimate scrolls. */
+  private scheduleRefresh(pin: boolean) {
+    this.pinNext ||= pin;
+    // Background refreshes come with every remote edit. A transaction between
+    // a remote edit and the measure that follows it makes CodeMirror lose its
+    // scroll anchor, so text added above the viewport pushed the page down.
+    // Refresh after the frame's measure instead: the microtask runs once Yjs
+    // has handed the edit to the editor (which then asks for a frame), and a
+    // frame requested earlier is replaced, so the refresh comes after the
+    // editor's measure. A frame that has waited 100 ms is kept, so a steady
+    // stream of edits cannot hold it off forever.
+    if (this.refreshQueued) return;
+    this.refreshQueued = true;
     queueMicrotask(() => {
-      this.refreshScheduled = false;
-      this.view.dispatch({ effects: refreshAuthorship.of(null) });
+      this.refreshQueued = false;
+      if (this.refreshFrame !== null) {
+        if (performance.now() - this.refreshRequestedAt >= 100) return;
+        cancelAnimationFrame(this.refreshFrame);
+      } else {
+        this.refreshRequestedAt = performance.now();
+      }
+      this.refreshFrame = requestAnimationFrame(() => {
+        this.refreshFrame = null;
+        const pinned = this.pinNext;
+        this.pinNext = false;
+        if (!this.destroyed) this.view.dispatch({ effects: refreshAuthorship.of(pinned) });
+      });
     });
   }
+
+  private pinNext = false;
 
   update(update: ViewUpdate) {
     const modeChanged =
@@ -349,6 +381,9 @@ class AuthorshipPlugin {
       update.startState.field(recentEnabledField) !== update.state.field(recentEnabledField);
     const refreshed = update.transactions.some((tr) =>
       tr.effects.some((e) => e.is(refreshAuthorship))
+    );
+    const pinRefresh = update.transactions.some((tr) =>
+      tr.effects.some((e) => e.is(refreshAuthorship) && e.value === true)
     );
     const recentTick = update.transactions.some((tr) =>
       tr.effects.some((e) => e.is(refreshRecent))
@@ -366,25 +401,44 @@ class AuthorshipPlugin {
     // scroll anchoring re-measure unstable widget heights (e.g. live-preview
     // images) and "compensate" by jumping the scroll position — in a measure
     // pass that runs after this update. Pin the position for a few frames.
-    if ((modeChanged || refreshed) && !update.docChanged) {
+    if ((modeChanged || pinRefresh) && !update.docChanged) {
       this.pinScroll();
     }
   }
 
-  /** Hold the current scroll position through the next few measure cycles. */
+  /** Hold the current scroll position through the next few measure cycles, unless
+   *  the document changes or the reader scrolls first. A users-map refresh fires on
+   *  every remote keystroke; pinning across a collaborator's edit forced back a
+   *  position the edit had moved, and CodeMirror's measure pass corrected it again,
+   *  so with several people typing the view jumped by hundreds of pixels
+   *  (2026-10-21 weekly meeting). */
   private pinScroll() {
-    const scrollDOM = this.view.scrollDOM;
+    this.unpin?.();
+    const view = this.view;
+    const scrollDOM = view.scrollDOM;
     const target = scrollDOM.scrollTop;
+    const doc = view.state.doc;
     let frames = 0;
+    let done = false;
+    const stop = () => {
+      done = true;
+      for (const e of USER_SCROLL_EVENTS) scrollDOM.removeEventListener(e, stop);
+      if (this.unpin === stop) this.unpin = null;
+    };
+    for (const e of USER_SCROLL_EVENTS) scrollDOM.addEventListener(e, stop, { passive: true });
+    this.unpin = stop;
     const enforce = () => {
-      if (Math.abs(scrollDOM.scrollTop - target) > 1) {
-        scrollDOM.scrollTop = target;
-      }
+      if (done) return;
+      if (view.state.doc !== doc) return stop();
+      if (Math.abs(scrollDOM.scrollTop - target) > 1) scrollDOM.scrollTop = target;
       frames += 1;
       if (frames < 4) requestAnimationFrame(enforce);
+      else stop();
     };
     requestAnimationFrame(enforce);
   }
+
+  private unpin: (() => void) | null = null;
 
   /** Recent-overlay hit test: the event that inserted the text at `pos`. */
   recentAt(pos: number): DocActivityEvent | null {
@@ -849,11 +903,13 @@ class AuthorshipPlugin {
   }
 
   destroy() {
+    this.unpin?.();
     this.destroyed = true;
     this.users.unobserveDeep(this.usersObserver);
     this.activity.unobserveDeep(this.activityObserver);
     this.clearRecentTimer();
     if (this.tooltipFrame !== null) cancelAnimationFrame(this.tooltipFrame);
+    if (this.refreshFrame !== null) cancelAnimationFrame(this.refreshFrame);
     this.view.scrollDOM.removeEventListener('mousemove', this.onMouseMove);
     this.view.scrollDOM.removeEventListener('mouseleave', this.onMouseLeave);
     this.view.scrollDOM.removeEventListener('scroll', this.onScroll);

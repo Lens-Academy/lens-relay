@@ -13,13 +13,22 @@
  *     dollar; the maths is Typst, translated to TeX (typst-math.ts);
  *   - a two-column table with a `type` row naming a component is that
  *     component, its other rows attributes: figure, video, iframe, quote,
- *     definition, noteBox, callout, section-description.
+ *     definition, noteBox, callout, section-description; and Lens's own
+ *     `chart`, an interactive figure drawn from data (../charts/definition.ts).
  * Components map onto what Lens articles already render: images with an
  * italic "Figure N.M: caption" line, `:::callout` boxes, blockquotes and
  * `**Definition: term**` paragraphs, matching the Atlas's earlier import.
+ * An interactive figure (an iframe, or a chart table) whose chart has a file
+ * gets the title "chart:<id>" on its still image, and lens-platform draws
+ * the chart in the image's place; every other reader sees the image.
  * Anything with no Lens form is reported in `warnings`, never dropped silently.
+ *
+ * convertDocumentTab converts a whole tab into one article; convertSlice
+ * converts part of a tab's body (one Atlas section, ../atlas/convert.ts),
+ * with component numbers carried from one slice of a chapter to the next.
  */
 
+import { iframeChart, pageUrl, tableChart, type ChartDefinition } from "../charts/definition";
 import type {
   DocumentTab,
   Paragraph,
@@ -33,6 +42,25 @@ import { typstMathToTex } from "./typst-math";
 export interface ConvertOptions {
   /** URL to embed for an inline object (image), or null if it has none. */
   imageUrl(inlineObjectId: string): string | null;
+  /**
+   * Number definitions as figures are ("**Definition 3.1: term**"), as the
+   * Atlas's site shows them. Off by default: the single-Doc sync's articles
+   * were first written without numbers.
+   */
+  numberDefinitions?: boolean;
+  /** Whether the chart has a file (../charts/refresh.ts). Without it no figure names a chart. */
+  chart?(id: string): boolean;
+}
+
+export interface SliceOptions extends ConvertOptions {
+  /** The chapter number labels carry ("Figure 3.2"), or null for "Figure 2". */
+  chapterNumber: number | null;
+  /**
+   * Numbers used so far, per label ("Figure", "Video", "Interactive figure",
+   * "Definition"). Advanced in place, so the slices of one chapter converted
+   * in document order number on from each other.
+   */
+  counters: Map<string, number>;
 }
 
 export interface ConvertedDoc {
@@ -63,7 +91,7 @@ const LINE_BREAK = "\u000b";
 
 const ORDERED_GLYPHS = new Set(["DECIMAL", "ZERO_DECIMAL", "ALPHA", "UPPER_ALPHA", "ROMAN", "UPPER_ROMAN"]);
 
-const COMPONENT_TYPES = new Set(["figure", "video", "iframe", "quote", "definition", "notebox", "callout", "section-description"]);
+const COMPONENT_TYPES = new Set(["figure", "video", "iframe", "chart", "quote", "definition", "notebox", "callout", "section-description"]);
 
 /** Attribute rows only components have, for spotting one that lost its `type` row. */
 const COMPONENT_ATTRIBUTES = new Set(["content", "caption", "src", "still_image", "speaker", "term", "flavor", "source-url"]);
@@ -283,8 +311,12 @@ function splitMath(text: string): {
   return { parts, unclosed };
 }
 
-/** All text in these elements, styles and structure dropped, trimmed. */
-function plainText(elements: StructuralElement[] | undefined): string {
+/**
+ * All text in these elements' paragraphs (not in their tables), styles and
+ * structure dropped, whitespace (manual line breaks included) collapsed to
+ * single spaces, trimmed.
+ */
+export function plainText(elements: StructuralElement[] | undefined): string {
   let text = "";
   for (const el of elements ?? []) {
     for (const pe of el.paragraph?.elements ?? []) text += pe.textRun?.content ?? "";
@@ -292,12 +324,74 @@ function plainText(elements: StructuralElement[] | undefined): string {
   return text.replace(CONTROL_RE, "").replace(/\s+/g, " ").trim();
 }
 
-function cellKey(elements: StructuralElement[] | undefined): string {
-  return plainText(elements).toLowerCase();
+/**
+ * A TITLE paragraph's text as "Chapter <number> - <title>", and the same in
+ * other languages ("Chapitre 3 - …"); null when it does not read so. The
+ * title is what follows the separator, possibly empty.
+ */
+export function parseChapterTitle(text: string): { number: number; title: string } | null {
+  const m = /^\p{L}+\s+(\d+)\s*[-–—:]\s*(.*)$/u.exec(text.trim());
+  return m ? { number: Number(m[1]), title: m[2].trim() } : null;
+}
+
+/**
+ * A table as an Atlas component: its rows by trimmed, lower-cased key (two
+ * columns only), and its `type` when that names a known component. A data
+ * table may well have a "Type" row, so an unknown type is no component.
+ */
+export function atlasComponent(table: Table): { type: string | null; attrs: Map<string, StructuralElement[]> } {
+  const attrs = new Map<string, StructuralElement[]>();
+  if (table.columns === 2) {
+    for (const row of table.tableRows ?? []) {
+      const [key, value] = row.tableCells ?? [];
+      attrs.set(plainText(key?.content).toLowerCase(), value?.content ?? []);
+    }
+  }
+  const type = plainText(attrs.get("type")).toLowerCase();
+  return { type: COMPONENT_TYPES.has(type) ? type : null, attrs };
+}
+
+/** A chart table's rows other than its source, still image and caption (../charts/definition.ts tableChart). */
+const CHART_ROWS = ["id", "kind", "x", "y", "series", "label", "highlight", "y_scale", "title"];
+
+/**
+ * An interactive figure table (iframe or chart) read: the chart it draws,
+ * if any, what is wrong with a chart table, and where its "Open the
+ * interactive version" link goes (an iframe's src as written; a chart's
+ * original). A figure without a still image draws no chart: the chart's
+ * name sits on the image (`"chart:<id>"`).
+ */
+function interactiveFigure(type: string, attrs: Map<string, StructuralElement[]>): { chart: ChartDefinition | null; problems: string[]; link: string } {
+  const srcCell = attrs.get("src") ?? attrs.get("source");
+  const src = cellLink(srcCell) ?? plainText(srcCell);
+  const pictured = imageIds(attrs.get("still_image")).length > 0;
+  if (type === "iframe") return { chart: pictured ? iframeChart(src) : null, problems: [], link: src };
+  const { chart, problems } = tableChart(new Map([["source", src], ...CHART_ROWS.map((key): [string, string] => [key, plainText(attrs.get(key))])]));
+  return { chart: pictured ? chart : null, problems, link: chart ? pageUrl(chart) : src };
+}
+
+/**
+ * The charts the interactive figures in these elements draw, in order,
+ * found where the converter renders figures: in the elements, and in the
+ * boxes and definitions it renders block by block.
+ */
+export function figureCharts(elements: StructuralElement[]): ChartDefinition[] {
+  return elements.flatMap((el) => {
+    const { type, attrs } = el.table ? atlasComponent(el.table) : { type: null, attrs: new Map() };
+    if (type === "iframe" || type === "chart") return interactiveFigure(type, attrs).chart ?? [];
+    return type === "notebox" || type === "callout" || type === "definition" ? figureCharts(attrs.get("content") ?? []) : [];
+  });
 }
 
 function paragraphs(elements: StructuralElement[] | undefined): Paragraph[] {
   return (elements ?? []).flatMap((el) => (el.paragraph ? [el.paragraph] : []));
+}
+
+/** The inline objects (images) in these elements' paragraphs, in order. */
+function imageIds(elements: StructuralElement[] | undefined): string[] {
+  return paragraphs(elements).flatMap((p) =>
+    (p.elements ?? []).flatMap((el) => (el.inlineObjectElement?.inlineObjectId ? [el.inlineObjectElement.inlineObjectId] : [])),
+  );
 }
 
 /** The URL a cell's text links to, if any. */
@@ -328,8 +422,6 @@ class Converter {
   private title: string | null = null;
   private description: string | null = null;
   private readonly warnings: string[] = [];
-  private readonly chapter: string | null;
-  private readonly counters = new Map<string, number>();
   /** footnote id -> number shown, in the order first referenced. */
   private readonly footnotes = new Map<string, string>();
   /** Ordered-list numbers per `listId:level`, kept across interruptions as Docs numbers them. */
@@ -340,18 +432,15 @@ class Converter {
   constructor(
     private readonly tab: DocumentTab,
     private readonly opts: ConvertOptions,
-  ) {
-    const title = paragraphs(tab.body?.content).find((p) => p.paragraphStyle?.namedStyleType === "TITLE");
-    // "Chapter 3 - …", and the same in other languages ("Chapitre 3 - …").
-    const m = title && /^\p{L}+\s+(\d+)\s*[-–—:]/u.exec(plainText([{ paragraph: title }]));
-    this.chapter = m ? m[1] : null;
-  }
+    private readonly chapter: number | null,
+    private readonly counters: Map<string, number>,
+  ) {}
 
   private warn(message: string): void {
     this.warnings.push(message);
   }
 
-  /** "Figure 1.3": numbered within the chapter when the TITLE names one. */
+  /** "Figure 1.3": numbered within the chapter when there is one. */
   private label(kind: string): string {
     const n = (this.counters.get(kind) ?? 0) + 1;
     this.counters.set(kind, n);
@@ -364,8 +453,9 @@ class Converter {
     return tex;
   }
 
-  convert(): ConvertedDoc {
-    const blocks = this.blocks(this.tab.body?.content ?? [], true);
+  /** `topLevel`: the first TITLE and SUBTITLE are the article's title and description, not text. */
+  convert(content: StructuralElement[], topLevel: boolean): ConvertedDoc {
+    const blocks = this.blocks(content, topLevel);
     const notes = [...this.footnotes.entries()]
       .sort(([, a], [, b]) => Number(a) - Number(b))
       .map(([id, number]) => {
@@ -401,7 +491,7 @@ class Converter {
       depth = -1;
     };
 
-    for (const el of elements) {
+    for (const [i, el] of elements.entries()) {
       const p = el.paragraph;
       if (p?.bullet) {
         // Markdown cannot skip a nesting level; an item two levels in joins the one above.
@@ -412,12 +502,49 @@ class Converter {
       flushList();
       if (el.table) {
         out.push(...this.table(el.table));
+      } else if (p && this.repeatsFigureBeside(elements, i)) {
+        this.warn("an image outside any figure, the same picture as the figure beside it, was left out");
       } else if (p) {
         out.push(...this.paragraph(p, topLevel));
       }
     }
     flushList();
     return out.filter((b) => b.trim() !== "");
+  }
+
+  /**
+   * Whether `elements[i]` is a paragraph of images only, each the picture
+   * (by hosted URL) of the figure or interactive figure next to it, empty
+   * paragraphs between. Such a copy left beside a figure in the Doc would
+   * show the picture twice.
+   */
+  private repeatsFigureBeside(elements: StructuralElement[], i: number): boolean {
+    const parts = elements[i].paragraph?.elements ?? [];
+    const ids = imageIds([elements[i]]);
+    if (!ids.length || !parts.every((e) => e.inlineObjectElement || !e.textRun?.content?.trim())) return false;
+    const blank = (el: StructuralElement) => !!el.paragraph && !plainText([el]) && !imageIds([el]).length;
+    const beside = (step: number) => {
+      let j = i + step;
+      while (elements[j] && blank(elements[j])) j += step;
+      return elements[j]?.table;
+    };
+    const shown = new Set([beside(-1), beside(1)].map((table) => table && this.componentPicture(table)));
+    return ids.every((id) => {
+      const url = this.opts.imageUrl(id);
+      return url !== null && shown.has(url);
+    });
+  }
+
+  /** The hosted URL of the picture a figure or interactive figure table shows, if any. */
+  private componentPicture(table: Table): string | null {
+    const { type, attrs } = atlasComponent(table);
+    const cells = type === "figure" ? [attrs.get("content"), attrs.get("source")] : type === "iframe" || type === "chart" ? [attrs.get("still_image")] : [];
+    for (const cell of cells) {
+      const [id] = imageIds(cell);
+      const url = id ? this.opts.imageUrl(id) : null;
+      if (url) return url;
+    }
+    return null;
   }
 
   private paragraph(p: Paragraph, topLevel: boolean): string[] {
@@ -611,7 +738,8 @@ class Converter {
     return out.split(LINE_BREAK).map(escapeLineStart).join("\n");
   }
 
-  private image(objectId: string, alt: string): string | null {
+  /** `title`: the image's Markdown title, as `![alt](url "title")`; only chart ids, which need no escaping. */
+  private image(objectId: string, alt: string, title = ""): string | null {
     const url = this.opts.imageUrl(objectId);
     if (!url) {
       this.warn(`an image (${objectId}) could not be hosted and was left out`);
@@ -619,16 +747,14 @@ class Converter {
     }
     const props = this.tab.inlineObjects?.[objectId]?.inlineObjectProperties?.embeddedObject;
     const text = (alt || props?.title || props?.description || "").replace(/\s+/g, " ").trim();
-    return `![${escapeInline(text)}](${url})`;
+    return `![${escapeInline(text)}](${url}${title ? ` "${title}"` : ""})`;
   }
 
   /** The first image in a component cell; any more are reported. */
-  private cellImage(cell: StructuralElement[] | undefined, alt: string): string | null {
-    const ids = paragraphs(cell).flatMap((p) =>
-      (p.elements ?? []).flatMap((el) => (el.inlineObjectElement?.inlineObjectId ? [el.inlineObjectElement.inlineObjectId] : [])),
-    );
+  private cellImage(cell: StructuralElement[] | undefined, alt: string, title = ""): string | null {
+    const ids = imageIds(cell);
     if (ids.length > 1) this.warn(`${alt}: only the first of ${ids.length} images is kept`);
-    return ids.length ? this.image(ids[0], alt) : null;
+    return ids.length ? this.image(ids[0], alt, title) : null;
   }
 
   /** A component cell as one line of inline markdown (paragraphs joined). */
@@ -641,30 +767,28 @@ class Converter {
   }
 
   private table(table: Table): string[] {
-    const cells = (table.tableRows ?? []).map((row) => (row.tableCells ?? []).map((c) => c.content ?? []));
-    const attrs = new Map<string, StructuralElement[]>();
-    if (table.columns === 2) for (const [key, value] of cells) attrs.set(cellKey(key), value ?? []);
-    const type = plainText(attrs.get("type")).toLowerCase();
-
-    // Only a known component type makes a component: a data table may well have a "Type" row.
-    if (!COMPONENT_TYPES.has(type)) {
-      if (attrs.has("type")) this.warn(`a two-column table with a "type" row of "${type}" is shown as a plain table`);
-      else if ([...attrs.keys()].some((k) => COMPONENT_ATTRIBUTES.has(k))) {
+    const { type, attrs } = atlasComponent(table);
+    if (!type) {
+      if (attrs.has("type")) {
+        this.warn(`a two-column table with a "type" row of "${plainText(attrs.get("type")).toLowerCase()}" is shown as a plain table`);
+      } else if ([...attrs.keys()].some((k) => COMPONENT_ATTRIBUTES.has(k))) {
         this.warn(`a table looks like a component but has no "type" row, so it is shown as a plain table`);
       }
+      const cells = (table.tableRows ?? []).map((row) => (row.tableCells ?? []).map((c) => c.content ?? []));
       return cells.length ? [this.gfmTable(cells)] : [];
     }
     const component = {
       figure: this.figure,
       video: this.video,
-      iframe: this.iframe,
+      iframe: this.interactive,
+      chart: this.interactive,
       quote: this.quote,
       definition: this.definition,
       notebox: this.noteBox,
       callout: this.callout,
       "section-description": this.sectionDescription,
     }[type]!;
-    return component.call(this, attrs);
+    return component.call(this, attrs, type);
   }
 
   /** The section's lead paragraph, set off by a rule as in the Atlas's earlier import. */
@@ -697,14 +821,15 @@ class Converter {
     return [this.caption(label, attrs.get("caption"), url ? ` ([Watch the video](${destination(url)}))` : "")];
   }
 
-  private iframe(attrs: Map<string, StructuralElement[]>): string[] {
+  /** An iframe or chart table: its still image (naming its chart when the chart has a file), caption, and link to the original. */
+  private interactive(attrs: Map<string, StructuralElement[]>, type: string): string[] {
     const label = this.label("Interactive figure");
-    const srcCell = attrs.get("src") ?? attrs.get("source");
-    const src = cellLink(srcCell) ?? plainText(srcCell);
-    const still = this.cellImage(attrs.get("still_image"), label);
+    const { chart, problems, link } = interactiveFigure(type, attrs);
+    for (const problem of problems) this.warn(`${label}: ${problem}`);
+    const still = this.cellImage(attrs.get("still_image"), label, chart && this.opts.chart?.(chart.id) ? `chart:${chart.id}` : "");
     if (!still) this.warn(`${label} has no still image, so only its caption and link are shown`);
-    const link = src ? ` ([Open the interactive version](${destination(src)}))` : "";
-    return [...(still ? [still] : []), this.caption(label, attrs.get("caption"), link)];
+    const open = link ? ` ([Open the interactive version](${destination(link)}))` : "";
+    return [...(still ? [still] : []), this.caption(label, attrs.get("caption"), open)];
   }
 
   private quote(attrs: Map<string, StructuralElement[]>): string[] {
@@ -734,10 +859,12 @@ class Converter {
     const term = escapeInline(plainText(attrs.get("term")));
     if (!term) this.warn("a definition has no term");
     const [first = "", ...rest] = this.blocks(attrs.get("content") ?? []);
+    // Numbered after its content, as the Atlas's site counts a definition inside one.
+    const label = this.opts.numberDefinitions ? this.label("Definition") : "Definition";
     const source = this.cellInline(attrs.get("source"));
     // Only running text can follow the term on its line; a list or box starts below it.
     const blocksFirst = /^([-*>|#]|\d+\.|:{3}|!\[|\$\$)/.test(first);
-    const lead = `**Definition${term ? `: ${term}` : ""}**` + (first && !blocksFirst ? ` — ${first}` : "");
+    const lead = `**${label}${term ? `: ${term}` : ""}**` + (first && !blocksFirst ? ` — ${first}` : "");
     const body = first && blocksFirst ? [first, ...rest] : rest;
     if (!body.length) return [source ? `${lead} ${source}` : lead];
     return [lead, ...body, ...(source ? [source] : [])];
@@ -749,18 +876,19 @@ class Converter {
     return this.box(this.blocks(attrs.get("content") ?? []), title || "Note", "neutral", collapsed);
   }
 
+  /** A callout has no title in the Doc, and the Atlas draws none: its flavour sets only the tone. */
   private callout(attrs: Map<string, StructuralElement[]>): string[] {
     const flavor = plainText(attrs.get("flavor")).toLowerCase();
-    const title = flavor ? flavor[0].toUpperCase() + flavor.slice(1) : "Note";
-    return this.box(this.blocks(attrs.get("content") ?? []), title, CALLOUT_TONES[flavor] ?? "neutral", false);
+    return this.box(this.blocks(attrs.get("content") ?? []), null, CALLOUT_TONES[flavor] ?? "neutral", false);
   }
 
   /** A `:::callout` container; its fence outgrows any fence nested inside. */
-  private box(inner: string[], title: string, tone: string, collapsed: boolean): string[] {
+  private box(inner: string[], title: string | null, tone: string, collapsed: boolean): string[] {
     const nested = Math.max(2, ...inner.flatMap((b) => [...b.matchAll(/^(:{3,})/gm)].map((m) => m[1].length)));
     const fence = ":".repeat(nested + 1);
+    const titled = title ? `title="${attrValue(title)}" ` : "";
     const collapse = collapsed ? ` collapse="closed"` : "";
-    return [`${fence}callout{title="${attrValue(title)}" tone="${tone}"${collapse}}`, ...inner, fence];
+    return [`${fence}callout{${titled}tone="${tone}"${collapse}}`, ...inner, fence];
   }
 
   private gfmTable(cells: StructuralElement[][][]): string {
@@ -774,6 +902,24 @@ class Converter {
   }
 }
 
+/** A whole tab as one article; figures are numbered within the chapter its TITLE names. */
 export function convertDocumentTab(tab: DocumentTab, opts: ConvertOptions): ConvertedDoc {
-  return new Converter(tab, opts).convert();
+  const content = tab.body?.content ?? [];
+  const title = paragraphs(content).find((p) => p.paragraphStyle?.namedStyleType === "TITLE");
+  const chapter = title ? (parseChapterTitle(plainText([{ paragraph: title }]))?.number ?? null) : null;
+  return new Converter(tab, opts, chapter, new Map()).convert(content, true);
+}
+
+/**
+ * Part of a tab's body, converted on its own: footnote definitions follow
+ * for the footnotes it references only, and TITLE and SUBTITLE paragraphs in
+ * it are text. Component numbers continue from `opts.counters`.
+ */
+export function convertSlice(
+  tab: DocumentTab,
+  content: StructuralElement[],
+  opts: SliceOptions,
+): { body: string; warnings: string[] } {
+  const { body, warnings } = new Converter(tab, opts, opts.chapterNumber, opts.counters).convert(content, false);
+  return { body, warnings };
 }

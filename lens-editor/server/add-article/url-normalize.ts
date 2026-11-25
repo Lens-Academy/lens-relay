@@ -8,6 +8,7 @@
  */
 
 import { forumCommentRef, greaterWrongCommentUrl } from "./adapters/forum-magnum";
+import { extractVideoInput } from "../add-video/video-url";
 
 // Query parameters that identify a marketing campaign, not a document.
 const TRACKING_PARAM_RE =
@@ -53,6 +54,46 @@ export function normalizeUrlForDedup(raw: string): string {
 
   if (u.pathname.length > 1) u.pathname = u.pathname.replace(/\/+$/, "");
   return u.href;
+}
+
+/** Dedup key: the video id for YouTube videos (youtu.be / watch / shorts
+ *  spellings of one video must collapse to one job -- they'd all write the
+ *  same relay path), the normalized URL otherwise. */
+export function normalizeImportKey(url: string): string {
+  const video = extractVideoInput(url);
+  return video ? `yt:${video.video_id}` : normalizeUrlForDedup(url);
+}
+
+/** An app's route: `#/…` or `#!…` picks the page, where an ordinary fragment
+ *  only picks a place on it. */
+function routeFragment(u: URL): string {
+  return /^#[/!]/.test(u.hash) ? u.hash : "";
+}
+
+/**
+ * Whether a link and a stored URL are the same page, closely enough to rewrite
+ * one into the other. The dedup key folds the port, the fragment and `ref`,
+ * which is the right bias against importing something twice but the wrong one
+ * for replacing a link: an app's route and a `ref` used as an id both pick a
+ * different page. `ref` only counts when both have one, because it is usually
+ * tracking (`?ref=hn` is the stored page).
+ */
+export function sameSource(url: string, storedUrl: string): boolean {
+  const key = normalizeImportKey(url);
+  if (key !== normalizeImportKey(storedUrl)) return false;
+  if (key.startsWith("yt:")) return true;
+  let link: URL;
+  let stored: URL;
+  try {
+    link = new URL(url.trim());
+    stored = new URL(storedUrl.trim());
+  } catch {
+    return true; // Not URLs, and their keys are their text.
+  }
+  if (link.port !== stored.port || routeFragment(link) !== routeFragment(stored)) return false;
+  const ref = link.searchParams.get("ref");
+  const storedRef = stored.searchParams.get("ref");
+  return ref === null || storedRef === null || ref === storedRef;
 }
 
 /**
