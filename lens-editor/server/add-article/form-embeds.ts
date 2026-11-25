@@ -57,8 +57,12 @@ export function formEmbedFromUrl(raw: string): FormEmbed | null {
 
 /** The form's title from its page's og:title or <title>, without the provider suffix. */
 export function formTitleFromHtml(html: string, provider: string): string {
+  // Content titles may not hold underscores (the platform validator refuses
+  // them), and Airtable form names often do ("Onboarding Form_Self-Directed").
   const title = extractHtmlMeta(html)
     .title.replace(new RegExp(`\\s*[-–|]\\s*${provider}\\s*$`, "i"), "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
   return title.toLowerCase() === provider.toLowerCase() ? "" : title;
 }
