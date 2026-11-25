@@ -112,6 +112,30 @@ export const commentBadgeMapField = StateField.define<Map<number, CriticMarkupCo
   },
 });
 
+/**
+ * The open comment thread, by where its first comment starts (its
+ * data-comment-from), or null. Its text and badge are drawn open
+ * (data-comment-focused) by the decorations themselves, so they stay drawn
+ * through anything that redraws them: a collaborator's keystroke or caret.
+ * Set on the comments layer's open and close; kept on its thread through edits
+ * by mapping, as the layer keeps it by the thread's root comment. A section
+ * editor, whose offsets are not the page's, leaves it alone.
+ */
+export const setFocusedComment = StateEffect.define<number | null>();
+
+export const focusedCommentField = StateField.define<number | null>({
+  create() { return null; },
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setFocusedComment)) return e.value;
+    }
+    // Text typed just before the comment goes before it (assoc 1)
+    return value != null && tr.docChanged ? tr.changes.mapPos(value, 1) : value;
+  },
+});
+
+const focusChanged = (tr: Transaction) => tr.effects.some((e) => e.is(setFocusedComment));
+
 // Superscript digit characters for badge numbers
 const SUPERSCRIPT_DIGITS = ['\u2070', '\u00B9', '\u00B2', '\u00B3', '\u2074', '\u2075', '\u2076', '\u2077', '\u2078', '\u2079'];
 
@@ -120,31 +144,40 @@ function toSuperscript(n: number): string {
 }
 
 /**
- * Widget that renders a numbered badge for comment threads. A comment on a
- * point (no text highlighted) shows it in the margin just right of the text
- * column, at its line, as Notion marks a block's comments (index.css); a
- * comment on highlighted text has none, its highlight marks it.
+ * Widget that renders the numbered badges of the comment threads on a point
+ * (no text highlighted) of one line: in the margin just right of the text
+ * column, at its line, as Notion marks a block's comments (index.css). All of
+ * a line's badges are one widget, side by side: drawn one each, they all took
+ * the same place in the margin and only the last could be seen. A comment on
+ * highlighted text has none, its highlight marks it.
  */
-class CommentBadgeWidget extends WidgetType {
+class CommentBadgesWidget extends WidgetType {
   constructor(
-    private number: number,
-    private threadFrom: number,
-    private inMargin = false,
+    private badges: readonly { number: number; threadFrom: number }[],
+    private focused: number | null,
   ) {
     super();
   }
 
   toDOM(): HTMLElement {
-    const span = document.createElement('span');
-    span.className = this.inMargin ? 'cm-comment-badge is-margin' : 'cm-comment-badge';
-    span.textContent = String(this.number);
-    span.dataset.commentFrom = String(this.threadFrom);
-    if (this.inMargin) span.title = 'Comment';
-    return span;
+    const group = document.createElement('span');
+    group.className = 'cm-comment-badges';
+    for (const { number, threadFrom } of this.badges) {
+      const span = document.createElement('span');
+      span.className = 'cm-comment-badge';
+      span.textContent = String(number);
+      span.dataset.commentFrom = String(threadFrom);
+      span.title = 'Comment';
+      if (threadFrom === this.focused) span.dataset.commentFocused = '';
+      group.appendChild(span);
+    }
+    return group;
   }
 
-  eq(other: CommentBadgeWidget): boolean {
-    return this.number === other.number && this.threadFrom === other.threadFrom && this.inMargin === other.inMargin;
+  eq(other: CommentBadgesWidget): boolean {
+    return this.focused === other.focused
+      && this.badges.length === other.badges.length
+      && this.badges.every((b, i) => b.number === other.badges[i].number && b.threadFrom === other.badges[i].threadFrom);
   }
 
   ignoreEvent(): boolean {
@@ -404,6 +437,22 @@ function buildHiddenComments(state: EditorState): DecorationSet {
   const ranges = state.field(criticMarkupField);
   const { commentBadgeMap, onHighlight, translateOffset } = commentBadges(state, ranges);
   const { doc } = state;
+  const focused = state.field(focusedCommentField, false) ?? null;
+  // The badges each line shows, drawn together at the first of them
+  const lineBadges = new Map<number, { number: number; threadFrom: number }[]>();
+  const badgeAt = (range: CriticMarkupRange) => {
+    const badge = onHighlight.has(range.from) ? undefined : commentBadgeMap.get(range.from);
+    return badge?.isFirst ? badge : undefined;
+  };
+  for (const range of ranges) {
+    if (range.type !== 'comment') continue;
+    const badge = badgeAt(range);
+    if (!badge) continue;
+    const line = doc.lineAt(range.from).number;
+    const list = lineBadges.get(line) ?? [];
+    if (list.length === 0) lineBadges.set(line, list);
+    list.push({ number: badge.badgeNumber, threadFrom: translateOffset(badge.threadFrom) });
+  }
   const builder = new RangeSetBuilder<Decoration>();
   let last = -1;
   for (const range of ranges) {
@@ -418,11 +467,10 @@ function buildHiddenComments(state: EditorState): DecorationSet {
     }
     if (from < last) from = last;
     if (from >= to) continue;
-    const badge = onHighlight.has(range.from) ? undefined : commentBadgeMap.get(range.from);
+    const badges = badgeAt(range) ? lineBadges.get(start.number) : undefined;
+    if (badges) lineBadges.delete(start.number);
     builder.add(from, to, Decoration.replace({
-      widget: badge?.isFirst
-        ? new CommentBadgeWidget(badge.badgeNumber, translateOffset(badge.threadFrom), true)
-        : undefined,
+      widget: badges ? new CommentBadgesWidget(badges, focused) : undefined,
     }));
     last = to;
   }
@@ -435,6 +483,7 @@ const hiddenComments = StateField.define<DecorationSet>({
     if (
       tr.docChanged ||
       tr.effects.some((e) => e.is(setCommentBadgeMap)) ||
+      focusChanged(tr) ||
       tr.startState.facet(commentOffsetTranslator) !== tr.state.facet(commentOffsetTranslator)
     ) {
       return buildHiddenComments(tr.state);
@@ -501,7 +550,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       }
       for (const tr of update.transactions) {
         for (const e of tr.effects) {
-          if (e.is(setCommentBadgeMap)) {
+          if (e.is(setCommentBadgeMap) || e.is(setFocusedComment)) {
             this.decorations = this.buildDecorations(update.view);
             return;
           }
@@ -521,6 +570,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
 
       // Translator from local CM positions to absolute Y.Text offsets
       const translateOffset = view.state.facet(commentOffsetTranslator);
+      const focusedComment = view.state.field(focusedCommentField, false) ?? null;
 
       // Detect bulk selection: if selection spans multiple markup ranges,
       // show a single bulk widget instead of per-range accept/reject buttons
@@ -584,7 +634,10 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           deco: commentOn
             ? Decoration.mark({
               class: `${className} cm-comment-target`,
-              attributes: { 'data-comment-from': String(translateOffset(next.from)) },
+              attributes: {
+                'data-comment-from': String(translateOffset(next.from)),
+                ...(translateOffset(next.from) === focusedComment && { 'data-comment-focused': '' }),
+              },
             })
             : Decoration.mark({ class: className }),
         });
@@ -1372,6 +1425,7 @@ export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
     canAcceptRejectFacet.of(canAcceptReject),
     criticMarkupField,
     commentBadgeMapField.init(() => commentBadgeMap),
+    focusedCommentField,
     suggestionModeField,
     suggestionModeFilter,
     criticMarkupCompartment.of(criticMarkupLivePreview),

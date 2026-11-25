@@ -1803,10 +1803,15 @@
   padding-bottom: 1px;
   transition: background-color 0.2s, border-color 0.2s;
 }
-.cm-highlight.cm-comment-target:hover,
-.cm-highlight.cm-comment-target[data-comment-focused] {
+.cm-highlight.cm-comment-target:hover {
   background-color: rgba(255, 203, 0, 0.24);
   border-bottom-color: rgb(255, 203, 0);
+}
+/* The text of the open thread: a full yellow, so it is plain which text the
+   open card is about (Notion's faint marking was too easy to miss) */
+.cm-highlight.cm-comment-target[data-comment-focused] {
+  background-color: rgba(255, 203, 0, 0.5);
+  border-bottom-color: rgb(224, 168, 0);
 }
 
 /* A comment's marker in the text: Notion's comment indicator, a speech
@@ -1847,8 +1852,15 @@
 .lens-page-area .cm-content {
   position: relative;
 }
+.cm-comment-badges {
+  display: inline-flex;
+  vertical-align: -3px;
+}
+.cm-comment-badges .cm-comment-badge {
+  vertical-align: 0;
+}
 @media (min-width: 500px) {
-  .lens-page-area .cm-comment-badge.is-margin {
+  .lens-page-area .cm-comment-badges {
     position: absolute;
     right: -12px;
     margin-top: 2px;
@@ -1859,8 +1871,11 @@
    marker element (both edit-mode badges and read-mode anchors). Per-form
    selectors so each can keep its own base styling source (CSS / Tailwind). */
 .cm-comment-badge[data-comment-focused] {
-  background-color: var(--lens-pressed-bg);
-  color: var(--lens-text);
+  background-color: #2563eb;
+  color: #ffffff;
+}
+.cm-comment-badge[data-comment-focused]::before {
+  background-color: #ffffff;
 }
 
 .cm-comment-anchor[data-comment-focused] {

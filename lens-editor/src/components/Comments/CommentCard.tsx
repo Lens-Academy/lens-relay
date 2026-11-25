@@ -157,6 +157,13 @@ function AnchorLine({ info, thread, actions }: { info: ThreadAnchorInfo; thread:
   );
 }
 
+/** Whether text inside `el` is selected (not just a caret). */
+function selectionIn(el: HTMLElement | null): boolean {
+  const sel = window.getSelection();
+  if (!el || !sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+  return el.contains(sel.getRangeAt(0).commonAncestorContainer);
+}
+
 export function CommentCard(props: CommentCardProps): ReactElement {
   const { thread, number, focused, onFocus, onReply, onEdit, onDelete, actions, onReact } = props;
   const resolved = thread.resolved;
@@ -178,9 +185,12 @@ export function CommentCard(props: CommentCardProps): ReactElement {
   };
 
   // A click on the card opens it and puts the cursor in its reply bar, as in
-  // Notion; a click on a button or in a field inside it stops before here
+  // Notion; a click on a button or in a field inside it stops before here. A
+  // drag or double-click that selected text in the card leaves the selection
+  // be, so a comment's text can be copied
   const handleCardClick = () => {
     if (!focused) onFocus(thread.key);
+    if (selectionIn(cardRef.current)) return;
     requestAnimationFrame(() => cardRef.current?.querySelector<HTMLTextAreaElement>('.lens-comment-replybar textarea')?.focus());
   };
 

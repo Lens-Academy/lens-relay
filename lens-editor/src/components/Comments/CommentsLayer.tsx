@@ -26,6 +26,8 @@ const DEFAULT_CARD_HEIGHT = 100;
 const EDGE_PADDING = 12;
 /** Scroll distance over which the at-top / at-bottom clamp fades in. */
 const EDGE_TRANSITION_PX = 250;
+/** How long a new comment closed unsent is offered again (ms). */
+const UNSENT_KEPT_MS = 2 * 60_000;
 /** Cards beyond N viewports above (and N+1 below) get weight 0 (no pull). */
 const ACTIVE_WINDOW_MULTIPLIER = 2;
 
@@ -36,6 +38,8 @@ export interface CommentsLayerHandle {
   /** Toggle focus: focuses the thread, or unfocuses if it is already focused.
    *  Use for user-driven badge clicks so they mirror sidebar-card click behaviour. */
   toggleFocus(key: ThreadKey): void;
+  /** Closes the open thread, if any (a click in other text of the page). */
+  clearFocus(): void;
   /** Opens the add-comment form anchored at the cursor returned by
    *  `getInsertKey`. No-op if the getter is omitted or returns null. */
   openAddForm(): void;
@@ -121,13 +125,19 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
   // moves when anyone types above, so the root finds the thread again and the
   // card stays open with its reply bar
   const [focus, setFocus] = useState<{ key: ThreadKey; rootId?: string } | null>(null);
-  const focusedThreadKey = focus == null || threads.some((t) => t.key === focus.key)
-    ? focus?.key ?? null
-    : threads.find((t) => t.root.id === focus.rootId)?.key ?? null;
+  const focusedThreadKey = focus == null
+    ? null
+    : (focus.rootId != null ? threads.find((t) => t.root.id === focus.rootId)?.key : undefined)
+      ?? (threads.some((t) => t.key === focus.key) ? focus.key : null);
 
-  // Helper: set focus and fire callback.
+  // Helper: set focus and fire callback. The threads are read from a ref: the
+  // handle below keeps the applyFocus of the render it was made in, whose
+  // threads could be from before the page synced (none). The open thread was
+  // then kept without its root, and the first edit above it by anyone closed it.
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
   const applyFocus = (key: ThreadKey | null) => {
-    setFocus(key == null ? null : { key, rootId: threads.find((t) => t.key === key)?.root.id });
+    setFocus(key == null ? null : { key, rootId: threadsRef.current.find((t) => t.key === key)?.root.id });
     onFocusChange?.(key);
   };
 
@@ -142,6 +152,9 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     },
     toggleFocus(key: ThreadKey) {
       applyFocus(focusedThreadKey === key ? null : key);
+    },
+    clearFocus() {
+      if (focusedThreadKey != null) applyFocus(null);
     },
     openAddForm() {
       const key = getInsertKeyRef.current?.();
@@ -165,14 +178,47 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     }
   }, [focusedThreadKey, editorRootRef]);
 
+  // Escape closes the open thread, unless something else used the key (the
+  // reply bar's Escape leaves the bar first) or it was pressed in another field
+  const focusedForKeys = useRef(focusedThreadKey);
+  focusedForKeys.current = focusedThreadKey;
+  const applyFocusRef = useRef(applyFocus);
+  applyFocusRef.current = applyFocus;
+  useEffect(() => {
+    if (focusedThreadKey == null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || focusedForKeys.current == null) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('input, textarea, select, [role="dialog"], [role="menu"]')) return;
+      if (target?.isContentEditable && !target.closest('.cm-editor')) return;
+      applyFocusRef.current(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [focusedThreadKey]);
+
   const [showAddForm, setShowAddForm] = useState(false);
   // Captured at the moment the form opens, so a cursor move while typing
   // doesn't relocate the insertion target.
   const [pendingInsertKey, setPendingInsertKey] = useState<ThreadKey | null>(null);
 
+  // A new comment closed unsent (Escape or Cancel) comes back in the next new
+  // comment's form for a while, so a slip of the key loses nothing
+  const unsentRef = useRef<{ text: string; at: number } | null>(null);
+  const keptUnsent = (): string => {
+    const kept = unsentRef.current;
+    return kept && Date.now() - kept.at < UNSENT_KEPT_MS ? kept.text : '';
+  };
+  const cancelAdd = (unsent: string) => {
+    unsentRef.current = unsent.trim() ? { text: unsent, at: Date.now() } : null;
+    setShowAddForm(false);
+    setPendingInsertKey(null);
+  };
+
   const handleAddSubmit = (content: string) => {
     const key = pendingInsertKey;
     if (key == null || !onAddComment) return;
+    unsentRef.current = null;
     const created = onAddComment(key, content);
     setShowAddForm(false);
     setPendingInsertKey(null);
@@ -408,7 +454,8 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
           <div className="lens-comment-card is-open">
             <AddCommentForm
               onSubmit={handleAddSubmit}
-              onCancel={() => { setShowAddForm(false); setPendingInsertKey(null); }}
+              onCancel={cancelAdd}
+              initialValue={keptUnsent()}
               placeholder="Add a comment…"
               submitLabel="Add"
               autoFocus
