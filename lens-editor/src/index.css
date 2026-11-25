@@ -55,7 +55,6 @@
   --lens-checkbox-border: #383836;
   --lens-table-border: #e6e5e3;
   --lens-table-header-bg: #f7f6f3;
-  --lens-table-row-hover: #f9f8f7;
   /* Notion's background colours (callouts, tags) */
   --lens-bg-gray: rgba(42, 28, 0, 0.07);
   --lens-bg-brown: rgba(139, 46, 0, 0.086);
@@ -132,7 +131,6 @@
   --lens-checkbox-border: #e6e5e3;
   --lens-table-border: #383836;
   --lens-table-header-bg: rgba(255, 255, 255, 0.03);
-  --lens-table-row-hover: rgba(255, 255, 255, 0.03);
   --lens-bg-gray: rgba(255, 255, 235, 0.1);
   --lens-bg-brown: rgba(255, 177, 129, 0.192);
   --lens-bg-orange: rgba(255, 147, 75, 0.278);
