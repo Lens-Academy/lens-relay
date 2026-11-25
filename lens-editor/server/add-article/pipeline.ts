@@ -1,7 +1,8 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import type { ArticleImportMode, ArticleJob, ArticleMeta } from "./types";
-import { fetchRawBytes, MIN_ARTICLE_CHARS } from "./fetch";
+import { fetchRawBytes, fetchRawHtml, MIN_ARTICLE_CHARS } from "./fetch";
+import { formEmbedFromUrl, formEmbedMeta, formTitleFromHtml, type FormEmbed } from "./form-embeds";
 import { embedPdfImages } from "./pdf";
 import { dedupUrlVariants } from "./url-normalize";
 import { hostRemoteImages, newImageBudget, type HostImagesResult } from "./image-hosting";
@@ -114,6 +115,62 @@ export function articleImportBehavior(
       throw new Error(`Unhandled article import mode: ${exhaustive}`);
     }
   }
+}
+
+/**
+ * Write an online form's embed record (see form-embeds.ts). Every import mode
+ * writes the same file: a form has no text to stub, import or build a lens on.
+ */
+async function processFormEmbed(
+  job: ArticleJob,
+  form: FormEmbed,
+  createdDate: string,
+  folder: string,
+  reporter: ArticleReviewReporter,
+  setStage: (stage: string) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  const topFolder = folder.split("/")[0];
+  await setStage("checking-duplicates");
+  const existing = await findExistingArticle([job.url, form.embedUrl], signal);
+  if (existing) {
+    throw new DuplicateDocumentError(
+      `This form already has an embed file: ${topFolder}${existing.path}`,
+      topFolder + existing.path,
+      existing.matchedUrl,
+    );
+  }
+
+  await setStage("fetching-form-title");
+  let title = "";
+  try {
+    title = formTitleFromHtml(await fetchRawHtml(form.embedUrl, signal), form.provider);
+  } catch (err) {
+    signal?.throwIfAborted();
+    console.warn(`[add-article] could not read the form's title, using "${form.provider} form": ${err}`);
+  }
+  const meta = formEmbedMeta(form, title, createdDate);
+  job.title = meta.title;
+
+  await setStage("writing");
+  const markdown = generateArticleMarkdown(meta, "", createdDate);
+  const filenameBase = generateArticleFilenameBase(meta.author, meta.title);
+  const docPath = await withArticleWriteLock(async () => {
+    signal?.throwIfAborted();
+    const candidates = articleFilenameCandidates(filenameBase, form.embedUrl).map(
+      (b) => `${folder}/${b}.md`,
+    );
+    const taken = await checkRelayDocsExist(candidates, signal);
+    const chosen = candidates.find((p) => !taken[p]);
+    if (!chosen) throw new Error(`Document already exists: ${candidates[0]}`);
+    await createRelayDoc(chosen, markdown, signal);
+    return chosen;
+  });
+  job.relay_url = editorOpenUrl(docPath);
+  job.relay_path = docPath;
+  job.updated_at = new Date().toISOString();
+  await reporter.finalDocument(markdown);
+  console.log(`[add-article] Wrote form embed ${docPath}`);
 }
 
 /**
@@ -406,6 +463,11 @@ export async function processArticle(
   // classification was stored on the job at enqueue.
   if (job.video) {
     return processYouTubeVideo(job, job.video, behavior, setStage, signal);
+  }
+
+  const form = formEmbedFromUrl(job.url);
+  if (form) {
+    return processFormEmbed(job, form, createdDate, folder, reporter, setStage, signal);
   }
 
   // Reject the common duplicate case before downloading and parsing the page.
