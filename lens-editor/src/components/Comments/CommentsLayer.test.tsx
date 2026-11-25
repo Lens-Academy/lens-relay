@@ -237,3 +237,26 @@ describe('opening and closing a thread', () => {
     expect(screen.getByPlaceholderText(/add a comment…/i)).toHaveValue('half a thought');
   });
 });
+
+describe('onOpenThreadChange', () => {
+  it('reports the open thread as it opens, moves and goes away', () => {
+    const onOpenThreadChange = vi.fn();
+    const ref = createRef<CommentsLayerHandle>();
+    const p = {
+      resolveAnchorY: () => 100,
+      getViewportRect: () => ({ top: 0, height: 800 }),
+      scrollSource: fakeScrollSource(),
+      onReply: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(),
+      onOpenThreadChange,
+    };
+    const { rerender } = render(<CommentsLayer ref={ref} threads={[thread()]} {...p} />);
+    act(() => ref.current!.focusThread('100'));
+    expect(onOpenThreadChange).toHaveBeenLastCalledWith('100');
+    // Text typed above it
+    rerender(<CommentsLayer ref={ref} threads={[thread({ key: '104' })]} {...p} />);
+    expect(onOpenThreadChange).toHaveBeenLastCalledWith('104');
+    // Resolved by someone else
+    rerender(<CommentsLayer ref={ref} threads={[]} {...p} />);
+    expect(onOpenThreadChange).toHaveBeenLastCalledWith(null);
+  });
+});

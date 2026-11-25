@@ -470,7 +470,9 @@ function buildHiddenComments(state: EditorState): DecorationSet {
     const badges = badgeAt(range) ? lineBadges.get(start.number) : undefined;
     if (badges) lineBadges.delete(start.number);
     builder.add(from, to, Decoration.replace({
-      widget: badges ? new CommentBadgesWidget(badges, focused) : undefined,
+      widget: badges
+        ? new CommentBadgesWidget(badges, badges.some((b) => b.threadFrom === focused) ? focused : null)
+        : undefined,
     }));
     last = to;
   }

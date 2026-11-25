@@ -36,7 +36,10 @@ function buildCommentMarkup(content: string): string {
  *
  * Comments that touch are one thread (parseThreads), so a new comment right
  * after or before another one is kept apart from it by a space; written
- * against it, it became a reply in that comment's thread.
+ * against it, it became a reply in that comment's thread. The space stays in
+ * the text: with the comments hidden or stripped, `word{>>a<<} {>>b<<}.`
+ * reads "word ." (there is no separator that threading by adjacency allows
+ * and the text doesn't show).
  */
 export function insertCommentInYText(ytext: Y.Text, content: string, pos: number, highlightFrom?: number): number {
   const markup = buildCommentMarkup(content);

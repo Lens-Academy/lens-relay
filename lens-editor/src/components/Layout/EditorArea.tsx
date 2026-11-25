@@ -5,7 +5,7 @@ import { EditorView } from '@codemirror/view';
 import { EditorState, StateEffect } from '@codemirror/state';
 import { useYDoc } from '../../lib/ydoc-provider';
 import * as Y from 'yjs';
-import { criticMarkupField, setFocusedComment, suggestionModeField } from '../Editor/extensions/criticmarkup';
+import { criticMarkupField, focusedCommentField, setFocusedComment, suggestionModeField } from '../Editor/extensions/criticmarkup';
 import { sourceReadOnlyCompartment } from '../Editor/extensions/livePreview';
 import { createLinkedDoc } from '../../lib/wikilink-create';
 import { SourceSuggestionBanner } from '../SourceSuggestionBanner/SourceSuggestionBanner';
@@ -73,6 +73,8 @@ import { RELAY_ID, PANEL_CONFIG } from '../../App';
 import { EDU_FOLDER_ID } from '../../lib/constants';
 
 const PROMOTION_STATUS_REFRESH_MS = 10_000;
+/** How long a ?comment= link waits for its thread's text to arrive (ms). */
+const COMMENT_LINK_WAIT_MS = 5_000;
 const SUGGESTION_MODE_KEY = 'lens-editor:suggestion-mode';
 
 /**
@@ -146,10 +148,9 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const ydoc = useYDoc();
   const yText: Y.Text = useMemo(() => ydoc.getText('contents'), [ydoc]);
 
-  // Ref to the editor DOM for CommentsLayer's [data-comment-from] focus toggle.
-  // Assigned during render (not in a useEffect) so children mounted on the
-  // same commit see it populated — children's mount effects run before the
-  // parent's. (The scroll container is consumed via `useScrollSource` with the
+  // Ref to the editor DOM, for the anchor resolver's DOM fallback. (The open
+  // thread's marking is drawn by the editor itself: drawOpenThread.) Assigned
+  // during render so children mounted on the same commit see it. (The scroll container is consumed via `useScrollSource` with the
   // live element value, so it doesn't need a ref.)
   const editorRootRef = useRef<HTMLElement | null>(null);
   editorRootRef.current = editorView ? editorView.dom : null;
@@ -175,8 +176,6 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
   // Thread data and mutation callbacks from the criticmarkup adapter.
   const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous', canEdit);
-  const threadsRef = useRef(threads);
-  threadsRef.current = threads;
   // A link to a thread: the page with ?comment= (its first comment's author and
   // time), which opens the thread and goes to its text however the page was
   // edited since; a place (?pos=) went stale with the first edit above it. A
@@ -203,10 +202,13 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   }, [editorView]);
   // The editor draws the open thread's text and badge open itself (criticmarkup.ts
   // focusedCommentField), so a collaborator's edit or caret can't redraw it closed
-  const handleCommentFocusChange = useCallback((key: string | null) => {
-    editorView?.dispatch({ effects: setFocusedComment.of(key == null ? null : Number(key)) });
-    scrollToThread(key);
-  }, [editorView, scrollToThread]);
+  const drawOpenThread = useCallback((key: string | null) => {
+    if (!editorView) return;
+    const at = key == null ? null : Number(key);
+    if (editorView.state.field(focusedCommentField, false) !== at) {
+      editorView.dispatch({ effects: setFocusedComment.of(at) });
+    }
+  }, [editorView]);
   // Those who may edit resolve comments (the card's tick); anyone copies a link
   const commentActions = useMemo(
     () => ({ onCopyLink: copyCommentLink, ...(canEdit && { onResolve: callbacks.onResolve }) }),
@@ -479,6 +481,9 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
   // Set when a URL target placed the cursor, so autofocus leaves it there
   const urlTargetPlacedRef = useRef(false);
+  // A ?comment= link whose thread isn't there yet: when the wait began, and a tick to look again
+  const commentWaitStartRef = useRef<number | null>(null);
+  const [commentLinkRetry, setCommentLinkRetry] = useState(0);
 
   // Consume URL navigation targets once the editor has synced:
   //   ?comment={id} — a comment's "Copy link": its thread's first comment
@@ -504,8 +509,15 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     let target: number | null = null;
     let thread: ThreadView | undefined;
     if (commentParam !== null) {
-      thread = threadsRef.current.find((t) => t.root.id === commentParam);
+      thread = threads.find((t) => t.root.id === commentParam);
       if (thread) target = Math.min(Number(thread.key), doc.length);
+      // The text can arrive a little after the synced event (see autofocus):
+      // wait for the thread a few seconds before giving up on the link
+      commentWaitStartRef.current ??= Date.now();
+      if (!thread && Date.now() - commentWaitStartRef.current < COMMENT_LINK_WAIT_MS) {
+        const timer = setTimeout(() => setCommentLinkRetry((n) => n + 1), 250);
+        return () => clearTimeout(timer);
+      }
     }
     if (target === null && posParam !== null) {
       const byteOffset = parseInt(posParam, 10);
@@ -534,12 +546,13 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       }
     }
 
+    commentWaitStartRef.current = null;
     params.delete('comment');
     params.delete('pos');
     const qs = params.toString();
     const hash = lineMatch ? '' : window.location.hash;
     history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + hash);
-  }, [synced, editorView, routerLocation, isMobile, manager, openDrawer]);
+  }, [synced, editorView, routerLocation, isMobile, manager, openDrawer, threads, commentLinkRetry]);
 
   // Put the cursor in the page once it has synced, so typing works without a
   // click first: at the start of the text, below any frontmatter, or where a
@@ -775,7 +788,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               resolveAnchorY={resolveAnchorY}
               getViewportRect={getViewportRect}
               scrollSource={scrollSource}
-              editorRootRef={editorRootRef}
+              onOpenThreadChange={drawOpenThread}
               onReply={callbacks.onReply}
               onEdit={callbacks.onEdit}
               onDelete={callbacks.onDelete}
@@ -784,7 +797,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               actions={commentActions}
               numbered={false}
               onReact={canWrite ? callbacks.onReact : undefined}
-              onFocusChange={handleCommentFocusChange}
+              onFocusChange={scrollToThread}
             />
             </CommentReadAloudContext.Provider>
           )}

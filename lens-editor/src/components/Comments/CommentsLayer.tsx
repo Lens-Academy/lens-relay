@@ -62,6 +62,10 @@ export interface CommentsLayerProps {
   editorRootRef?: RefObject<HTMLElement | null>;
   /** Called when focused thread changes (or clears). */
   onFocusChange?: (key: ThreadKey | null) => void;
+  /** Called with the open thread's key whenever it changes: opened, closed, moved by
+   *  an edit above it, or gone (deleted, resolved by someone else). The markdown
+   *  editor draws the open thread from it (setFocusedComment). */
+  onOpenThreadChange?: (key: ThreadKey | null) => void;
   onReply: (thread: ThreadView, body: string) => void;
   onEdit: (message: MessageView, newBody: string) => void;
   onDelete: (message: MessageView) => void;
@@ -101,6 +105,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     scrollSource,
     editorRootRef,
     onFocusChange,
+    onOpenThreadChange,
     onReply,
     onEdit,
     onDelete,
@@ -164,7 +169,12 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     },
   }), [focusedThreadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Toggle the data-comment-focused attribute on matching badges in the editor.
+  useEffect(() => {
+    onOpenThreadChange?.(focusedThreadKey);
+  }, [focusedThreadKey, onOpenThreadChange]);
+
+  // Toggle the data-comment-focused attribute on matching markers, for
+  // renderers that don't draw it themselves (the Edu editor's sections).
   useEffect(() => {
     const root = editorRootRef?.current;
     if (!root) return;
