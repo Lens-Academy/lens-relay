@@ -164,6 +164,22 @@ export interface IdeaMap {
 }
 
 /**
+ * What else links in, read from the relay's refusal: the documents it names
+ * that `expected` does not hold, then the documents in other folders it only
+ * counts (a folder-limited key never sees their paths). Either one stops a
+ * delete. Resolves to "A.md, B.md and 2 documents in other folders" plus the
+ * verb that agrees with it, or null when nothing else links in.
+ */
+function linkedFrom(error: TrashRefusedError, expected: ReadonlySet<string>): { who: string; verb: 'links' | 'link' } | null {
+  const named = error.referencing.map((doc) => doc.path).filter((path) => !expected.has(path.toLowerCase()));
+  const hidden = error.referencingOtherFolders;
+  if (named.length === 0 && hidden <= 0) return null;
+  const parts = named.length > 0 ? [named.join(', ')] : [];
+  if (hidden > 0) parts.push(`${hidden} ${hidden === 1 ? 'document' : 'documents'} in other folders`);
+  return { who: parts.join(' and '), verb: named.length + hidden === 1 ? 'links' : 'link' };
+}
+
+/**
  * The ideas of `Lens Edu/Context Accelerator LOs/` (on a local relay: of the
  * folder asked for) as a graph, read through the snapshot
  * cache (three files at a time, lib/embed-docs.ts) and kept fresh while the
@@ -437,9 +453,9 @@ export function useIdeaMap(asked: string = IDEAS_FOLDER): IdeaMap {
     } catch (error) {
       if (!(error instanceof TrashRefusedError)) return deleteErrorMessage(error);
       const known = new Set(linkers.map((linker) => relayPath(linker.name).toLowerCase()));
-      const outside = error.referencing.map((doc) => doc.path).filter((path) => !known.has(path.toLowerCase()));
-      if (outside.length > 0) {
-        return `Nothing was deleted: ${outside.join(', ')} ${outside.length === 1 ? 'links' : 'link'} to this concept too. Take that link out first, or delete the file in the file tree.`;
+      const outside = linkedFrom(error, known);
+      if (outside) {
+        return `Nothing was deleted: ${outside.who} ${outside.verb} to this concept too. Take that link out first, or delete the file in the file tree.`;
       }
     }
     const unlinked: string[] = [];
@@ -501,9 +517,9 @@ export function useIdeaMap(asked: string = IDEAS_FOLDER): IdeaMap {
         if (!(error instanceof TrashRefusedError)) {
           failed = deleteErrorMessage(error);
         } else {
-          const others = error.referencing.map((doc) => doc.path).filter((path) => !expected.has(path.toLowerCase()));
-          if (others.length > 0) {
-            failed = `${others.join(', ')} ${others.length === 1 ? 'links' : 'link'} to it`;
+          const others = linkedFrom(error, expected);
+          if (others) {
+            failed = `${others.who} ${others.verb} to it`;
           } else {
             try {
               await trashPath(relayPath(node.name), true);

@@ -651,6 +651,57 @@ describe('useIdeaMap', () => {
       expect(trashPath).toHaveBeenCalledTimes(1);
     });
 
+    // Prevents: a folder-limited key's refusal that names no documents (the
+    // ones linking in are all in other folders, so only counted) being read
+    // as "only the map links here", the links taken out and the file forced.
+    it('changes nothing when only documents in other folders link to it', async () => {
+      liveDocs();
+      vi.mocked(trashPath).mockRejectedValue(new TrashRefusedError('linked', [], 2));
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await result.current.deleteIdea('power-seeking'))
+        .toBe('Nothing was deleted: 2 documents in other folders link to this concept too. Take that link out first, or delete the file in the file tree.');
+      expect(vi.mocked(trashPath).mock.calls).toEqual([[PS]]);
+    });
+
+    it('changes nothing when the map and one document in another folder link to it', async () => {
+      const text = liveDocs();
+      vi.mocked(trashPath).mockRejectedValue(new TrashRefusedError('linked', [{ path: PS, count: 1 }], 1));
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await result.current.deleteIdea('instrumental convergence'))
+        .toBe('Nothing was deleted: 1 document in other folders links to this concept too. Take that link out first, or delete the file in the file tree.');
+      // Power-seeking keeps its link and nothing is forced
+      expect(text('ps')).toBeUndefined();
+      expect(vi.mocked(trashPath).mock.calls).toEqual([[IC]]);
+    });
+
+    it('names the documents it can see and counts the ones in other folders', async () => {
+      liveDocs();
+      vi.mocked(trashPath).mockRejectedValue(new TrashRefusedError('linked', [{ path: 'Lens Edu/courses/A course.md', count: 2 }], 3));
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await result.current.deleteIdea('instrumental convergence'))
+        .toBe('Nothing was deleted: Lens Edu/courses/A course.md and 3 documents in other folders link to this concept too. Take that link out first, or delete the file in the file tree.');
+      expect(trashPath).toHaveBeenCalledTimes(1);
+    });
+
+    it('with a count of 0 from other folders still takes its links out and deletes', async () => {
+      const text = liveDocs();
+      vi.mocked(trashPath)
+        .mockRejectedValueOnce(new TrashRefusedError('linked', [{ path: PS, count: 1 }], 0))
+        .mockResolvedValue(trashed);
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      let failed: string | null = 'not run';
+      await act(async () => {
+        failed = await result.current.deleteIdea('instrumental convergence');
+      });
+      expect(failed).toBeNull();
+      expect(text('ps')).toBe(POWER.replace('- [[Instrumental convergence]]\n', ''));
+      expect(vi.mocked(trashPath).mock.calls).toEqual([[IC], [IC, true]]);
+    });
+
     it('changes nothing when its link in another idea sits beside a pending suggestion', async () => {
       const suggested = POWER.replace('- [[Instrumental convergence]]\n', '- [[Instrumental convergence]]\n{++- [[Suggested]]\n++}');
       texts.ps = suggested;
@@ -779,6 +830,29 @@ describe('useIdeaMap', () => {
         .toBe('Not deleted: Instrumental convergence. "Instrumental convergence": Lens Edu/courses/A course.md links to it. The links to all of them are already taken out of the other concepts.');
       expect(text('ps')).toBe(POWER.replace('- [[Instrumental convergence]]\n', ''));
       expect(trashPath).toHaveBeenCalledTimes(1);
+    });
+
+    // Prevents: deleteIdeas forcing a file whose refusal names no documents
+    // but counts some in folders a folder-limited key cannot see.
+    it('stops at a file that documents in other folders link to, and forces nothing', async () => {
+      liveDocs();
+      vi.mocked(trashPath).mockRejectedValue(new TrashRefusedError('linked', [], 1));
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await run(result, ['power-seeking']))
+        .toBe('Not deleted: Power-seeking. "Power-seeking": 1 document in other folders links to it.');
+      expect(vi.mocked(trashPath).mock.calls).toEqual([[PS]]);
+    });
+
+    it('with an empty refusal and a count of 0 forces past it as before', async () => {
+      liveDocs();
+      vi.mocked(trashPath)
+        .mockRejectedValueOnce(new TrashRefusedError('linked', [], 0))
+        .mockResolvedValue(trashed);
+      const { result } = renderMap();
+      await waitFor(() => expect(result.current.read).toBe(2));
+      expect(await run(result, ['power-seeking'])).toBeNull();
+      expect(vi.mocked(trashPath).mock.calls).toEqual([[PS], [PS, true]]);
     });
 
     it('refuses names the map does not have', async () => {

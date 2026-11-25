@@ -426,6 +426,41 @@ describe('relay-api', () => {
       ]);
     });
 
+    // Prevents: a folder-limited key's refusal naming no documents (they are
+    // all in other folders) reading as "nothing links here" and the caller
+    // forcing the delete.
+    it('carries the other-folder count from a folder-limited refusal', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: 'Cannot delete Lens/A.md: 1 document outside it still links to it',
+            code: 'inbound_links',
+            referencing: [],
+            referencing_other_folders: 3,
+          }),
+          { status: 409, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+      const err = await trashPath('Lens/A.md').catch(e => e);
+      expect(err).toBeInstanceOf(TrashRefusedError);
+      expect(err.referencing).toEqual([]);
+      expect(err.referencingOtherFolders).toBe(3);
+    });
+
+    it('reads the other-folder count as 0 when the relay sends none or a bad value', async () => {
+      for (const extra of [{}, { referencing_other_folders: 'x' }, { referencing_other_folders: -1 }]) {
+        mockFetch.mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ error: 'refused', code: 'inbound_links', referencing: [{ path: 'Lens/B.md', count: 1 }], ...extra }),
+            { status: 409 }
+          )
+        );
+        const err = await trashPath('Lens/A.md').catch(e => e);
+        expect(err).toBeInstanceOf(TrashRefusedError);
+        expect(err.referencingOtherFolders).toBe(0);
+      }
+    });
+
     it('throws a plain RelayApiError for a 409 that is not an inbound-links refusal', async () => {
       mockFetch.mockResolvedValueOnce(
         new Response(JSON.stringify({ error: 'Lens/_trash/A.md already exists in the trash', code: 'conflict' }), { status: 409 })
